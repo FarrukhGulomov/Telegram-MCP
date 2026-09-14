@@ -16,6 +16,8 @@ import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatParticipant;
 import io.tgmcp.chat.ChatParticipantRepository;
 import io.tgmcp.common.Ids;
+import io.tgmcp.telegram.gateway.TelegramAdapterKind;
+import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.tenancy.AuthenticatedActor;
 
 import org.springframework.stereotype.Service;
@@ -33,15 +35,18 @@ public class ConsentService {
     private final ConsentRepository consentRepository;
     private final ChatParticipantRepository participantRepository;
     private final AuditService auditService;
+    private final TelegramGateway gateway;
     private final Clock clock;
 
     public ConsentService(ConsentRepository consentRepository,
                           ChatParticipantRepository participantRepository,
                           AuditService auditService,
+                          TelegramGateway gateway,
                           Clock clock) {
         this.consentRepository = consentRepository;
         this.participantRepository = participantRepository;
         this.auditService = auditService;
+        this.gateway = gateway;
         this.clock = clock;
     }
 
@@ -110,10 +115,7 @@ public class ConsentService {
                                 String participantDisplayName, String purpose, String providerScope,
                                 String consentVersion, ConsentMethod method, String evidenceRef,
                                 Instant expiresAt) {
-        if (method == ConsentMethod.SIGNED_ATTESTATION && (evidenceRef == null || evidenceRef.isBlank())) {
-            throw new IllegalArgumentException(
-                    "Recording consent on someone's behalf requires an evidence reference");
-        }
+        validateMethod(method, evidenceRef);
         ConsentRecord record = new ConsentRecord(Ids.newId(), actor.tenantId(), chatId, participantTgUserId,
                 participantDisplayName, purpose, providerScope, consentVersion, method, evidenceRef,
                 this.clock.instant(), expiresAt, null, null, actor.userId());
@@ -142,5 +144,28 @@ public class ConsentService {
 
     public List<ConsentRecord> forChat(UUID tenantId, UUID chatId) {
         return this.consentRepository.findForChat(tenantId, chatId);
+    }
+
+    /**
+     * Security-audit finding F02: an authenticated operator could previously record consent
+     * "on behalf of" any participant via {@code SELF_SERVICE_LINK} with no proof that the
+     * participant themselves ever saw or approved anything -- the method name promised a
+     * self-service flow this application has never actually implemented (no per-participant
+     * identity-verified invite/link exists). Rather than leave that gap in place, or fake a
+     * verification step that doesn't really verify anything, this method is rejected outright
+     * until a real identity-bound flow exists. {@code DEMO_SYNTHETIC} is rejected the moment a
+     * real Telegram account is in play (any adapter other than the synthetic mock), so it can
+     * never substitute for genuine consent once real people's data is involved.
+     */
+    private void validateMethod(ConsentMethod method, String evidenceRef) {
+        if (method == ConsentMethod.SELF_SERVICE_LINK) {
+            throw new IllegalArgumentException("validation.selfServiceNotAvailable");
+        }
+        if (method == ConsentMethod.DEMO_SYNTHETIC && this.gateway.kind() != TelegramAdapterKind.MOCK) {
+            throw new IllegalArgumentException("validation.demoConsentNotAllowed");
+        }
+        if (method == ConsentMethod.SIGNED_ATTESTATION && (evidenceRef == null || evidenceRef.isBlank())) {
+            throw new IllegalArgumentException("validation.evidenceRequired");
+        }
     }
 }

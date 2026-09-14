@@ -137,7 +137,6 @@
             <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
             <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
             <select name="method">
-              <option value="SELF_SERVICE_LINK" th:text="#{chat.consentMethod.self}">Participant consented themselves</option>
               <option value="SIGNED_ATTESTATION" th:text="#{chat.consentMethod.evidence}">Recorded from evidence</option>
               <option th:if="${demoMode}" value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
             </select>
