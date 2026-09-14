@@ -108,6 +108,43 @@ class RateLimitAndResponseCapTests extends AbstractIntegrationTest {
     }
 
     @Test
+    void fittingCountReportsExactlyHowManyItemsFitTheBudget() {
+        // Security-audit finding F15: this is the primitive a paginated tool must use to
+        // recompute its cursor after trimming -- unlike success(), which trims but has no way
+        // to rebuild a tool-specific cursor, so its own caller must know exactly how many
+        // items survived.
+        ObjectMapper mapper = JsonMapper.builder().build();
+        ToolResponses responses = new ToolResponses(mapper, 2048);
+
+        List<Map<String, Object>> items = new java.util.ArrayList<>();
+        for (int i = 0; i < 200; i++) {
+            items.add(Map.of("messageId", String.valueOf(i), "text", "x".repeat(200)));
+        }
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("dataHandling", ToolResponses.DATA_HANDLING);
+
+        int fitting = responses.fittingCount(payload, items);
+
+        assertThat(fitting).isPositive().isLessThan(items.size());
+        Map<String, Object> withOnlyFitting = new java.util.LinkedHashMap<>(payload);
+        withOnlyFitting.put("items", items.subList(0, fitting));
+        Map<String, Object> withOneMore = new java.util.LinkedHashMap<>(payload);
+        withOneMore.put("items", items.subList(0, fitting + 1));
+        assertThat(mapper.writeValueAsString(withOnlyFitting).getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+                .isLessThanOrEqualTo(2048);
+        assertThat(mapper.writeValueAsString(withOneMore).getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+                .isGreaterThan(2048);
+    }
+
+    @Test
+    void fittingCountReturnsTheFullSizeWhenEverythingAlreadyFits() {
+        ToolResponses responses = new ToolResponses(JsonMapper.builder().build(), 262144);
+        List<Map<String, Object>> items = List.of(Map.of("messageId", "1", "text", "short"));
+
+        assertThat(responses.fittingCount(new java.util.LinkedHashMap<>(), items)).isEqualTo(1);
+    }
+
+    @Test
     void leavesASmallPayloadUntouched() {
         ToolResponses responses = new ToolResponses(JsonMapper.builder().build(), 262144);
         Map<String, Object> payload = new java.util.LinkedHashMap<>();

@@ -153,18 +153,22 @@ public class McpTools {
                 items.add(messageItem(message, owner == null ? null : owner.chat()));
             }
 
-            String nextCursor = slice.nextKey() == null ? null
-                    : this.cursorCodec.encode(McpToolNames.SEARCH_MESSAGES, context.actor(), scopeHash,
-                            queryHash, from, to, slice.nextKey());
-
             Map<String, Object> payload = envelope();
-            payload.put("items", items);
-            payload.put("pagination", pagination(nextCursor, slice.hasMore(), limit));
             payload.put("query", Map.of("text", query, "matching", "PostgreSQL websearch_to_tsquery, english"));
             payload.put("requestedRange", range(from, to));
             payload.put("effectiveRangeByChat", effectiveRangeByChat(windowsByChat));
             payload.put("coverageByChat", coverageByChat(authorized, now));
-            payload.put("truncation", ToolResponses.truncation(false, null, 0));
+
+            CappedPage capped = capToByteBudget(payload, items, slice, McpToolNames.SEARCH_MESSAGES,
+                    context.actor(), scopeHash, queryHash, from, to);
+            if (capped.items().isEmpty() && !items.isEmpty()) {
+                return this.responses.error(AccessErrorCode.INVALID_ARGUMENT,
+                        "A single result exceeds the response size limit; request a smaller 'limit'.");
+            }
+            payload.put("items", capped.items());
+            payload.put("pagination", pagination(capped.cursor(), capped.hasMore(), limit));
+            payload.put("truncation", ToolResponses.truncation(capped.droppedByByteCap() > 0,
+                    capped.droppedByByteCap() > 0 ? "RESPONSE_BYTE_CAP" : null, capped.droppedByByteCap()));
             return this.responses.success(payload);
         });
     }
@@ -212,17 +216,22 @@ public class McpTools {
             List<Map<String, Object>> items = slice.messages().stream()
                     .map(message -> messageItem(message, allowed.chat()))
                     .toList();
-            String nextCursor = slice.nextKey() == null ? null
-                    : this.cursorCodec.encode(McpToolNames.GET_CHAT_HISTORY, context.actor(), scopeHash,
-                            queryHash, from, to, slice.nextKey());
 
             Map<String, Object> payload = envelope();
-            payload.put("items", items);
-            payload.put("pagination", pagination(nextCursor, slice.hasMore(), limit));
             payload.put("requestedRange", range(from, to));
             payload.put("effectiveRange", range(windowStart, windowEnd));
             payload.put("coverage", coverage(allowed, now));
-            payload.put("truncation", ToolResponses.truncation(false, null, 0));
+
+            CappedPage capped = capToByteBudget(payload, items, slice, McpToolNames.GET_CHAT_HISTORY,
+                    context.actor(), scopeHash, queryHash, from, to);
+            if (capped.items().isEmpty() && !items.isEmpty()) {
+                return this.responses.error(AccessErrorCode.INVALID_ARGUMENT,
+                        "A single result exceeds the response size limit; request a smaller 'limit'.");
+            }
+            payload.put("items", capped.items());
+            payload.put("pagination", pagination(capped.cursor(), capped.hasMore(), limit));
+            payload.put("truncation", ToolResponses.truncation(capped.droppedByByteCap() > 0,
+                    capped.droppedByByteCap() > 0 ? "RESPONSE_BYTE_CAP" : null, capped.droppedByByteCap()));
             return this.responses.success(payload);
         });
     }
@@ -460,6 +469,60 @@ public class McpTools {
         map.put("hasMore", hasMore);
         map.put("pageSize", pageSize);
         return map;
+    }
+
+    /**
+     * A page of items whose cursor is guaranteed to resume exactly where the returned items
+     * stop -- even when the byte cap cut the page short. {@code items} is empty and {@code
+     * droppedByByteCap} equals the original count when not even one item fit.
+     */
+    private record CappedPage(List<Map<String, Object>> items, String cursor, boolean hasMore,
+                              int droppedByByteCap) {
+    }
+
+    /**
+     * Security-audit finding F15: recomputes the pagination cursor from however many items
+     * actually survive the byte cap, rather than from the original, untrimmed database page.
+     * {@link ToolResponses#success} trims independently but has no way to rebuild a
+     * tool-specific, signed cursor -- leaving the previous code's cursor pointing past
+     * whatever it had already computed for the full page, so a page cut short by the byte cap
+     * made its own dropped tail permanently unreachable on the next request.
+     */
+    private CappedPage capToByteBudget(Map<String, Object> payloadSoFar, List<Map<String, Object>> items,
+                                       MessageSlice slice, String tool, AuthenticatedActor actor,
+                                       String scopeHash, String queryHash, Instant from, Instant to) {
+        if (items.isEmpty()) {
+            String cursor = slice.nextKey() == null ? null
+                    : this.cursorCodec.encode(tool, actor, scopeHash, queryHash, from, to, slice.nextKey());
+            return new CappedPage(items, cursor, slice.hasMore(), 0);
+        }
+
+        // A representative cursor of the same shape as whatever the real one turns out to be,
+        // purely so the byte-fitting probe below sizes the "pagination" field realistically.
+        MessagePageKey sizingKey = slice.nextKey() != null ? slice.nextKey() : keyOf(slice.messages().get(0));
+        String sizingCursor = this.cursorCodec.encode(tool, actor, scopeHash, queryHash, from, to, sizingKey);
+        Map<String, Object> probe = new LinkedHashMap<>(payloadSoFar);
+        probe.put("items", items);
+        probe.put("pagination", pagination(sizingCursor, true, items.size()));
+        int fitting = this.responses.fittingCount(probe, items);
+
+        if (fitting == items.size()) {
+            String cursor = slice.nextKey() == null ? null
+                    : this.cursorCodec.encode(tool, actor, scopeHash, queryHash, from, to, slice.nextKey());
+            return new CappedPage(items, cursor, slice.hasMore(), 0);
+        }
+        if (fitting == 0) {
+            // Not even one item fits; advancing no cursor here is deliberate -- see caller.
+            return new CappedPage(List.of(), null, true, items.size());
+        }
+        List<Map<String, Object>> retained = items.subList(0, fitting);
+        MessagePageKey cursorKey = keyOf(slice.messages().get(fitting - 1));
+        String cursor = this.cursorCodec.encode(tool, actor, scopeHash, queryHash, from, to, cursorKey);
+        return new CappedPage(retained, cursor, true, items.size() - fitting);
+    }
+
+    private static MessagePageKey keyOf(StoredMessage message) {
+        return new MessagePageKey(message.sentAt(), message.chatId(), message.tgMessageId());
     }
 
     private static Map<String, Object> range(Instant from, Instant to) {

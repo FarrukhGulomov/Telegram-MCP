@@ -87,6 +87,30 @@ public final class ToolResponses {
         return build(reduced, encoded);
     }
 
+    /**
+     * How many of {@code items}, in order, fit inside the byte cap once serialized as this
+     * payload's {@code items} field with everything else in {@code payload} held fixed.
+     *
+     * <p>Security-audit finding F15: a paginated tool's cursor must be computed from exactly
+     * this many retained items, never from the original, untrimmed database page. {@link
+     * #success} trimmed items to fit but left the cursor pointing past whatever the caller
+     * had already computed from the full page — so a page cut short by the byte cap made its
+     * own dropped tail permanently unreachable: the next request's cursor started strictly
+     * after it. Callers with a cursor to recompute (any tool with keyset pagination) must call
+     * this first and derive pagination from the count it returns; {@link #success} still
+     * trims independently for callers that have no cursor to preserve.
+     */
+    public int fittingCount(Map<String, Object> payload, List<?> items) {
+        Map<String, Object> probe = new LinkedHashMap<>(payload);
+        for (int count = items.size(); count > 0; count--) {
+            probe.put("items", items.subList(0, count));
+            if (write(probe).getBytes(StandardCharsets.UTF_8).length <= this.maxResponseBytes) {
+                return count;
+            }
+        }
+        return 0;
+    }
+
     public static Map<String, Object> truncation(boolean truncated, String reason, int droppedItems) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("truncated", truncated);
