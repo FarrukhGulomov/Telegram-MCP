@@ -46,6 +46,15 @@ spring:
 
 server:
   port: ${TGMCP_PORT:8080}
+  # Platforms like Railway/Heroku terminate TLS at their edge and forward to this container
+  # over plain HTTP, setting X-Forwarded-Proto/Host/Port. Without this, Tomcat believes every
+  # request is plain HTTP and builds absolute redirect URLs (e.g. the post-login redirect) as
+  # "http://...", which silently drops the Secure session cookie and bounces the user straight
+  # back to the login page. FRAMEWORK trusts those headers unconditionally, which is the right
+  # default for a container platform where all inbound traffic already passed through its edge;
+  # a self-hosted deployment fronted by an untrusted network path should use NATIVE with an
+  # explicit trusted-proxy allowlist instead.
+  forward-headers-strategy: framework
   servlet:
     session:
       cookie:
