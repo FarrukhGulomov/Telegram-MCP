@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.telegram.gateway.ConnectionRef;
@@ -22,6 +23,8 @@ import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.gateway.TelegramPermissionException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -36,6 +39,8 @@ import tools.jackson.databind.JsonNode;
  * Telegram account — see {@code docs/production-prerequisites.md}.
  */
 public class TdlibTelegramGateway implements TelegramGateway {
+
+    private static final Logger log = LoggerFactory.getLogger(TdlibTelegramGateway.class);
 
     private static final int MAX_HISTORY_BATCH = 100;
     /**
@@ -61,6 +66,15 @@ public class TdlibTelegramGateway implements TelegramGateway {
     private final AppProperties.Telegram config;
     private final AtomicReference<LoginState> loginState =
             new AtomicReference<>(LoginState.of(LoginStage.DISCONNECTED, null));
+    /**
+     * Security-audit finding F13: the single owner this listener belongs to, mirroring the
+     * single-shared-native-client assumption {@link io.tgmcp.telegram.TelegramConnectionService}
+     * already enforces (F01) -- there is at most one active TDLIB login at a time, so one slot
+     * is enough. Notified from {@link #handleUpdate} for every authorization-state change,
+     * including ones that happen asynchronously (a QR code scanned on another device) well
+     * after whatever request/response call originally triggered the login.
+     */
+    private volatile Consumer<LoginState> stateListener;
 
     public TdlibTelegramGateway(TdlibClient client, AppProperties.Telegram config) {
         this.client = client;
@@ -76,6 +90,11 @@ public class TdlibTelegramGateway implements TelegramGateway {
         return TelegramAdapterKind.TDLIB;
     }
 
+    @Override
+    public void onStateChange(ConnectionRef ref, Consumer<LoginState> listener) {
+        this.stateListener = listener;
+    }
+
     // --- authorization ----------------------------------------------------------------
 
     private void handleUpdate(JsonNode update) {
@@ -83,9 +102,37 @@ public class TdlibTelegramGateway implements TelegramGateway {
             return;
         }
         JsonNode state = update.path("authorization_state");
-        this.loginState.set(mapAuthorizationState(state));
+        LoginState mapped = mapAuthorizationState(state);
+        // Security-audit finding F13: authorizationStateReady on its own carries no account
+        // identity. Fetching it here -- rather than leaving tgUserId/tgUsername null until
+        // some later request happens to populate them -- means whatever this update notifies
+        // listeners with (see below) is already complete. Safe to call now rather than
+        // deadlocking: security-audit finding F11 moved listener dispatch off the receive
+        // thread specifically so a listener may call request() itself.
+        if (mapped.stage() == LoginStage.READY) {
+            mapped = withAccountIdentity(mapped);
+        }
+        this.loginState.set(mapped);
         if ("authorizationStateWaitTdlibParameters".equals(state.path("@type").asString(""))) {
             sendTdlibParameters();
+        }
+        Consumer<LoginState> listener = this.stateListener;
+        if (listener != null) {
+            listener.accept(mapped);
+        }
+    }
+
+    private LoginState withAccountIdentity(LoginState state) {
+        try {
+            JsonNode me = this.client.request("getMe", Map.of());
+            long tgUserId = me.path("id").asLong();
+            String username = me.path("usernames").path("editable_username").asString(null);
+            return new LoginState(state.stage(), state.qrLoginLink(), tgUserId, username, state.message());
+        }
+        catch (RuntimeException ex) {
+            log.warn("Reached authorizationStateReady but could not fetch account identity via getMe: {}",
+                    ex.getClass().getSimpleName());
+            return state;
         }
     }
 

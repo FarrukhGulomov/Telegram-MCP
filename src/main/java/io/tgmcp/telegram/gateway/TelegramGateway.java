@@ -32,6 +32,18 @@ public interface TelegramGateway {
     LoginState currentState(ConnectionRef ref);
 
     /**
+     * Registers a listener notified whenever this connection's login state changes,
+     * including asynchronously, after this call returns (security-audit finding F13): QR-code
+     * confirmation happens out of band (the user scans on another device), so a request/response
+     * call made at the moment {@code beginLogin} is invoked cannot observe it. Adapters whose
+     * every transition instead completes synchronously within their own request/response
+     * methods (the mock adapter) may leave this a no-op default -- callers that also persist
+     * the state returned directly from beginLogin/submitCode/submitPassword still see those.
+     */
+    default void onStateChange(ConnectionRef ref, java.util.function.Consumer<LoginState> listener) {
+    }
+
+    /**
      * Ends the local client session and destroys local session material. This does not by
      * itself revoke the session inside Telegram; the UI tells users how to do that.
      */

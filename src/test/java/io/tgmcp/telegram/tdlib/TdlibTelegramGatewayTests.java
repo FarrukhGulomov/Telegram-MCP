@@ -13,6 +13,7 @@ import java.util.function.Consumer;
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.telegram.gateway.ConnectionRef;
 import io.tgmcp.telegram.gateway.LoginStage;
+import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.MessageWindow;
 import io.tgmcp.telegram.gateway.RemoteChat;
 import io.tgmcp.telegram.gateway.RemoteMessage;
@@ -77,6 +78,61 @@ class TdlibTelegramGatewayTests {
     void reportsAnUnknownAuthorizationStateAsAnErrorRatherThanGuessing() {
         assertThat(this.gateway.mapAuthorizationState(json("""
                 {"@type":"authorizationStateWaitEmailAddress"}""")).stage()).isEqualTo(LoginStage.ERROR);
+    }
+
+    @Test
+    void reachingReadyFetchesAccountIdentityAndNotifiesTheRegisteredListener() {
+        // Security-audit finding F13: authorizationStateReady on its own carries no account
+        // identity, and arrives as a push update -- asynchronously, after whatever
+        // request/response call started the login (in practice, well after a QR code was
+        // scanned on another device). A registered listener must see the fully-identified
+        // state the moment it happens, not just whenever the UI next happens to poll.
+        List<LoginState> notifications = new ArrayList<>();
+        this.gateway.onStateChange(this.ref, notifications::add);
+
+        this.client.enqueue("""
+                {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateReady"}}""");
+
+        assertThat(notifications).hasSize(1);
+        LoginState notified = notifications.get(0);
+        assertThat(notified.stage()).isEqualTo(LoginStage.READY);
+        assertThat(notified.tgUserId()).isEqualTo(777L);
+        assertThat(notified.tgUsername()).isEqualTo("real_owner");
+        assertThat(this.gateway.currentState(this.ref).tgUserId())
+                .as("the identity must also be reflected in currentState(), not only the notification")
+                .isEqualTo(777L);
+    }
+
+    @Test
+    void stillNotifiesTheListenerWhenReadyIdentityCannotBeFetched() {
+        List<LoginState> notifications = new ArrayList<>();
+        this.gateway.onStateChange(this.ref, notifications::add);
+
+        this.client.enqueueError(500, "INTERNAL");
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateReady"}}""");
+
+        assertThat(notifications).hasSize(1);
+        assertThat(notifications.get(0).stage())
+                .as("a failed identity lookup must not swallow the READY transition itself")
+                .isEqualTo(LoginStage.READY);
+        assertThat(notifications.get(0).tgUserId()).isNull();
+    }
+
+    @Test
+    void notifiesTheListenerForNonReadyTransitionsTooIncludingLogout() {
+        List<LoginState> notifications = new ArrayList<>();
+        this.gateway.onStateChange(this.ref, notifications::add);
+
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState","authorization_state":{"@type":"authorizationStateClosed"}}""");
+
+        assertThat(notifications).hasSize(1);
+        assertThat(notifications.get(0).stage()).isEqualTo(LoginStage.DISCONNECTED);
     }
 
     @Test
@@ -338,6 +394,7 @@ class TdlibTelegramGatewayTests {
         private final ObjectMapper mapper;
         private final Deque<String> responses = new ArrayDeque<>();
         private final List<String> sentMethods = new ArrayList<>();
+        private Consumer<JsonNode> updateListener;
 
         private ScriptedTdlibClient(ObjectMapper mapper) {
             this.mapper = mapper;
@@ -345,6 +402,11 @@ class TdlibTelegramGatewayTests {
 
         void enqueue(String json) {
             this.responses.addLast(json);
+        }
+
+        /** Simulates TDLib delivering a push update (security-audit finding F13 tests). */
+        void pushUpdate(String json) {
+            this.updateListener.accept(this.mapper.readTree(json));
         }
 
         void enqueueError(int code, String message) {
@@ -368,6 +430,7 @@ class TdlibTelegramGatewayTests {
 
         @Override
         public void onUpdate(Consumer<JsonNode> listener) {
+            this.updateListener = listener;
         }
 
         @Override

@@ -23,7 +23,9 @@ import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.session.SessionCipher;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Onboarding for the Telegram client session.
@@ -41,19 +43,22 @@ public class TelegramConnectionService {
     private final SessionCipher sessionCipher;
     private final AuditService auditService;
     private final Clock clock;
+    private final TransactionTemplate transactionTemplate;
 
     public TelegramConnectionService(TelegramConnectionRepository connectionRepository,
                                      ChatRepository chatRepository,
                                      TelegramGateway gateway,
                                      SessionCipher sessionCipher,
                                      AuditService auditService,
-                                     Clock clock) {
+                                     Clock clock,
+                                     PlatformTransactionManager transactionManager) {
         this.connectionRepository = connectionRepository;
         this.chatRepository = chatRepository;
         this.gateway = gateway;
         this.sessionCipher = sessionCipher;
         this.auditService = auditService;
         this.clock = clock;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     public Optional<TelegramConnection> find(AuthenticatedActor actor) {
@@ -75,12 +80,35 @@ public class TelegramConnectionService {
     public LoginState beginLogin(AuthenticatedActor actor, LoginMethod method, String phoneNumber) {
         TelegramConnection connection = getOrCreate(actor);
         requireNoOtherActiveOwner(actor);
+        // Security-audit finding F13: QR-code confirmation happens out of band (the user scans
+        // on another device), so it can complete well after this call returns with no request
+        // of its own to persist it. Registered before beginLogin() so no transition -- READY
+        // included -- can be missed.
+        this.gateway.onStateChange(connection.ref(),
+                asyncState -> applyAsyncStateChange(actor, connection, asyncState));
         LoginState state = this.gateway.beginLogin(connection.ref(), method, phoneNumber);
         persist(actor, connection, state);
         // Deliberately records the method, never the phone number.
         this.auditService.record(actor, AuditAction.TELEGRAM_CONNECT_STARTED, null, AuditService.ALLOWED,
                 Map.of("method", method.name(), "adapter", this.gateway.kind().name()));
         return state;
+    }
+
+    /**
+     * Applies a login-state change that arrived asynchronously, outside of any UI request --
+     * in practice, TDLib reporting {@code authorizationStateReady} (now carrying real account
+     * identity; see {@code TdlibTelegramGateway.withAccountIdentity}) once a QR code has been
+     * scanned on another device, or an error/logout state reached without a matching submit*
+     * call. Idempotent: replaying the same state is harmless, matching {@link #persist}.
+     *
+     * <p>Deliberately runs its own transaction via {@link TransactionTemplate} rather than
+     * {@code @Transactional}: this method is invoked from inside a lambda passed to {@code
+     * beginLogin}'s own body, so {@code this} there is the raw target object, not the proxy
+     * Spring's annotation-driven transactions depend on -- the exact same self-invocation trap
+     * this pass closes elsewhere for {@code AuditService} (security-audit finding F20).
+     */
+    public void applyAsyncStateChange(AuthenticatedActor actor, TelegramConnection connection, LoginState state) {
+        this.transactionTemplate.executeWithoutResult(status -> persist(actor, connection, state));
     }
 
     @Transactional
