@@ -14,6 +14,7 @@ import io.tgmcp.config.AppProperties;
 import io.tgmcp.consent.ConsentCoverage;
 import io.tgmcp.consent.ConsentService;
 import io.tgmcp.message.MessageRepository;
+import io.tgmcp.security.McpScopes;
 import io.tgmcp.sync.SyncCheckpointRepository;
 import io.tgmcp.telegram.TelegramConnection;
 import io.tgmcp.telegram.TelegramConnectionRepository;
@@ -82,9 +83,7 @@ public class ChatActivationService {
         if (approvedTo.isBefore(approvedFrom)) {
             throw new IllegalArgumentException("validation.dateRange");
         }
-        if (providers.isEmpty()) {
-            throw new IllegalArgumentException("validation.selectProvider");
-        }
+        validateProviders(providers);
         importParticipants(actor, chat);
 
         ChatActivation activation = new ChatActivation(
@@ -115,8 +114,9 @@ public class ChatActivationService {
         if (!coverage.complete()) {
             this.auditService.record(actor, AuditAction.CHAT_ACTIVATED, chatId, AuditService.DENIED,
                     Map.of("reason", "incomplete consent coverage", "gaps", coverage.gaps().size()));
-            throw new IllegalStateException("Cannot activate: " + coverage.gaps().size()
-                    + " participant(s) have not consented for this purpose, provider scope and consent version.");
+            // Carries just the gap count; ChatController.activate() supplies the (translated)
+            // sentence around it via the validation.activateIncomplete message key.
+            throw new IllegalStateException(String.valueOf(coverage.gaps().size()));
         }
         ChatActivation activated = new ChatActivation(activation.id(), activation.tenantId(),
                 activation.chatId(), ActivationState.ACTIVE, activation.purpose(),
@@ -181,9 +181,7 @@ public class ChatActivationService {
         if (approvedTo.isBefore(approvedFrom)) {
             throw new IllegalArgumentException("validation.dateRange");
         }
-        if (providers.isEmpty()) {
-            throw new IllegalArgumentException("validation.selectProvider");
-        }
+        validateProviders(providers);
         ChatActivation existing = require(actor, chatId);
         boolean contextChanged = !existing.purpose().equals(purpose)
                 || !existing.providerScope().equals(String.join(",", providers))
@@ -233,12 +231,28 @@ public class ChatActivationService {
 
     private ChatActivation require(AuthenticatedActor actor, UUID chatId) {
         return this.activationRepository.find(actor.tenantId(), chatId)
-                .orElseThrow(() -> new IllegalArgumentException("No such chat"));
+                .orElseThrow(() -> new IllegalArgumentException("error.noSuchChat"));
     }
 
     private Chat requireChat(AuthenticatedActor actor, UUID chatId) {
         return this.chatRepository.find(actor.tenantId(), chatId)
-                .orElseThrow(() -> new IllegalArgumentException("No such chat"));
+                .orElseThrow(() -> new IllegalArgumentException("error.noSuchChat"));
+    }
+
+    /**
+     * Providers come from an HTML checkbox group, but nothing stops a direct POST (bypassing
+     * the browser UI) from naming a provider that doesn't exist. Rejecting that here — rather
+     * than accepting it and letting it surface later — avoids storing a providerScope value
+     * that the UI's #{'provider.' + value} message lookups can't resolve (which would otherwise
+     * throw when rendering the chat or audit page) and that no real MCP token could ever match.
+     */
+    private static void validateProviders(List<String> providers) {
+        if (providers.isEmpty()) {
+            throw new IllegalArgumentException("validation.selectProvider");
+        }
+        if (!McpScopes.KNOWN_PROVIDERS.containsAll(providers)) {
+            throw new IllegalArgumentException("validation.unknownProvider");
+        }
     }
 
     private UUID existingId(AuthenticatedActor actor, UUID chatId) {

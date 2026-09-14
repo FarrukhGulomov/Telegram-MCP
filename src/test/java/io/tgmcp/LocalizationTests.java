@@ -124,4 +124,40 @@ class LocalizationTests extends AbstractIntegrationTest {
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("Разрешено")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("CHAT_DISCOVERED"))));
     }
+
+    /**
+     * Security-review finding: ChatActivationService.activate() built its "N participant(s)
+     * haven't consented yet" refusal as a literal English sentence, so it never translated no
+     * matter the visitor's language. The service now throws just the count and ChatController
+     * supplies the (translatable) sentence around it via validation.activateIncomplete.
+     */
+    @Test
+    void activatingWithIncompleteConsentTranslatesTheRefusalMessage() throws Exception {
+        Fixtures.Team team = this.fixtures.team("activate-incomplete-i18n");
+        Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Incomplete consent chat",
+                "incomplete_consent_chat");
+
+        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
+                        .param("username", team.user().email()).param("password", "pw"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        assertThat(session).isNotNull();
+
+        this.mockMvc.perform(post("/chats/" + chat.id() + "/select").session(session).with(csrf())
+                        .param("purpose", "Answer questions about team decisions")
+                        .param("providers", io.tgmcp.security.McpScopes.ANTHROPIC_CLAUDE)
+                        .param("approvedFrom", "2026-01-01")
+                        .param("approvedTo", "2026-12-31")
+                        .param("retentionDays", "365"))
+                .andExpect(status().is3xxRedirection());
+
+        this.mockMvc.perform(post("/chats/" + chat.id() + "/activate").session(session).with(csrf())
+                        .param("lang", "uz"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(flash().attribute("error", org.hamcrest.Matchers.allOf(
+                        org.hamcrest.Matchers.containsString(
+                                "ushbu maqsad, provayderlar doirasi va rozilik versiyasi uchun hali rozilik bermagan"),
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("have not consented")))));
+    }
 }

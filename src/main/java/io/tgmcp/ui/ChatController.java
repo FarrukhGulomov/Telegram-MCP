@@ -163,7 +163,9 @@ public class ChatController {
             redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.activate.success"));
         }
         catch (IllegalStateException ex) {
-            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+            // ex.getMessage() is just the participant count; see ChatActivationService.activate().
+            redirectAttributes.addFlashAttribute("error",
+                    Messages.text(this.messages, "validation.activateIncomplete", ex.getMessage()));
         }
         return "redirect:/chats/" + chatId;
     }

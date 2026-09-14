@@ -1,6 +1,7 @@
 package io.tgmcp;
 
 import io.tgmcp.chat.Chat;
+import io.tgmcp.chat.ChatActivationRepository;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
 import io.tgmcp.telegram.mock.SyntheticDataset;
@@ -34,6 +35,9 @@ class ChatFormValidationTests extends AbstractIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private ChatActivationRepository activations;
 
     private MockHttpSession signIn(Fixtures.Team team) throws Exception {
         MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
@@ -86,5 +90,33 @@ class ChatFormValidationTests extends AbstractIntegrationTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/chats/" + chat.id()))
                 .andExpect(flash().attribute("error", "Select at least one provider"));
+    }
+
+    /**
+     * Security-review finding: {@code providers} is only ever offered as fixed checkboxes in
+     * chat.html, but a direct POST (bypassing the browser UI) can name anything. Before this
+     * whitelist check, an unrecognized provider would be persisted as the chat's providerScope
+     * and later crash the chat/audit page's {@code #{'provider.' + value}} message lookup with
+     * a 500 -- not an access-control bypass (no real MCP token could ever match a made-up
+     * provider), but a self-inflicted denial of service on that chat's page.
+     */
+    @Test
+    void selectingAChatWithAnUnrecognizedProviderIsRejectedInsteadOfStoredAndCrashingLater() throws Exception {
+        Fixtures.Team team = this.fixtures.team("unknown-provider-validation");
+        Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Unknown provider chat", "unknown_provider_chat");
+        MockHttpSession session = signIn(team);
+
+        this.mockMvc.perform(post("/chats/" + chat.id() + "/select").session(session).with(csrf())
+                        .param("purpose", "Answer questions about team decisions")
+                        .param("providers", "NOT_A_REAL_PROVIDER")
+                        .param("approvedFrom", "2026-01-01")
+                        .param("approvedTo", "2026-12-31")
+                        .param("retentionDays", "365"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/chats/" + chat.id()))
+                .andExpect(flash().attribute("error",
+                        "One of the selected providers is not recognized. Please use only the checkboxes provided."));
+
+        assertThat(this.activations.find(team.tenant().id(), chat.id())).isEmpty();
     }
 }
