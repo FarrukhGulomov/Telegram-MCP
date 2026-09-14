@@ -9,6 +9,12 @@ import java.util.UUID;
 /**
  * Authorization to *process* one chat's content — deliberately separate from the
  * authorization to connect a Telegram account.
+ *
+ * <p>{@code contextRevision} is an opaque identity for the whole processing context (purpose,
+ * provider scope, consent version, approved range and retention, taken together). It changes
+ * whenever any of those change — see {@link io.tgmcp.chat.ChatActivationService} — so a consent
+ * record only ever covers the exact revision it was granted under, never a context that merely
+ * happens to share some of the same field values (security audit finding F03).
  */
 public record ChatActivation(UUID id,
                              UUID tenantId,
@@ -17,6 +23,7 @@ public record ChatActivation(UUID id,
                              String purpose,
                              String providerScope,
                              String consentVersion,
+                             String contextRevision,
                              Instant approvedFrom,
                              Instant approvedTo,
                              int retentionDays,

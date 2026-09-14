@@ -16,8 +16,8 @@ public class ConsentRepository {
 
     private static final String COLUMNS = """
             id, tenant_id, chat_id, participant_tg_user_id, participant_display_name, purpose,
-            provider_scope, consent_version, method, evidence_ref, granted_at, expires_at,
-            revoked_at, revoked_reason, recorded_by_user_id
+            provider_scope, consent_version, context_revision, method, evidence_ref, granted_at,
+            expires_at, revoked_at, revoked_reason, recorded_by_user_id
             """;
 
     private final JdbcClient jdbc;
@@ -42,12 +42,12 @@ public class ConsentRepository {
         jdbc.sql("""
                         INSERT INTO consent_records
                             (id, tenant_id, chat_id, participant_tg_user_id, participant_display_name,
-                             purpose, provider_scope, consent_version, method, evidence_ref,
-                             granted_at, expires_at, recorded_by_user_id)
+                             purpose, provider_scope, consent_version, context_revision, method,
+                             evidence_ref, granted_at, expires_at, recorded_by_user_id)
                         VALUES
                             (:id, :tenantId, :chatId, :participantTgUserId, :participantDisplayName,
-                             :purpose, :providerScope, :consentVersion, :method, :evidenceRef,
-                             :grantedAt, :expiresAt, :recordedByUserId)
+                             :purpose, :providerScope, :consentVersion, :contextRevision, :method,
+                             :evidenceRef, :grantedAt, :expiresAt, :recordedByUserId)
                         """)
                 .param("id", record.id())
                 .param("tenantId", record.tenantId())
@@ -57,6 +57,7 @@ public class ConsentRepository {
                 .param("purpose", record.purpose())
                 .param("providerScope", record.providerScope())
                 .param("consentVersion", record.consentVersion())
+                .param("contextRevision", record.contextRevision())
                 .param("method", record.method().name())
                 .param("evidenceRef", record.evidenceRef())
                 .param("grantedAt", java.sql.Timestamp.from(record.grantedAt()))
@@ -102,6 +103,7 @@ public class ConsentRepository {
                 rs.getString("purpose"),
                 rs.getString("provider_scope"),
                 rs.getString("consent_version"),
+                rs.getString("context_revision"),
                 ConsentMethod.valueOf(rs.getString("method")),
                 rs.getString("evidence_ref"),
                 Jdbc.instant(rs, "granted_at"),

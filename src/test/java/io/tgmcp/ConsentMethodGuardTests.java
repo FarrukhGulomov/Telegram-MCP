@@ -49,7 +49,7 @@ class ConsentMethodGuardTests extends AbstractIntegrationTest {
         Chat chat = chat(team);
 
         assertThatThrownBy(() -> this.consentService.record(team.actor(), chat.id(), 111L, "Alice",
-                "purpose", "ANTHROPIC_CLAUDE", "v1", ConsentMethod.SELF_SERVICE_LINK, null,
+                "purpose", "ANTHROPIC_CLAUDE", "v1", "rev-1", ConsentMethod.SELF_SERVICE_LINK, null,
                 Instant.now().plus(Duration.ofDays(1))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("validation.selfServiceNotAvailable");
@@ -62,7 +62,7 @@ class ConsentMethodGuardTests extends AbstractIntegrationTest {
         Chat chat = chat(team);
 
         assertThatThrownBy(() -> this.consentService.record(team.actor(), chat.id(), 111L, "Alice",
-                "purpose", "ANTHROPIC_CLAUDE", "v1", ConsentMethod.DEMO_SYNTHETIC, null,
+                "purpose", "ANTHROPIC_CLAUDE", "v1", "rev-1", ConsentMethod.DEMO_SYNTHETIC, null,
                 Instant.now().plus(Duration.ofDays(1))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("validation.demoConsentNotAllowed");
@@ -74,7 +74,7 @@ class ConsentMethodGuardTests extends AbstractIntegrationTest {
         Chat chat = chat(team);
 
         assertThat(this.consentService.record(team.actor(), chat.id(), 111L, "Alice",
-                "purpose", "ANTHROPIC_CLAUDE", "v1", ConsentMethod.DEMO_SYNTHETIC, null,
+                "purpose", "ANTHROPIC_CLAUDE", "v1", "rev-1", ConsentMethod.DEMO_SYNTHETIC, null,
                 Instant.now().plus(Duration.ofDays(1)))).isNotNull();
     }
 
@@ -84,7 +84,7 @@ class ConsentMethodGuardTests extends AbstractIntegrationTest {
         Chat chat = chat(team);
 
         assertThatThrownBy(() -> this.consentService.record(team.actor(), chat.id(), 111L, "Alice",
-                "purpose", "ANTHROPIC_CLAUDE", "v1", ConsentMethod.SIGNED_ATTESTATION, "  ",
+                "purpose", "ANTHROPIC_CLAUDE", "v1", "rev-1", ConsentMethod.SIGNED_ATTESTATION, "  ",
                 Instant.now().plus(Duration.ofDays(1))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("validation.evidenceRequired");
@@ -96,7 +96,7 @@ class ConsentMethodGuardTests extends AbstractIntegrationTest {
         Chat chat = chat(team);
 
         assertThat(this.consentService.record(team.actor(), chat.id(), 111L, "Alice",
-                "purpose", "ANTHROPIC_CLAUDE", "v1", ConsentMethod.SIGNED_ATTESTATION, "email dated 2026-01-01",
+                "purpose", "ANTHROPIC_CLAUDE", "v1", "rev-1", ConsentMethod.SIGNED_ATTESTATION, "email dated 2026-01-01",
                 Instant.now().plus(Duration.ofDays(1)))).isNotNull();
     }
 }

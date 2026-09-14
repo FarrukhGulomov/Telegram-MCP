@@ -17,8 +17,8 @@ public class ChatActivationRepository {
 
     private static final String COLUMNS = """
             id, tenant_id, chat_id, state, purpose, provider_scope, consent_version,
-            approved_from, approved_to, retention_days, membership_fingerprint, pause_reason,
-            activated_at, activated_by_user_id
+            context_revision, approved_from, approved_to, retention_days, membership_fingerprint,
+            pause_reason, activated_at, activated_by_user_id
             """;
 
     private final JdbcClient jdbc;
@@ -62,17 +62,19 @@ public class ChatActivationRepository {
         jdbc.sql("""
                         INSERT INTO chat_activations
                             (id, tenant_id, chat_id, state, purpose, provider_scope, consent_version,
-                             approved_from, approved_to, retention_days, membership_fingerprint,
-                             pause_reason, activated_at, activated_by_user_id, updated_at)
+                             context_revision, approved_from, approved_to, retention_days,
+                             membership_fingerprint, pause_reason, activated_at, activated_by_user_id,
+                             updated_at)
                         VALUES
                             (:id, :tenantId, :chatId, :state, :purpose, :providerScope, :consentVersion,
-                             :approvedFrom, :approvedTo, :retentionDays, :membershipFingerprint,
-                             :pauseReason, :activatedAt, :activatedByUserId, now())
+                             :contextRevision, :approvedFrom, :approvedTo, :retentionDays,
+                             :membershipFingerprint, :pauseReason, :activatedAt, :activatedByUserId, now())
                         ON CONFLICT (chat_id) DO UPDATE SET
                              state = EXCLUDED.state,
                              purpose = EXCLUDED.purpose,
                              provider_scope = EXCLUDED.provider_scope,
                              consent_version = EXCLUDED.consent_version,
+                             context_revision = EXCLUDED.context_revision,
                              approved_from = EXCLUDED.approved_from,
                              approved_to = EXCLUDED.approved_to,
                              retention_days = EXCLUDED.retention_days,
@@ -89,6 +91,7 @@ public class ChatActivationRepository {
                 .param("purpose", activation.purpose())
                 .param("providerScope", activation.providerScope())
                 .param("consentVersion", activation.consentVersion())
+                .param("contextRevision", activation.contextRevision())
                 .param("approvedFrom", java.sql.Timestamp.from(activation.approvedFrom()))
                 .param("approvedTo", java.sql.Timestamp.from(activation.approvedTo()))
                 .param("retentionDays", activation.retentionDays())
@@ -134,6 +137,7 @@ public class ChatActivationRepository {
                 rs.getString("purpose"),
                 rs.getString("provider_scope"),
                 rs.getString("consent_version"),
+                rs.getString("context_revision"),
                 Jdbc.instant(rs, "approved_from"),
                 Jdbc.instant(rs, "approved_to"),
                 rs.getInt("retention_days"),

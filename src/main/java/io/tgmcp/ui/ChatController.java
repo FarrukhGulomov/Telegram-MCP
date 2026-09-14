@@ -132,7 +132,7 @@ public class ChatController {
         try {
             this.consentService.record(actor, chatId, participantTgUserId, participantDisplayName,
                     activation.purpose(), activation.providerScope(), activation.consentVersion(),
-                    method, evidenceRef,
+                    activation.contextRevision(), method, evidenceRef,
                     Instant.now().plus(this.properties.consent().defaultValidity()));
             redirectAttributes.addFlashAttribute("message",
                     Messages.text(this.messages, "chat.consent.success", participantDisplayName));

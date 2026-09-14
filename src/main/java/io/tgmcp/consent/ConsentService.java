@@ -7,7 +7,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 import io.tgmcp.audit.AuditAction;
@@ -51,12 +50,10 @@ public class ConsentService {
     }
 
     public ConsentCoverage coverageFor(ChatActivation activation) {
-        return coverageFor(activation.tenantId(), activation.chatId(), activation.purpose(),
-                activation.consentVersion(), activation.providers());
+        return coverageFor(activation.tenantId(), activation.chatId(), activation.contextRevision());
     }
 
-    public ConsentCoverage coverageFor(UUID tenantId, UUID chatId, String purpose,
-                                       String consentVersion, Set<String> providers) {
+    public ConsentCoverage coverageFor(UUID tenantId, UUID chatId, String contextRevision) {
         Instant now = this.clock.instant();
         List<ChatParticipant> required = this.participantRepository.findActive(tenantId, chatId).stream()
                 .filter(p -> !p.bot())
@@ -76,7 +73,7 @@ public class ConsentService {
                     .toList();
 
             Optional<ConsentRecord> match = theirs.stream()
-                    .filter(r -> r.covers(purpose, consentVersion, providers, now))
+                    .filter(r -> r.covers(contextRevision, now))
                     .findFirst();
 
             if (match.isPresent()) {
@@ -84,18 +81,17 @@ public class ConsentService {
                 continue;
             }
             gaps.add(new ConsentGap(participant.tgUserId(), participant.displayName(),
-                    explainGap(theirs, purpose, consentVersion, providers, now)));
+                    explainGap(theirs, contextRevision, now)));
         }
         return new ConsentCoverage(required.size(), covered, List.copyOf(gaps));
     }
 
-    private String explainGap(List<ConsentRecord> theirs, String purpose, String version,
-                              Set<String> providers, Instant now) {
+    private String explainGap(List<ConsentRecord> theirs, String contextRevision, Instant now) {
         if (theirs.isEmpty()) {
             return ConsentGap.MISSING;
         }
         boolean sameContext = theirs.stream()
-                .anyMatch(r -> r.purpose().equals(purpose) && r.consentVersion().equals(version));
+                .anyMatch(r -> contextRevision.equals(r.contextRevision()));
         if (theirs.stream().anyMatch(ConsentRecord::revoked)
                 && theirs.stream().noneMatch(r -> r.validAt(now))) {
             return ConsentGap.REVOKED;
@@ -113,12 +109,12 @@ public class ConsentService {
     @Transactional
     public ConsentRecord record(AuthenticatedActor actor, UUID chatId, long participantTgUserId,
                                 String participantDisplayName, String purpose, String providerScope,
-                                String consentVersion, ConsentMethod method, String evidenceRef,
-                                Instant expiresAt) {
+                                String consentVersion, String contextRevision, ConsentMethod method,
+                                String evidenceRef, Instant expiresAt) {
         validateMethod(method, evidenceRef);
         ConsentRecord record = new ConsentRecord(Ids.newId(), actor.tenantId(), chatId, participantTgUserId,
-                participantDisplayName, purpose, providerScope, consentVersion, method, evidenceRef,
-                this.clock.instant(), expiresAt, null, null, actor.userId());
+                participantDisplayName, purpose, providerScope, consentVersion, contextRevision, method,
+                evidenceRef, this.clock.instant(), expiresAt, null, null, actor.userId());
         this.consentRepository.insert(record);
         this.auditService.record(actor, AuditAction.CONSENT_RECORDED, chatId, AuditService.ALLOWED,
                 Map.of("participantTgUserId", participantTgUserId,

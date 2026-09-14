@@ -222,7 +222,7 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
                 .orElseThrow();
         ChatActivation updated = new ChatActivation(existing.id(), existing.tenantId(), existing.chatId(),
                 existing.state(), existing.purpose(), existing.providerScope(), existing.consentVersion(),
-                existing.approvedFrom(), existing.approvedTo(), retentionDays,
+                existing.contextRevision(), existing.approvedFrom(), existing.approvedTo(), retentionDays,
                 existing.membershipFingerprint(), existing.pauseReason(), existing.activatedAt(),
                 existing.activatedByUserId());
         this.activations.upsert(updated);

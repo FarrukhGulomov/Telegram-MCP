@@ -121,14 +121,14 @@ public class Fixtures {
                                      int retentionDays, String... providers) {
         String scope = providers.length == 0 ? McpScopes.ANTHROPIC_CLAUDE : String.join(",", providers);
         ChatActivation activation = new ChatActivation(Ids.newId(), team.tenant().id(), chat.id(), state,
-                PURPOSE, scope, CONSENT_VERSION, from, to, retentionDays,
+                PURPOSE, scope, CONSENT_VERSION, Ids.newId().toString(), from, to, retentionDays,
                 this.participants.membershipFingerprint(team.tenant().id(), chat.id()), null,
                 Instant.parse("2026-06-01T00:00:00Z"), team.user().id());
         this.activations.upsert(activation);
         return this.activations.find(team.tenant().id(), chat.id()).orElseThrow();
     }
 
-    /** Records valid consent for every non-bot participant of a chat. */
+    /** Records valid consent for every non-bot participant of a chat, under its current context revision. */
     public void consentAll(Team team, Chat chat, ChatActivation activation, Instant grantedAt,
                            Instant expiresAt) {
         for (ChatParticipant participant : this.participants.findActive(team.tenant().id(), chat.id())) {
@@ -137,8 +137,9 @@ public class Fixtures {
             }
             this.consents.insert(new ConsentRecord(Ids.newId(), team.tenant().id(), chat.id(),
                     participant.tgUserId(), participant.displayName(), activation.purpose(),
-                    activation.providerScope(), activation.consentVersion(), ConsentMethod.DEMO_SYNTHETIC,
-                    "test-fixture", grantedAt, expiresAt, null, null, team.user().id()));
+                    activation.providerScope(), activation.consentVersion(), activation.contextRevision(),
+                    ConsentMethod.DEMO_SYNTHETIC, "test-fixture", grantedAt, expiresAt, null, null,
+                    team.user().id()));
         }
     }
 

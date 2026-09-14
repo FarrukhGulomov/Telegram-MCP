@@ -172,12 +172,13 @@ class AccessPolicyTests extends AbstractIntegrationTest {
         ChatActivation activation = this.activations.find(chat.team().tenant().id(), chat.chat().id())
                 .orElseThrow();
 
-        // A new consent version means the recorded consents no longer describe what is being asked.
+        // A new consent version (and therefore a new context revision) means the recorded
+        // consents no longer describe what is being asked.
         this.activations.upsert(new ChatActivation(activation.id(), activation.tenantId(),
                 activation.chatId(), activation.state(), activation.purpose(), activation.providerScope(),
-                "2027-01-v2", activation.approvedFrom(), activation.approvedTo(),
-                activation.retentionDays(), activation.membershipFingerprint(), null,
-                activation.activatedAt(), activation.activatedByUserId()));
+                "2027-01-v2", io.tgmcp.common.Ids.newId().toString(), activation.approvedFrom(),
+                activation.approvedTo(), activation.retentionDays(), activation.membershipFingerprint(),
+                null, activation.activatedAt(), activation.activatedByUserId()));
 
         assertThat(errorCode(history(chat.team(), chat.chat().id()))).isEqualTo("CONSENT_REQUIRED");
     }

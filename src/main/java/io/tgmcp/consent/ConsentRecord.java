@@ -7,9 +7,15 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * One participant's consent, scoped to a chat, a purpose, a provider scope and a consent
- * version. Consent is explicit, revocable, and limited to that context: change any part of
- * the context and this record stops covering it.
+ * One participant's consent, scoped to a chat and an immutable processing-context revision
+ * (see {@link io.tgmcp.chat.ChatActivation#contextRevision()}). Consent is explicit, revocable,
+ * and limited to that exact revision: change any part of the context — purpose, provider
+ * scope, consent version, approved range or retention — and this record stops covering it,
+ * even if some individual fields still happen to match (security audit finding F03).
+ *
+ * <p>{@code purpose}/{@code providerScope}/{@code consentVersion} are kept as a human-readable
+ * record of what was agreed to at the time, for audit and display; only {@code contextRevision}
+ * decides coverage.
  */
 public record ConsentRecord(UUID id,
                             UUID tenantId,
@@ -19,6 +25,7 @@ public record ConsentRecord(UUID id,
                             String purpose,
                             String providerScope,
                             String consentVersion,
+                            String contextRevision,
                             ConsentMethod method,
                             String evidenceRef,
                             Instant grantedAt,
@@ -46,11 +53,10 @@ public record ConsentRecord(UUID id,
         return !revoked() && !expiredAt(now) && !now.isBefore(this.grantedAt);
     }
 
-    /** Whether this record covers exactly the context being asked about. */
-    public boolean covers(String requiredPurpose, String requiredVersion, Set<String> requiredProviders, Instant now) {
+    /** Whether this record covers exactly the processing-context revision being asked about. */
+    public boolean covers(String requiredContextRevision, Instant now) {
         return validAt(now)
-                && this.purpose.equals(requiredPurpose)
-                && this.consentVersion.equals(requiredVersion)
-                && providers().containsAll(requiredProviders);
+                && this.contextRevision != null
+                && this.contextRevision.equals(requiredContextRevision);
     }
 }

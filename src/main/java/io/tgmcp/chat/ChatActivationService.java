@@ -89,7 +89,7 @@ public class ChatActivationService {
         ChatActivation activation = new ChatActivation(
                 existingId(actor, chatId), actor.tenantId(), chatId, ActivationState.AWAITING_CONSENT,
                 purpose, String.join(",", providers), this.properties.consent().currentVersion(),
-                approvedFrom, approvedTo, retentionDays,
+                Ids.newId().toString(), approvedFrom, approvedTo, retentionDays,
                 this.participantRepository.membershipFingerprint(actor.tenantId(), chatId),
                 "Awaiting participant consent", null, null);
         this.activationRepository.upsert(activation);
@@ -120,8 +120,8 @@ public class ChatActivationService {
         }
         ChatActivation activated = new ChatActivation(activation.id(), activation.tenantId(),
                 activation.chatId(), ActivationState.ACTIVE, activation.purpose(),
-                activation.providerScope(), activation.consentVersion(), activation.approvedFrom(),
-                activation.approvedTo(), activation.retentionDays(),
+                activation.providerScope(), activation.consentVersion(), activation.contextRevision(),
+                activation.approvedFrom(), activation.approvedTo(), activation.retentionDays(),
                 this.participantRepository.membershipFingerprint(actor.tenantId(), chatId), null,
                 this.clock.instant(), actor.userId());
         this.activationRepository.upsert(activated);
@@ -183,15 +183,22 @@ public class ChatActivationService {
         }
         validateProviders(providers);
         ChatActivation existing = require(actor, chatId);
+        // Security-audit finding F03: retentionDays used to be excluded from this check, so an
+        // operator could silently widen how long content is kept without invalidating the
+        // consent that was given for a narrower retention window. Every field that describes
+        // what participants are actually agreeing to must trigger a fresh context revision --
+        // and therefore fresh consent -- when it changes.
         boolean contextChanged = !existing.purpose().equals(purpose)
                 || !existing.providerScope().equals(String.join(",", providers))
                 || !existing.approvedFrom().equals(approvedFrom)
-                || !existing.approvedTo().equals(approvedTo);
+                || !existing.approvedTo().equals(approvedTo)
+                || existing.retentionDays() != retentionDays;
 
         ActivationState state = contextChanged ? ActivationState.AWAITING_CONSENT : existing.state();
+        String contextRevision = contextChanged ? Ids.newId().toString() : existing.contextRevision();
         ChatActivation updated = new ChatActivation(existing.id(), existing.tenantId(), chatId, state,
                 purpose, String.join(",", providers), this.properties.consent().currentVersion(),
-                approvedFrom, approvedTo, retentionDays, existing.membershipFingerprint(),
+                contextRevision, approvedFrom, approvedTo, retentionDays, existing.membershipFingerprint(),
                 contextChanged ? "Processing context changed; consent must be re-collected" : existing.pauseReason(),
                 existing.activatedAt(), existing.activatedByUserId());
         this.activationRepository.upsert(updated);
