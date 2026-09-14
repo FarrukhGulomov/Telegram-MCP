@@ -4,6 +4,16 @@
 <section>
   <h1>Chats</h1>
 
+  <div class="card">
+    <h2>How this works, in short</h2>
+    <ol class="muted">
+      <li>Connect your Telegram account (once).</li>
+      <li>Refresh the chat list below and pick a chat to manage.</li>
+      <li>Choose which AI app may read it, and wait for everyone in the chat to consent.</li>
+      <li>Activate. Only from that moment can an AI assistant read that one chat.</li>
+    </ol>
+  </div>
+
   <p class="banner demo" th:if="${demoMode}">
     <strong>Demo mode.</strong> Adapter <span th:text="${adapter}">MOCK</span> — all data below is
     synthetic. No Telegram account is connected.
@@ -22,7 +32,7 @@
         session can see everything the account can see; only an activated chat is ever synchronised.
       </p>
       <p><a th:href="@{/connect}">Manage connection</a></p>
-      <form th:action="@{/connect/discover}" method="post" class="inline">
+      <form th:action="@{/connect/discover}" method="post" data-guard-resubmit class="inline">
         <button type="submit">Refresh chat list</button>
       </form>
     </div>

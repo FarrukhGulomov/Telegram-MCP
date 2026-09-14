@@ -178,6 +178,12 @@ public class ChatActivationService {
     public ChatActivation updateSettings(AuthenticatedActor actor, UUID chatId, String purpose,
                                          List<String> providers, Instant approvedFrom, Instant approvedTo,
                                          int retentionDays) {
+        if (approvedTo.isBefore(approvedFrom)) {
+            throw new IllegalArgumentException("The approved range must end after it starts");
+        }
+        if (providers.isEmpty()) {
+            throw new IllegalArgumentException("Select at least one provider");
+        }
         ChatActivation existing = require(actor, chatId);
         boolean contextChanged = !existing.purpose().equals(purpose)
                 || !existing.providerScope().equals(String.join(",", providers))

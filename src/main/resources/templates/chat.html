@@ -51,7 +51,11 @@
     </div>
 
     <div class="card">
-      <h2 th:text="${view.selected} ? 'Approval settings' : 'Select this chat'">Select this chat</h2>
+      <h2 th:text="${view.selected} ? 'Approval settings' : 'Step 1 — Select this chat'">Step 1 — Select this chat</h2>
+      <p class="muted" th:unless="${view.selected}">
+        Fill in the 4 boxes below, then press "Select chat". Nothing is read from this chat yet —
+        that only happens after every participant has given consent and you press "Activate".
+      </p>
       <form th:action="${view.selected}
                         ? @{'/chats/' + ${view.chat.id} + '/settings'}
                         : @{'/chats/' + ${view.chat.id} + '/select'}" method="post" data-guard-resubmit>
@@ -59,6 +63,7 @@
         <input id="purpose" name="purpose" required maxlength="500"
                th:value="${view.activation != null} ? ${view.activation.purpose}
                          : 'Answer questions about team decisions using this chat as evidence'">
+        <p class="hint">In plain words: what will the AI assistant be allowed to use this chat for?</p>
 
         <fieldset>
           <legend>Provider scope</legend>
@@ -68,6 +73,8 @@
             <span th:text="${p}">PROVIDER</span>
           </label>
         </fieldset>
+        <p class="hint">Tick at least one box — this is which AI app (e.g. Claude, ChatGPT) is
+           allowed to read this chat. Leaving all boxes empty is not allowed.</p>
 
         <label for="approvedFrom">Approved from</label>
         <input id="approvedFrom" name="approvedFrom" type="date" required
@@ -78,10 +85,13 @@
         <input id="approvedTo" name="approvedTo" type="date" required
                th:value="${view.activation != null}
                          ? ${#temporals.format(view.activation.approvedTo, 'yyyy-MM-dd')} : ${defaultTo}">
+        <p class="hint">Only messages sent between these two dates may ever be read.</p>
 
         <label for="retentionDays">Retention (days)</label>
         <input id="retentionDays" name="retentionDays" type="number" min="1" max="3650" required
                th:value="${view.activation != null} ? ${view.activation.retentionDays} : 90">
+        <p class="hint">How many days a message is kept in this app's own database before it is
+           automatically deleted.</p>
 
         <p class="muted">
           Changing the purpose, provider scope or approved range invalidates existing consent:
@@ -93,10 +103,11 @@
   </div>
 
   <div class="card" th:if="${view.selected}">
-    <h2>Participant consent</h2>
+    <h2>Step 2 — Get everyone's consent</h2>
     <p class="muted">
-      Consent must be recorded per participant, for this purpose, this provider scope and consent
-      version <code th:text="${consentVersion}"></code>. An administrator cannot consent on someone
+      Every person listed below must consent before this chat can be activated. Consent is
+      recorded per participant, for this exact purpose, provider scope and consent version
+      <code th:text="${consentVersion}"></code>. An administrator cannot consent on someone
       else's behalf: recording an out-of-band consent requires naming the evidence.
     </p>
 
@@ -158,7 +169,13 @@
   </div>
 
   <div class="card danger" th:if="${view.selected}">
-    <h2>Access controls</h2>
+    <h2>Step 3 — Turn access on or off</h2>
+    <p class="muted">
+      <strong>Activate</strong> turns on reading for this chat (only once every participant has
+      consented above). <strong>Pause</strong> blocks access instantly but keeps everything else
+      as-is, so you can resume later. <strong>Revoke</strong> and <strong>Delete stored data</strong>
+      are permanent — use them when you're done with this chat for good.
+    </p>
     <form th:action="@{'/chats/' + ${view.chat.id} + '/activate'}" method="post" data-guard-resubmit class="inline">
       <button type="submit">Activate</button>
     </form>

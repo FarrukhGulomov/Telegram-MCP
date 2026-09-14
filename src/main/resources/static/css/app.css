@@ -61,6 +61,7 @@ table.kv th { width: 40%; }
 .warn { color: var(--warn); }
 .err { color: var(--err); }
 .muted { color: var(--muted); }
+.hint { color: var(--muted); font-size: 12.5px; margin: -2px 0 4px; }
 
 .banner { padding: 10px 12px; border-radius: 8px; margin: 0 0 16px; }
 .banner.demo { background: #e6f0fb; border: 1px solid #bcd4f2; }

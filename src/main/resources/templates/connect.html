@@ -3,6 +3,10 @@
 <body>
 <section>
   <h1>Telegram connection</h1>
+  <p class="muted">
+    This connects the Telegram account whose chats you want to manage. It does not by itself
+    share anything — you still choose, chat by chat, what gets read later.
+  </p>
 
   <p class="banner demo" th:if="${demoMode}">
     <strong>Demo mode</strong> (adapter <span th:text="${adapter}">MOCK</span>). Any code and any
@@ -25,7 +29,8 @@
 
   <div class="grid">
     <div class="card">
-      <h2>Start login</h2>
+      <h2>Step 1 — Start login</h2>
+      <p class="muted">Pick QR code (easiest: scan with your phone) or phone number.</p>
       <form th:action="@{/connect/start}" method="post" data-guard-resubmit>
         <label for="method">Method</label>
         <select id="method" name="method">
@@ -39,7 +44,9 @@
     </div>
 
     <div class="card">
-      <h2>Login code</h2>
+      <h2>Step 2 — Login code</h2>
+      <p class="muted">Only needed for the phone method. Telegram sends this code to your app —
+         type it in exactly as shown.</p>
       <form th:action="@{/connect/code}" method="post" data-guard-resubmit>
         <label for="code">Code from Telegram</label>
         <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required>
@@ -48,7 +55,9 @@
     </div>
 
     <div class="card">
-      <h2>Two-factor password</h2>
+      <h2>Step 3 — Two-factor password</h2>
+      <p class="muted">Only needed if you personally turned on a Telegram password (most people
+         have not). Skip this card otherwise.</p>
       <form th:action="@{/connect/password}" method="post" data-guard-resubmit>
         <label for="password">Password</label>
         <input id="password" name="password" type="password" autocomplete="off" required>

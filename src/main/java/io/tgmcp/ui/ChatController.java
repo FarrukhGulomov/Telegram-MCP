@@ -78,32 +78,42 @@ public class ChatController {
     @PostMapping("/chats/{chatId}/select")
     public String select(@PathVariable UUID chatId,
                          @RequestParam String purpose,
-                         @RequestParam List<String> providers,
+                         @RequestParam(required = false) List<String> providers,
                          @RequestParam String approvedFrom,
                          @RequestParam String approvedTo,
                          @RequestParam int retentionDays,
                          RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = this.currentActor.require();
-        this.activationService.propose(actor, chatId, purpose, providers,
-                startOfDay(approvedFrom), endOfDay(approvedTo), retentionDays);
-        redirectAttributes.addFlashAttribute("message",
-                "Chat selected. It will stay in AWAITING_CONSENT — with nothing stored — until every "
-                        + "participant has recorded consent for this exact purpose and provider scope.");
+        try {
+            this.activationService.propose(actor, chatId, purpose, providersOrEmpty(providers),
+                    startOfDay(approvedFrom), endOfDay(approvedTo), retentionDays);
+            redirectAttributes.addFlashAttribute("message",
+                    "Chat selected. It will stay in AWAITING_CONSENT — with nothing stored — until every "
+                            + "participant has recorded consent for this exact purpose and provider scope.");
+        }
+        catch (IllegalArgumentException ex) {
+            redirectAttributes.addFlashAttribute("error", ex.getMessage());
+        }
         return "redirect:/chats/" + chatId;
     }
 
     @PostMapping("/chats/{chatId}/settings")
     public String settings(@PathVariable UUID chatId,
                            @RequestParam String purpose,
-                           @RequestParam List<String> providers,
+                           @RequestParam(required = false) List<String> providers,
                            @RequestParam String approvedFrom,
                            @RequestParam String approvedTo,
                            @RequestParam int retentionDays,
                            RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = this.currentActor.require();
-        this.activationService.updateSettings(actor, chatId, purpose, providers,
-                startOfDay(approvedFrom), endOfDay(approvedTo), retentionDays);
-        redirectAttributes.addFlashAttribute("message", "Settings updated.");
+        try {
+            this.activationService.updateSettings(actor, chatId, purpose, providersOrEmpty(providers),
+                    startOfDay(approvedFrom), endOfDay(approvedTo), retentionDays);
+            redirectAttributes.addFlashAttribute("message", "Settings updated.");
+        }
+        catch (IllegalArgumentException ex) {
+            redirectAttributes.addFlashAttribute("error", ex.getMessage());
+        }
         return "redirect:/chats/" + chatId;
     }
 
@@ -190,6 +200,16 @@ public class ChatController {
                 + " (" + outcome.messagesIngested() + " ingested, " + outcome.revisionsApplied()
                 + " revisions) " + outcome.detail());
         return "redirect:/chats/" + chatId;
+    }
+
+    /**
+     * An HTML checkbox group submits no {@code providers} field at all when every box is left
+     * unchecked, which Spring treats as a missing required parameter (raw 400) rather than an
+     * empty list. Falling back to an empty list here lets the existing "select at least one
+     * provider" validation in {@link ChatActivationService} produce a friendly message instead.
+     */
+    private static List<String> providersOrEmpty(List<String> providers) {
+        return providers == null ? List.of() : providers;
     }
 
     private static Instant startOfDay(String isoDate) {
