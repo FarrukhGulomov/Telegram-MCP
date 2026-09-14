@@ -4,17 +4,21 @@
 <section>
   <h1 th:text="${view.chat.title}">Chat</h1>
   <p class="muted">
-    <span th:text="${view.chat.chatType}"></span> ·
+    <span th:text="#{${'chatType.' + view.chat.chatType}}"></span> ·
     <span th:text="${view.participantCount}"></span> <span th:text="#{chat.meta.participants}">participant(s)</span> ·
-    <span th:text="#{chat.meta.state}">state</span> <span class="pill" th:text="${view.stateLabel}">INACTIVE</span>
+    <span th:text="#{chat.meta.state}">state</span> <span class="pill" th:text="#{${'state.' + view.stateLabel}}">INACTIVE</span>
   </p>
 
   <div class="card" th:if="${view.selected}">
     <h2 th:text="#{chat.shared.title}">What gets shared, and with whom</h2>
-    <p th:text="#{chat.shared.text(${#strings.listJoin(view.providers, ' and ')})}">
-      When an MCP client calls a tool, the message text it retrieves is sent to that client's
-      provider — currently … — and is processed under that provider's terms, not this
-      application's.
+    <p>
+      <span th:text="#{chat.shared.textPrefix}">When an MCP client calls a tool, the message text
+        it retrieves is sent to that client's provider — currently</span>
+      <strong>
+        <span th:each="p, iter : ${view.providers}"
+              ><span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}" th:text="' ' + #{common.and} + ' '"></span></span>
+      </strong>
+      <span th:text="#{chat.shared.textSuffix}">— and is processed under that provider's terms, not this application's.</span>
     </p>
     <p class="warn" th:text="#{chat.shared.warning}">
       Data already disclosed to a provider cannot necessarily be recalled. Revoking access here
@@ -27,7 +31,7 @@
     <div class="card">
       <h2 th:text="#{chat.coverage.title}">Coverage and sync health</h2>
       <table class="kv">
-        <tr><th th:text="#{chat.coverage.syncState}">Sync state</th><td th:text="${view.syncState}">NEVER_STARTED</td></tr>
+        <tr><th th:text="#{chat.coverage.syncState}">Sync state</th><td th:text="#{${'syncState.' + view.syncState}}">NEVER_STARTED</td></tr>
         <tr><th th:text="#{chat.coverage.lastSuccess}">Last successful update</th>
             <td th:text="${view.lastSuccessAt} ?: #{chat.coverage.never}">never</td></tr>
         <tr><th th:text="#{chat.coverage.history}">History</th>
@@ -69,7 +73,7 @@
           <label th:each="p : ${allProviders}" class="checkbox">
             <input type="checkbox" name="providers" th:value="${p}"
                    th:checked="${view.activation != null and view.activation.coversProvider(p)}">
-            <span th:text="${p}">PROVIDER</span>
+            <span th:text="#{${'provider.' + p}}">PROVIDER</span>
           </label>
         </fieldset>
         <p class="hint" th:text="#{chat.providers.hint}">Tick at least one box — this is which AI app (e.g. Claude, ChatGPT) is
@@ -164,8 +168,12 @@
       <tr th:each="c : ${consents}">
         <td th:text="${c.participantDisplayName}"></td>
         <td th:text="${c.consentVersion}"></td>
-        <td th:text="${c.providerScope}"></td>
-        <td th:text="${c.method}"></td>
+        <td>
+          <span th:each="p, iter : ${#strings.arraySplit(c.providerScope, ',')}">
+            <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
+          </span>
+        </td>
+        <td th:text="#{${'consentMethod.' + c.method}}"></td>
         <td th:text="${c.grantedAt}"></td>
         <td th:text="${c.expiresAt} ?: '—'"></td>
         <td th:text="${c.revokedAt} ?: '—'"></td>

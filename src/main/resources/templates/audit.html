@@ -15,10 +15,10 @@
     <tbody>
     <tr th:each="e : ${events}">
       <td th:text="${e.occurredAt}"></td>
-      <td th:text="${e.actorType} + ' · ' + (${e.actorId} ?: '—')"></td>
-      <td th:text="${e.action}"></td>
+      <td th:text="#{${'actorType.' + e.actorType}} + ' · ' + (${e.actorId} ?: '—')"></td>
+      <td th:text="#{${'auditAction.' + e.action}}"></td>
       <td th:text="${e.chatId} ?: '—'"></td>
-      <td th:text="${e.outcome}"
+      <td th:text="#{${'auditOutcome.' + e.outcome}}"
           th:classappend="${e.outcome} == 'DENIED' ? 'warn' : (${e.outcome} == 'ERROR' ? 'err' : 'ok')"></td>
       <td><code th:text="${e.detail}"></code></td>
     </tr>

@@ -17,7 +17,7 @@
   <div class="card">
     <h2 th:text="#{connect.status.title}">Status</h2>
     <p><span th:text="#{connect.status.stage}">Stage:</span>
-       <span class="pill" th:text="${state.stage}">DISCONNECTED</span></p>
+       <span class="pill" th:text="#{${'loginStage.' + state.stage}}">DISCONNECTED</span></p>
     <p th:if="${statusMessage}" th:text="${statusMessage}" class="muted"></p>
     <p th:if="${state.tgUsername}"><span th:text="#{connect.status.signedInAs}">Signed in as</span>
        <code th:text="${state.tgUsername}"></code></p>

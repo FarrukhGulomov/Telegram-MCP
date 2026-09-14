@@ -29,7 +29,7 @@
     <div class="card">
       <h2 th:text="#{dashboard.connectionCard.title}">Telegram connection</h2>
       <p><span th:text="#{dashboard.connectionCard.status}">Status:</span>
-         <span class="pill" th:text="${connection.status}">DISCONNECTED</span></p>
+         <span class="pill" th:text="#{${'loginStage.' + connection.status}}">DISCONNECTED</span></p>
       <p class="muted" th:text="#{dashboard.connectionCard.hint}">
         Connecting an account and authorizing content processing are separate decisions. A client
         session can see everything the account can see; only an activated chat is ever synchronised.
@@ -65,9 +65,9 @@
     <tbody>
     <tr th:each="c : ${chats}">
       <td th:text="${c.chat.title}">chat</td>
-      <td th:text="${c.chat.chatType}">SUPERGROUP</td>
+      <td th:text="#{${'chatType.' + c.chat.chatType}}">SUPERGROUP</td>
       <td><span class="pill" th:classappend="${c.active} ? 'ok' : 'warn'"
-                th:text="${c.stateLabel}">INACTIVE</span></td>
+                th:text="#{${'state.' + c.stateLabel}}">INACTIVE</span></td>
       <td>
         <span th:if="${c.coverage == null}" class="muted" th:text="#{dashboard.table.notSelected}">not selected</span>
         <span th:if="${c.coverage != null and c.consentComplete}" class="ok"
@@ -75,10 +75,14 @@
         <span th:if="${c.coverage != null and !c.consentComplete}" class="warn"
               th:text="${c.coverage.coveredParticipants} + '/' + ${c.coverage.requiredParticipants}">0/0</span>
       </td>
-      <td th:text="${#strings.listJoin(c.providers, ', ')}"></td>
+      <td>
+        <span th:each="p, iter : ${c.providers}">
+          <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
+        </span>
+      </td>
       <td th:text="${c.stored.storedMessageCount}">0</td>
       <td>
-        <span th:text="${c.syncState}">NEVER_STARTED</span>
+        <span th:text="#{${'syncState.' + c.syncState}}">NEVER_STARTED</span>
         <span class="warn" th:if="${c.selected and c.partialHistory}" th:title="#{dashboard.table.partialTitle}"
               th:text="#{dashboard.table.partialLabel}">partial</span>
         <span class="err" th:if="${c.lastErrorCode != null}" th:text="${c.lastErrorCode}"></span>
