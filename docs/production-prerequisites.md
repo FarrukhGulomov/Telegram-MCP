@@ -61,9 +61,21 @@ transport has not been exercised: no `libtdjson` binary was available in the bui
 environment, and connecting a real account was outside the authorization for this work. Treat
 the adapter as unproven until you have run it end to end. Specifically untested: the
 `td_receive` loop under load, TDLib's authorization state machine in real time, and
-`updateMessageContent` / `updateDeleteMessages` handling — `fetchRevisions` currently returns
-nothing for the TDLib adapter because those arrive as pushed updates rather than as a
-queryable history, and wiring them into the sync worker is unfinished.
+`updateMessageContent` / `updateDeleteMessages` handling.
+
+**Blocking gap: the TDLIB adapter has no live edit/deletion pipeline.** `fetchRevisions()`
+always returns an empty list for this adapter — not because nothing changed, but because
+edits and deletions arrive from TDLib as pushed `updateMessageContent` / `updateDeleteMessages`
+events rather than as a queryable history, and nothing in this codebase currently listens for
+those events and turns them into revisions. A message edited or deleted on Telegram after
+this service has ingested it will silently keep showing its original, stale content and will
+never be marked deleted. The application logs a warning to this effect every time the TDLIB
+adapter starts (see `TelegramConfiguration`). Building that pipeline means routing
+`td_receive()` updates into the sync worker under the adapter's per-connection locking — the
+same locking this security pass added for finding F01 — which is a distinct, larger piece of
+work than the P0 fixes in this pass (tracked as security-audit finding F11) and is explicitly
+out of scope here. **Do not deploy the TDLIB adapter for any chat where stale edits or
+undetected deletions are a real risk until this is built.**
 
 **Verified against live Claude or ChatGPT: no.** The MCP server is driven end to end by the
 official MCP Java SDK client in the test suite (initialize, tools/list, tools/call, and the

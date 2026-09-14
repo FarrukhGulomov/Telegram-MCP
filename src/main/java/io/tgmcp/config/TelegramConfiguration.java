@@ -51,6 +51,13 @@ public class TelegramConfiguration {
                             + "authorization to connect a real Telegram account.");
                 }
                 log.warn("Telegram adapter: TDLIB. This connects a real Telegram account.");
+                // Security-audit finding F08: said out loud, once, at the moment it becomes
+                // relevant -- a real deployment must not discover this from a code comment.
+                log.warn("TDLIB adapter starting with NO live edit/deletion pipeline: "
+                        + "fetchRevisions() always reports zero revisions for this adapter. Messages "
+                        + "edited or deleted on Telegram after ingestion will NOT be reflected here "
+                        + "until that pipeline is built (see docs/production-prerequisites.md). Treat "
+                        + "this as a blocking gap for any deployment where edits/deletions matter.");
                 TdlibClient client = new NativeTdlibClient("tdjson", objectMapper, 30);
                 yield new TdlibTelegramGateway(client, config);
             }

@@ -290,9 +290,17 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public List<RemoteMessage> fetchRevisions(ConnectionRef ref, long tgChatId, Instant changedSince, int limit) {
-        // TDLib delivers edits and deletions as updateMessageContent / updateDeleteMessages
-        // rather than as a pollable query. Those updates are applied by the sync worker via
-        // TdlibUpdateBuffer; there is no historical revision query to make here.
+        // Security-audit finding F08: TDLib delivers edits and deletions as pushed
+        // updateMessageContent / updateDeleteMessages events, not as a pollable history query,
+        // so there is no request this method can make to answer "what changed since X" the way
+        // the MOCK adapter's fetchRevisions does. Nothing in this class currently listens for
+        // those update types and turns them into RemoteMessage revisions (that is a distinct,
+        // larger piece of work -- routing td_receive() updates into the sync worker under the
+        // adapter's per-connection locking, see security-audit finding F11 -- and out of scope
+        // for this pass). Returning an empty list here is therefore not "nothing changed": it is
+        // an honest "this adapter cannot see edits or deletions yet". See the startup warning in
+        // TelegramConfiguration and docs/production-prerequisites.md, both of which call this out
+        // as a blocking gap for any real deployment.
         return List.of();
     }
 
