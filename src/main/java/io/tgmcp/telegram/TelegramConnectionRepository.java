@@ -49,6 +49,29 @@ public class TelegramConnectionRepository {
                 .list();
     }
 
+    /**
+     * Whether some owner other than (tenantId, ownerUserId) currently has a non-disconnected
+     * session. The TDLIB adapter is one native client shared process-wide — see {@link
+     * io.tgmcp.telegram.tdlib.TdlibTelegramGateway} — so two owners mid-login (or logged in)
+     * at once would silently share that single Telegram identity. Used to enforce a hard
+     * single-connection guard for that adapter until per-owner native session isolation
+     * exists.
+     */
+    public boolean existsActiveForOtherOwner(UUID tenantId, UUID ownerUserId) {
+        Boolean exists = jdbc.sql("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM telegram_connections
+                             WHERE status <> 'DISCONNECTED'
+                               AND NOT (tenant_id = :tenantId AND owner_user_id = :ownerUserId)
+                        )
+                        """)
+                .param("tenantId", tenantId)
+                .param("ownerUserId", ownerUserId)
+                .query(Boolean.class)
+                .single();
+        return Boolean.TRUE.equals(exists);
+    }
+
     public void insert(TelegramConnection connection) {
         jdbc.sql("""
                         INSERT INTO telegram_connections

@@ -18,6 +18,7 @@ import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.RemoteChat;
+import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.session.SessionCipher;
 
@@ -73,6 +74,7 @@ public class TelegramConnectionService {
     @Transactional
     public LoginState beginLogin(AuthenticatedActor actor, LoginMethod method, String phoneNumber) {
         TelegramConnection connection = getOrCreate(actor);
+        requireNoOtherActiveOwner(actor);
         LoginState state = this.gateway.beginLogin(connection.ref(), method, phoneNumber);
         persist(actor, connection, state);
         // Deliberately records the method, never the phone number.
@@ -139,6 +141,23 @@ public class TelegramConnectionService {
         this.auditService.record(actor, AuditAction.CHAT_DISCOVERED, null, AuditService.ALLOWED,
                 Map.of("chatsVisible", chats.size()));
         return chats;
+    }
+
+    /**
+     * F01 mitigation: {@code TdlibTelegramGateway} is one native client shared by the whole
+     * process, keyed by nothing — every {@code ConnectionRef} it receives talks to the same
+     * underlying Telegram identity. Until that has a real per-owner session manager, letting
+     * a second owner start (or continue) a login while another owner's connection is anything
+     * but DISCONNECTED would silently mix the two accounts' logins, chat lists and logouts.
+     * The mock adapter has no shared native state, so this only applies to TDLIB.
+     */
+    private void requireNoOtherActiveOwner(AuthenticatedActor actor) {
+        if (this.gateway.kind() != TelegramAdapterKind.TDLIB) {
+            return;
+        }
+        if (this.connectionRepository.existsActiveForOtherOwner(actor.tenantId(), actor.userId())) {
+            throw new IllegalStateException("validation.singleConnectionOnly");
+        }
     }
 
     private void persist(AuthenticatedActor actor, TelegramConnection connection, LoginState state) {
