@@ -28,6 +28,8 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationValidator;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationConsentService;
@@ -63,10 +65,41 @@ public class AuthorizationServerConfig {
 
         http.securityMatcher(endpoints)
                 .with(configurer, server -> server
-                        // RFC 7591: remote MCP clients register themselves.
-                        .clientRegistrationEndpoint(Customizer.withDefaults())
+                        // RFC 7591: remote MCP clients (Claude, ChatGPT) register themselves with
+                        // no prior credential. Two defaults fight that:
+                        //
+                        // 1. openRegistrationAllowed defaults to false, so an anonymous request is
+                        //    rejected with "invalid_token" (there is no initial access token to
+                        //    present, by design, for open registration) — set it explicitly.
+                        // 2. The default scope validator refuses ANY request that sets "scope" at
+                        //    all ("scope must not be set during Dynamic Client Registration"),
+                        //    which real MCP clients do (they declare the scope they intend to use).
+                        //    We swap in Spring's own SIMPLE_SCOPE_VALIDATOR, a documented no-op
+                        //    alternative, and accept the client's declared scope as its registered
+                        //    scope. This does not widen what data is reachable: every MCP tool call
+                        //    still requires a real user's own login at /oauth2/authorize, and the
+                        //    resulting token's tenant/user identity — not the client's self-declared
+                        //    scope — is what every chat-level authorization check keys on.
+                        .clientRegistrationEndpoint(registration -> registration
+                                .openRegistrationAllowed(true)
+                                .authenticationProviders(providers -> providers.forEach(provider -> {
+                                    if (provider instanceof OAuth2ClientRegistrationAuthenticationProvider p) {
+                                        p.setAuthenticationValidator(
+                                                OAuth2ClientRegistrationAuthenticationValidator.DEFAULT_REDIRECT_URI_VALIDATOR
+                                                        .andThen(OAuth2ClientRegistrationAuthenticationValidator.DEFAULT_JWK_SET_URI_VALIDATOR)
+                                                        .andThen(OAuth2ClientRegistrationAuthenticationValidator.SIMPLE_SCOPE_VALIDATOR));
+                                    }
+                                })))
                         .oidc(Customizer.withDefaults()))
-                .authorizeHttpRequests(requests -> requests.anyRequest().authenticated())
+                .authorizeHttpRequests(requests -> requests
+                        // Open (anonymous) dynamic client registration: a new MCP client has no
+                        // credentials yet, so this is the one authorization-server endpoint that
+                        // must not require a prior authenticated principal. RFC 7591 registration
+                        // requests and the RFC 7592 read/update/delete-your-own-registration calls
+                        // both live under this path; the registration access token they carry is
+                        // validated by the endpoint's own filter, not by this authorization check.
+                        .requestMatchers("/oauth2/register", "/oauth2/register/**").permitAll()
+                        .anyRequest().authenticated())
                 // The authorization server's own endpoints are OAuth endpoints, not browser
                 // forms; the library handles their protection.
                 .csrf(csrf -> csrf.ignoringRequestMatchers(endpoints))
