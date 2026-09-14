@@ -177,6 +177,50 @@ class TdlibTelegramGatewayTests {
                 new RemoteParticipant(2L, "Helper", true));
     }
 
+    /**
+     * Security-audit finding F04: listParticipants used to fetch a single fixed 200-member
+     * page, so any supergroup larger than that silently reported only its first 200 members.
+     * This drives a 205-member chat across two pages and checks every member came back.
+     */
+    @Test
+    void pagesThroughSupergroupsLargerThanOneMemberPage() {
+        this.client.enqueue("""
+                {"@type":"chat","id":-100999,"title":"Big",
+                 "type":{"@type":"chatTypeSupergroup","supergroup_id":77,"is_channel":false}}""");
+        this.client.enqueue(membersPage(1, 200));
+        for (long id = 1; id <= 200; id++) {
+            this.client.enqueue(regularUser(id));
+        }
+        this.client.enqueue(membersPage(201, 5));
+        for (long id = 201; id <= 205; id++) {
+            this.client.enqueue(regularUser(id));
+        }
+
+        List<RemoteParticipant> participants = this.gateway.listParticipants(this.ref, -100999L);
+
+        assertThat(participants).hasSize(205);
+        assertThat(participants).extracting(RemoteParticipant::tgUserId)
+                .containsExactlyInAnyOrderElementsOf(
+                        java.util.stream.LongStream.rangeClosed(1, 205).boxed().toList());
+    }
+
+    private String membersPage(long startId, int count) {
+        StringBuilder members = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            if (i > 0) {
+                members.append(',');
+            }
+            members.append("{\"member_id\":{\"@type\":\"messageSenderUser\",\"user_id\":")
+                    .append(startId + i).append("}}");
+        }
+        return "{\"@type\":\"chatMembers\",\"members\":[" + members + "]}";
+    }
+
+    private String regularUser(long id) {
+        return "{\"@type\":\"user\",\"id\":" + id + ",\"first_name\":\"U" + id
+                + "\",\"last_name\":\"\",\"type\":{\"@type\":\"userTypeRegular\"}}";
+    }
+
     @Test
     void returnsNoParticipantsForChatTypesThatDoNotExposeAMemberList() {
         this.client.enqueue("""

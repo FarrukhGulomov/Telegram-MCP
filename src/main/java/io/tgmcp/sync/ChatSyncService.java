@@ -211,6 +211,21 @@ public class ChatSyncService {
     private SyncOutcome refreshMembership(ChatActivation activation, Chat chat, ConnectionRef ref) {
         List<RemoteParticipant> remote = this.gateway.listParticipants(ref, chat.tgChatId());
         if (remote.isEmpty()) {
+            // Security-audit finding F04: a chat that has never had a verified membership
+            // (membershipFingerprint == null) simply cannot reach ACTIVE at all -- coverageFor
+            // treats zero required participants as "unknown", never "complete" -- so an empty
+            // result here is expected and harmless. But once a chat *has* had a real,
+            // non-empty membership, a sudden empty response (a transient API glitch, a lost
+            // permission, or a >200-member page boundary issue) used to be silently treated as
+            // "nothing changed" -- letting a chat keep reading under a membership list that can
+            // no longer be verified. That must pause for review instead of going unnoticed.
+            if (activation.membershipFingerprint() != null) {
+                pause(activation, "Membership list came back empty; consent coverage cannot be verified");
+                this.auditService.system(chat.tenantId(), AuditAction.MEMBERSHIP_CHANGED, chat.id(),
+                        AuditService.DENIED, Map.of("action", "paused: empty membership response"));
+                return new SyncOutcome(SyncOutcome.Status.PAUSED_MEMBERSHIP_CHANGED, 0, 0,
+                        "Membership could not be verified");
+            }
             return null;
         }
         for (RemoteParticipant participant : remote) {

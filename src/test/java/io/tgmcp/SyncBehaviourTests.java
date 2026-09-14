@@ -191,6 +191,33 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
                 .orElseThrow().state()).isEqualTo(ActivationState.PAUSED);
     }
 
+    /**
+     * Security-audit finding F04: a chat that has already had a verified, non-empty
+     * membership must not have a later empty response (a transient API glitch or a lost
+     * permission, say) silently treated as "nothing changed" -- it needs to pause for review
+     * exactly like a membership change does, instead of continuing to read under a membership
+     * list that can no longer be confirmed.
+     */
+    @Test
+    void pausesTheChatWhenAPreviouslyKnownMembershipComesBackEmpty() {
+        sync();
+        assertThat(this.activations.find(ready().team().tenant().id(), ready().chat().id())
+                .orElseThrow().membershipFingerprint()).isNotNull();
+
+        mockGateway().removeParticipant(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.ALICE);
+        mockGateway().removeParticipant(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.BEN);
+        mockGateway().removeParticipant(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.CHIDI);
+        mockGateway().removeParticipant(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.DANA);
+        mockGateway().removeParticipant(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.HELPER_BOT);
+
+        SyncOutcome outcome = sync();
+
+        assertThat(outcome.status()).isEqualTo(SyncOutcome.Status.PAUSED_MEMBERSHIP_CHANGED);
+        assertThat(outcome.detail()).contains("could not be verified");
+        assertThat(this.activations.find(ready().team().tenant().id(), ready().chat().id())
+                .orElseThrow().state()).isEqualTo(ActivationState.PAUSED);
+    }
+
     @Test
     void pausesTheChatWhenConsentCoverageLapses() {
         sync();

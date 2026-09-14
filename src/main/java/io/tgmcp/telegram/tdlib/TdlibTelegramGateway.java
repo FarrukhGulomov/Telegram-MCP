@@ -38,6 +38,14 @@ import tools.jackson.databind.JsonNode;
 public class TdlibTelegramGateway implements TelegramGateway {
 
     private static final int MAX_HISTORY_BATCH = 100;
+    private static final int MEMBER_PAGE_SIZE = 200;
+    /**
+     * Safety cap on how many members one listParticipants() call will ever page through.
+     * Security-audit finding F04: this used to fetch a single fixed 200-member page, so any
+     * supergroup larger than that silently reported only its first 200 members -- understating
+     * who is actually in the chat and who therefore needs to consent.
+     */
+    private static final int MAX_MEMBERS = 5000;
 
     private final TdlibClient client;
     private final AppProperties.Telegram config;
@@ -187,25 +195,39 @@ public class TdlibTelegramGateway implements TelegramGateway {
             // Basic groups and private chats do not expose a member list through this call.
             return List.of();
         }
-        JsonNode members = this.client.request("getSupergroupMembers", Map.of(
-                "supergroup_id", type.path("supergroup_id").asLong(),
-                "filter", Map.of("@type", "supergroupMembersFilterRecent"),
-                "offset", 0,
-                "limit", 200));
+        long supergroupId = type.path("supergroup_id").asLong();
 
         List<RemoteParticipant> result = new ArrayList<>();
-        for (JsonNode member : members.path("members")) {
-            JsonNode senderId = member.path("member_id");
-            if (!"messageSenderUser".equals(senderId.path("@type").asString(""))) {
-                continue;
+        int offset = 0;
+        while (result.size() < MAX_MEMBERS) {
+            JsonNode members = this.client.request("getSupergroupMembers", Map.of(
+                    "supergroup_id", supergroupId,
+                    "filter", Map.of("@type", "supergroupMembersFilterRecent"),
+                    "offset", offset,
+                    "limit", MEMBER_PAGE_SIZE));
+            int pageSize = 0;
+            for (JsonNode member : members.path("members")) {
+                pageSize++;
+                addParticipant(result, member);
             }
-            long userId = senderId.path("user_id").asLong();
-            JsonNode user = this.client.request("getUser", Map.of("user_id", userId));
-            String name = (user.path("first_name").asString("") + " " + user.path("last_name").asString("")).trim();
-            boolean bot = "userTypeBot".equals(user.path("type").path("@type").asString(""));
-            result.add(new RemoteParticipant(userId, name.isEmpty() ? String.valueOf(userId) : name, bot));
+            if (pageSize < MEMBER_PAGE_SIZE) {
+                break;
+            }
+            offset += MEMBER_PAGE_SIZE;
         }
         return List.copyOf(result);
+    }
+
+    private void addParticipant(List<RemoteParticipant> result, JsonNode member) {
+        JsonNode senderId = member.path("member_id");
+        if (!"messageSenderUser".equals(senderId.path("@type").asString(""))) {
+            return;
+        }
+        long userId = senderId.path("user_id").asLong();
+        JsonNode user = this.client.request("getUser", Map.of("user_id", userId));
+        String name = (user.path("first_name").asString("") + " " + user.path("last_name").asString("")).trim();
+        boolean bot = "userTypeBot".equals(user.path("type").path("@type").asString(""));
+        result.add(new RemoteParticipant(userId, name.isEmpty() ? String.valueOf(userId) : name, bot));
     }
 
     @Override
