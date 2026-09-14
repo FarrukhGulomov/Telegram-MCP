@@ -127,11 +127,16 @@ tgmcp:
     retention-interval: PT1H
 
   secrets:
-    # Both keys live outside the database. Without them the app derives an insecure
-    # development key and says so in the log.
+    # All three keys live outside the database. Without them the app derives an insecure
+    # development key (or, for the OAuth key, a fresh ephemeral one every restart) and says
+    # so in the log.
     session-encryption-key: ${TGMCP_SESSION_ENCRYPTION_KEY:}
     session-encryption-key-id: ${TGMCP_SESSION_KEY_ID:local-dev}
     cursor-signing-key: ${TGMCP_CURSOR_SIGNING_KEY:}
+    # Base64-encoded PKCS8 RSA private key. Generate with, e.g.:
+    #   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | openssl pkcs8 -topk8 \
+    #     -nocrypt -outform DER | base64 -w0
+    oauth-rsa-private-key: ${TGMCP_OAUTH_RSA_PRIVATE_KEY:}
 
   demo:
     seed-synthetic-data: ${TGMCP_SEED_DEMO:true}

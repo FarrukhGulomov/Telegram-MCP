@@ -55,6 +55,14 @@ public class ProductionSafetyValidator {
                     + "would otherwise be signed with a key derived deterministically from a "
                     + "label, not a secret. Set TGMCP_CURSOR_SIGNING_KEY.");
         }
+        // Security-audit finding F18: without a persistent key, every restart invalidates
+        // every outstanding OAuth token, and every replica of a multi-instance deployment
+        // mints tokens under its own key that no other replica can validate.
+        if (!KeyMaterial.isConfigured(properties.secrets().oauthRsaPrivateKey())) {
+            problems.add("tgmcp.secrets.oauth-rsa-private-key is not set: OAuth access tokens "
+                    + "would otherwise be signed with a fresh ephemeral key generated on every "
+                    + "startup. Set TGMCP_OAUTH_RSA_PRIVATE_KEY.");
+        }
         if (!isHttps(issuer)) {
             problems.add("tgmcp.oauth.issuer (" + issuer + ") is not https://: OAuth tokens for a "
                     + "real account must not be issued or validated over plain HTTP.");

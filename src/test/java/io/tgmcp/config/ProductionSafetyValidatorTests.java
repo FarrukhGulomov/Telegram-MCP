@@ -22,9 +22,17 @@ class ProductionSafetyValidatorTests {
 
     private static AppProperties properties(boolean realAccountAccessAuthorized, boolean seedSyntheticData,
                                             String sessionEncryptionKey, String cursorSigningKey) {
+        return properties(realAccountAccessAuthorized, seedSyntheticData, sessionEncryptionKey, cursorSigningKey,
+                KEY);
+    }
+
+    private static AppProperties properties(boolean realAccountAccessAuthorized, boolean seedSyntheticData,
+                                            String sessionEncryptionKey, String cursorSigningKey,
+                                            String oauthRsaPrivateKey) {
         AppProperties.Telegram telegram = new AppProperties.Telegram(TelegramAdapterKind.TDLIB,
                 "1", "hash", "./tdlib-data", realAccountAccessAuthorized);
-        AppProperties.Secrets secrets = new AppProperties.Secrets(sessionEncryptionKey, "key-id", cursorSigningKey);
+        AppProperties.Secrets secrets = new AppProperties.Secrets(sessionEncryptionKey, "key-id", cursorSigningKey,
+                oauthRsaPrivateKey);
         AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo", "owner@demo.invalid",
                 "pw", List.of());
         return new AppProperties(telegram, null, null, null, secrets, demo);
@@ -71,6 +79,16 @@ class ProductionSafetyValidatorTests {
     }
 
     @Test
+    void refusesRealAccountAccessWithoutAnOauthRsaPrivateKey() {
+        AppProperties properties = properties(true, false, KEY, KEY, null);
+
+        assertThatThrownBy(() -> new ProductionSafetyValidator(properties,
+                "https://mcp.example.com", "https://mcp.example.com", true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("oauth-rsa-private-key");
+    }
+
+    @Test
     void refusesRealAccountAccessWithANonHttpsIssuer() {
         AppProperties properties = properties(true, false, KEY, KEY);
 
@@ -102,7 +120,7 @@ class ProductionSafetyValidatorTests {
 
     @Test
     void reportsEveryUnsafeSettingAtOnceRatherThanStoppingAtTheFirst() {
-        AppProperties properties = properties(true, true, null, null);
+        AppProperties properties = properties(true, true, null, null, null);
 
         assertThatThrownBy(() -> new ProductionSafetyValidator(properties,
                 "http://mcp.example.com", "http://mcp.example.com", false))
@@ -110,6 +128,7 @@ class ProductionSafetyValidatorTests {
                 .hasMessageContaining("seed-synthetic-data")
                 .hasMessageContaining("session-encryption-key")
                 .hasMessageContaining("cursor-signing-key")
+                .hasMessageContaining("oauth-rsa-private-key")
                 .hasMessageContaining("oauth.issuer")
                 .hasMessageContaining("public-base-url")
                 .hasMessageContaining("cookie.secure");

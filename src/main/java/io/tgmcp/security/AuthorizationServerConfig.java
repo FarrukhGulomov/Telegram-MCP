@@ -1,9 +1,14 @@
 package io.tgmcp.security;
 
+import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.RSAPublicKeySpec;
+import java.util.Base64;
 import java.util.UUID;
 
 import javax.sql.DataSource;
@@ -13,6 +18,7 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
+import io.tgmcp.common.KeyMaterial;
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.tenancy.AppUser;
 import io.tgmcp.tenancy.AppUserRepository;
@@ -30,6 +36,11 @@ import org.springframework.security.config.annotation.web.configurers.oauth2.ser
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationContext;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationException;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationToken;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationValidator;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationContext;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationProvider;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationToken;
@@ -79,11 +90,39 @@ public class AuthorizationServerConfig {
         }
     }
 
+    /**
+     * Security-audit finding F18: RFC 8707 lets a client ask for a specific {@code resource}
+     * at the authorize step. Spring Authorization Server 7.1 has no first-class support for
+     * negotiating it (see docs/production-prerequisites.md), so a client naming a resource
+     * other than this server's own was silently ignored rather than rejected -- the issued
+     * token still carried this server's audience regardless of what was asked for, which is
+     * not itself exploitable (this server only ever mints tokens for itself) but is a
+     * standards-conformance gap a careful client is entitled to notice. Reject outright rather
+     * than silently substitute.
+     */
+    private static void rejectMismatchedResourceParameter(OAuth2AuthorizationCodeRequestAuthenticationContext context,
+                                                           String expectedResource) {
+        OAuth2AuthorizationCodeRequestAuthenticationToken authentication = context.getAuthentication();
+        Object requested = authentication.getAdditionalParameters().get("resource");
+        if (requested == null) {
+            return;
+        }
+        String normalisedRequested = AudienceValidator.normalise(String.valueOf(requested));
+        if (!expectedResource.equals(normalisedRequested)) {
+            throw new OAuth2AuthorizationCodeRequestAuthenticationException(
+                    new OAuth2Error("invalid_target",
+                            "This authorization server does not serve the requested resource.", null),
+                    authentication);
+        }
+    }
+
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http, AppProperties properties)
+            throws Exception {
         OAuth2AuthorizationServerConfigurer configurer = new OAuth2AuthorizationServerConfigurer();
         RequestMatcher endpoints = configurer.getEndpointsMatcher();
+        String expectedResource = AudienceValidator.normalise(properties.mcp().resourceIdentifier());
 
         http.securityMatcher(endpoints)
                 .with(configurer, server -> server
@@ -121,6 +160,21 @@ public class AuthorizationServerConfig {
                                                         .andThen(OAuth2ClientRegistrationAuthenticationValidator.DEFAULT_JWK_SET_URI_VALIDATOR)
                                                         .andThen(OAuth2ClientRegistrationAuthenticationValidator.SIMPLE_SCOPE_VALIDATOR)
                                                         .andThen(AuthorizationServerConfig::rejectSelfRegisteredProviderScope));
+                                    }
+                                })))
+                        // Security-audit finding F18: rejects an authorize request naming a
+                        // resource this server does not serve, per RFC 8707, rather than
+                        // silently ignoring it. Wraps rather than replaces the endpoint's own
+                        // full default validation (redirect_uri, scope, PKCE, grant type,
+                        // prompt) -- the no-arg validator instance already composes all of
+                        // those internally.
+                        .authorizationEndpoint(authorization -> authorization
+                                .authenticationProviders(providers -> providers.forEach(provider -> {
+                                    if (provider instanceof OAuth2AuthorizationCodeRequestAuthenticationProvider p) {
+                                        p.setAuthenticationValidator(
+                                                new OAuth2AuthorizationCodeRequestAuthenticationValidator()
+                                                        .andThen(context -> rejectMismatchedResourceParameter(
+                                                                context, expectedResource)));
                                     }
                                 })))
                         .oidc(Customizer.withDefaults()))
@@ -196,24 +250,51 @@ public class AuthorizationServerConfig {
     /**
      * Signing key for issued tokens.
      *
-     * <p>An ephemeral key is generated when none is configured, so local development needs
-     * no secret; every restart then invalidates previously issued tokens, which is exactly
-     * what you want in development and never what you want in production.
+     * <p>Security-audit finding F18: an ephemeral key used to be generated unconditionally.
+     * That is still the fallback so local development needs no secret, but it invalidates
+     * every outstanding token on restart and gives each replica of a multi-instance
+     * deployment its own, mutually incompatible key -- neither of which is acceptable once
+     * {@code tgmcp.secrets.oauth-rsa-private-key} is configured with a real, shared key.
      */
     @Bean
     public JWKSource<SecurityContext> jwkSource(
-            @Value("${tgmcp.oauth.rsa-key-id:tgmcp-dev}") String keyId) {
+            @Value("${tgmcp.oauth.rsa-key-id:tgmcp-dev}") String keyId,
+            AppProperties properties) {
+        String configuredKey = properties.secrets().oauthRsaPrivateKey();
+        RSAKey rsaKey = KeyMaterial.isConfigured(configuredKey)
+                ? loadPersistentRsaKey(configuredKey, keyId)
+                : generateEphemeralRsaKey(keyId);
+        return new ImmutableJWKSet<>(new JWKSet(rsaKey));
+    }
+
+    RSAKey loadPersistentRsaKey(String base64Pkcs8PrivateKey, String keyId) {
+        try {
+            byte[] der = Base64.getDecoder().decode(base64Pkcs8PrivateKey.trim());
+            KeyFactory factory = KeyFactory.getInstance("RSA");
+            RSAPrivateCrtKey privateKey = (RSAPrivateCrtKey) factory.generatePrivate(new PKCS8EncodedKeySpec(der));
+            RSAPublicKey publicKey = (RSAPublicKey) factory.generatePublic(
+                    new RSAPublicKeySpec(privateKey.getModulus(), privateKey.getPublicExponent()));
+            log.info("Loaded a persistent RSA signing key (id '{}') for the authorization server.", keyId);
+            return new RSAKey.Builder(publicKey).privateKey(privateKey).keyID(keyId).build();
+        }
+        catch (RuntimeException | java.security.GeneralSecurityException ex) {
+            throw new IllegalStateException("tgmcp.secrets.oauth-rsa-private-key is set but could not be "
+                    + "loaded as a base64-encoded PKCS8 RSA private key", ex);
+        }
+    }
+
+    RSAKey generateEphemeralRsaKey(String keyId) {
         try {
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(2048);
             KeyPair keyPair = generator.generateKeyPair();
-            RSAKey rsaKey = new RSAKey.Builder((RSAPublicKey) keyPair.getPublic())
+            log.warn("Generated an ephemeral RSA signing key for the local authorization server. Tokens do "
+                    + "not survive a restart, and a second replica would use a different key. Configure "
+                    + "tgmcp.secrets.oauth-rsa-private-key before production.");
+            return new RSAKey.Builder((RSAPublicKey) keyPair.getPublic())
                     .privateKey((RSAPrivateKey) keyPair.getPrivate())
                     .keyID(keyId)
                     .build();
-            log.warn("Generated an ephemeral RSA signing key for the local authorization server. "
-                    + "Tokens do not survive a restart. Configure a persistent key before production.");
-            return new ImmutableJWKSet<>(new JWKSet(rsaKey));
         }
         catch (java.security.NoSuchAlgorithmException ex) {
             throw new IllegalStateException("RSA unavailable", ex);

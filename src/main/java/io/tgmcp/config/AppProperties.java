@@ -76,7 +76,15 @@ public record AppProperties(@DefaultValue Telegram telegram,
                           String sessionEncryptionKey,
                           @DefaultValue("local-dev") String sessionEncryptionKeyId,
                           /** Base64 32-byte key used to sign opaque MCP pagination cursors. */
-                          String cursorSigningKey) {
+                          String cursorSigningKey,
+                          /**
+                           * Base64-encoded PKCS8 RSA private key for signing OAuth access tokens
+                           * (security-audit finding F18). Without it, a fresh RSA key pair is
+                           * generated on every startup, which invalidates every outstanding
+                           * token on restart and gives each replica of a multi-instance
+                           * deployment its own, mutually-incompatible key.
+                           */
+                          String oauthRsaPrivateKey) {
     }
 
     public record Demo(@DefaultValue("true") boolean seedSyntheticData,
