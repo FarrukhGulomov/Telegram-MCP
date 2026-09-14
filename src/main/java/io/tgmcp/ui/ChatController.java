@@ -19,6 +19,7 @@ import io.tgmcp.sync.ChatSyncService;
 import io.tgmcp.sync.SyncOutcome;
 import io.tgmcp.tenancy.AuthenticatedActor;
 
+import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,6 +39,7 @@ public class ChatController {
     private final ChatSyncService syncService;
     private final ChatViewFactory chatViewFactory;
     private final AppProperties properties;
+    private final MessageSource messages;
 
     public ChatController(CurrentActor currentActor,
                           ChatRepository chatRepository,
@@ -46,7 +48,8 @@ public class ChatController {
                           ConsentService consentService,
                           ChatSyncService syncService,
                           ChatViewFactory chatViewFactory,
-                          AppProperties properties) {
+                          AppProperties properties,
+                          MessageSource messages) {
         this.currentActor = currentActor;
         this.chatRepository = chatRepository;
         this.activationService = activationService;
@@ -55,13 +58,14 @@ public class ChatController {
         this.syncService = syncService;
         this.chatViewFactory = chatViewFactory;
         this.properties = properties;
+        this.messages = messages;
     }
 
     @GetMapping("/chats/{chatId}")
     public String chat(@PathVariable UUID chatId, Model model) {
         AuthenticatedActor actor = this.currentActor.require();
         Chat chat = this.chatRepository.find(actor.tenantId(), chatId)
-                .orElseThrow(() -> new IllegalArgumentException("No such chat"));
+                .orElseThrow(() -> new IllegalArgumentException("error.noSuchChat"));
 
         model.addAttribute("view", this.chatViewFactory.of(actor, chat));
         model.addAttribute("participants", this.participantRepository.findActive(actor.tenantId(), chatId));
@@ -87,12 +91,10 @@ public class ChatController {
         try {
             this.activationService.propose(actor, chatId, purpose, providersOrEmpty(providers),
                     startOfDay(approvedFrom), endOfDay(approvedTo), retentionDays);
-            redirectAttributes.addFlashAttribute("message",
-                    "Chat selected. It will stay in AWAITING_CONSENT — with nothing stored — until every "
-                            + "participant has recorded consent for this exact purpose and provider scope.");
+            redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.select.success"));
         }
         catch (IllegalArgumentException ex) {
-            redirectAttributes.addFlashAttribute("error", ex.getMessage());
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
         }
         return "redirect:/chats/" + chatId;
     }
@@ -109,10 +111,10 @@ public class ChatController {
         try {
             this.activationService.updateSettings(actor, chatId, purpose, providersOrEmpty(providers),
                     startOfDay(approvedFrom), endOfDay(approvedTo), retentionDays);
-            redirectAttributes.addFlashAttribute("message", "Settings updated.");
+            redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.settings.success"));
         }
         catch (IllegalArgumentException ex) {
-            redirectAttributes.addFlashAttribute("error", ex.getMessage());
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
         }
         return "redirect:/chats/" + chatId;
     }
@@ -126,16 +128,17 @@ public class ChatController {
                           RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = this.currentActor.require();
         var activation = this.activationService.find(actor, chatId)
-                .orElseThrow(() -> new IllegalArgumentException("Select the chat first"));
+                .orElseThrow(() -> new IllegalArgumentException("validation.selectChatFirst"));
         try {
             this.consentService.record(actor, chatId, participantTgUserId, participantDisplayName,
                     activation.purpose(), activation.providerScope(), activation.consentVersion(),
                     method, evidenceRef,
                     Instant.now().plus(this.properties.consent().defaultValidity()));
-            redirectAttributes.addFlashAttribute("message", "Consent recorded for " + participantDisplayName + ".");
+            redirectAttributes.addFlashAttribute("message",
+                    Messages.text(this.messages, "chat.consent.success", participantDisplayName));
         }
         catch (IllegalArgumentException ex) {
-            redirectAttributes.addFlashAttribute("error", ex.getMessage());
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
         }
         return "redirect:/chats/" + chatId;
     }
@@ -148,8 +151,7 @@ public class ChatController {
         this.consentService.revokeParticipant(actor, chatId, participantTgUserId, "Revoked from management UI");
         this.activationService.pause(actor, chatId, "A participant withdrew consent");
         redirectAttributes.addFlashAttribute("message",
-                "Consent revoked and AI access paused. Stored messages remain until you revoke the chat "
-                        + "or delete its data.");
+                Messages.text(this.messages, "chat.consentRevoke.success"));
         return "redirect:/chats/" + chatId;
     }
 
@@ -158,10 +160,10 @@ public class ChatController {
         AuthenticatedActor actor = this.currentActor.require();
         try {
             this.activationService.activate(actor, chatId);
-            redirectAttributes.addFlashAttribute("message", "Chat activated. Synchronisation will begin.");
+            redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.activate.success"));
         }
         catch (IllegalStateException ex) {
-            redirectAttributes.addFlashAttribute("error", ex.getMessage());
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
         }
         return "redirect:/chats/" + chatId;
     }
@@ -169,25 +171,22 @@ public class ChatController {
     @PostMapping("/chats/{chatId}/pause")
     public String pause(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
         this.activationService.pause(this.currentActor.require(), chatId, "Paused by operator");
-        redirectAttributes.addFlashAttribute("message", "Chat paused. MCP access is blocked immediately.");
+        redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.pause.success"));
         return "redirect:/chats/" + chatId;
     }
 
     @PostMapping("/chats/{chatId}/revoke")
     public String revoke(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
         this.activationService.revoke(this.currentActor.require(), chatId, "Revoked by operator");
-        redirectAttributes.addFlashAttribute("message",
-                "Access revoked, consent records withdrawn and stored messages deleted. "
-                        + "Content already disclosed to an AI provider cannot be recalled from that provider.");
+        redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.revoke.success"));
         return "redirect:/chats/" + chatId;
     }
 
     @PostMapping("/chats/{chatId}/delete-data")
     public String deleteData(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
         int deleted = this.activationService.deleteStoredData(this.currentActor.require(), chatId);
-        redirectAttributes.addFlashAttribute("message", deleted
-                + " stored message(s) deleted. Database backups may retain copies until they expire; "
-                + "see the retention policy.");
+        redirectAttributes.addFlashAttribute("message",
+                Messages.text(this.messages, "chat.deleteData.success", deleted));
         return "redirect:/chats/" + chatId;
     }
 
@@ -196,9 +195,8 @@ public class ChatController {
     public String sync(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = this.currentActor.require();
         SyncOutcome outcome = this.syncService.sync(actor.tenantId(), chatId);
-        redirectAttributes.addFlashAttribute("message", "Sync: " + outcome.status()
-                + " (" + outcome.messagesIngested() + " ingested, " + outcome.revisionsApplied()
-                + " revisions) " + outcome.detail());
+        redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.sync.result",
+                outcome.status(), outcome.messagesIngested(), outcome.revisionsApplied(), outcome.detail()));
         return "redirect:/chats/" + chatId;
     }
 

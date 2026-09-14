@@ -1,15 +1,17 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page('Audit', ~{::section})}">
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.audit}, ~{::section})}">
 <body>
 <section>
-  <h1>Audit events</h1>
-  <p class="muted">
+  <h1 th:text="#{nav.audit}">Audit events</h1>
+  <p class="muted" th:text="#{audit.hint}">
     A plain history of who did what and when: connections, chat selections, consent given or
     revoked, and every access attempt this app made or refused. Access metadata, consent changes,
     sync failures and revocations. Message text is never recorded here.
   </p>
   <table>
-    <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Chat</th><th>Outcome</th><th>Detail</th></tr></thead>
+    <thead><tr><th th:text="#{audit.table.when}">When</th><th th:text="#{audit.table.actor}">Actor</th>
+      <th th:text="#{audit.table.action}">Action</th><th th:text="#{audit.table.chat}">Chat</th>
+      <th th:text="#{audit.table.outcome}">Outcome</th><th th:text="#{audit.table.detail}">Detail</th></tr></thead>
     <tbody>
     <tr th:each="e : ${events}">
       <td th:text="${e.occurredAt}"></td>
@@ -20,7 +22,7 @@
           th:classappend="${e.outcome} == 'DENIED' ? 'warn' : (${e.outcome} == 'ERROR' ? 'err' : 'ok')"></td>
       <td><code th:text="${e.detail}"></code></td>
     </tr>
-    <tr th:if="${#lists.isEmpty(events)}"><td colspan="6" class="muted">No events yet.</td></tr>
+    <tr th:if="${#lists.isEmpty(events)}"><td colspan="6" class="muted" th:text="#{audit.table.empty}">No events yet.</td></tr>
     </tbody>
   </table>
 </section>

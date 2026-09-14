@@ -1,47 +1,52 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page('Chats', ~{::section})}">
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.chats}, ~{::section})}">
 <body>
 <section>
-  <h1>Chats</h1>
+  <h1 th:text="#{nav.chats}">Chats</h1>
 
   <div class="card">
-    <h2>How this works, in short</h2>
+    <h2 th:text="#{dashboard.howItWorks.title}">How this works, in short</h2>
     <ol class="muted">
-      <li>Connect your Telegram account (once).</li>
-      <li>Refresh the chat list below and pick a chat to manage.</li>
-      <li>Choose which AI app may read it, and wait for everyone in the chat to consent.</li>
-      <li>Activate. Only from that moment can an AI assistant read that one chat.</li>
+      <li th:text="#{dashboard.howItWorks.step1}">Connect your Telegram account (once).</li>
+      <li th:text="#{dashboard.howItWorks.step2}">Refresh the chat list below and pick a chat to manage.</li>
+      <li th:text="#{dashboard.howItWorks.step3}">Choose which AI app may read it, and wait for everyone in the chat to consent.</li>
+      <li th:text="#{dashboard.howItWorks.step4}">Activate. Only from that moment can an AI assistant read that one chat.</li>
     </ol>
   </div>
 
   <p class="banner demo" th:if="${demoMode}">
-    <strong>Demo mode.</strong> Adapter <span th:text="${adapter}">MOCK</span> — all data below is
-    synthetic. No Telegram account is connected.
+    <strong th:text="#{dashboard.demoBanner.strong}">Demo mode.</strong>
+    <span th:text="#{dashboard.demoBanner.text(${adapter})}">Adapter MOCK — all data below is
+      synthetic. No Telegram account is connected.</span>
   </p>
   <p class="banner live" th:unless="${demoMode}">
-    <strong>Live adapter (<span th:text="${adapter}">TDLIB</span>).</strong> A real Telegram account
-    session is in use. Only chats you activate with recorded participant consent are ever read.
+    <strong th:text="#{dashboard.liveBanner.strong(${adapter})}">Live adapter (TDLIB).</strong>
+    <span th:text="#{dashboard.liveBanner.text}">A real Telegram account session is in use. Only
+      chats you activate with recorded participant consent are ever read.</span>
   </p>
 
   <div class="grid">
     <div class="card">
-      <h2>Telegram connection</h2>
-      <p>Status: <span class="pill" th:text="${connection.status}">DISCONNECTED</span></p>
-      <p class="muted">
+      <h2 th:text="#{dashboard.connectionCard.title}">Telegram connection</h2>
+      <p><span th:text="#{dashboard.connectionCard.status}">Status:</span>
+         <span class="pill" th:text="${connection.status}">DISCONNECTED</span></p>
+      <p class="muted" th:text="#{dashboard.connectionCard.hint}">
         Connecting an account and authorizing content processing are separate decisions. A client
         session can see everything the account can see; only an activated chat is ever synchronised.
       </p>
-      <p><a th:href="@{/connect}">Manage connection</a></p>
+      <p><a th:href="@{/connect}" th:text="#{dashboard.connectionCard.manageLink}">Manage connection</a></p>
       <form th:action="@{/connect/discover}" method="post" data-guard-resubmit class="inline">
-        <button type="submit">Refresh chat list</button>
+        <button type="submit" th:text="#{dashboard.connectionCard.refreshButton}">Refresh chat list</button>
       </form>
     </div>
 
     <div class="card">
-      <h2>MCP endpoint</h2>
-      <p>Resource identifier: <code th:text="${resourceIdentifier}">http://localhost:8080/mcp</code></p>
-      <p>Consent version in force: <code th:text="${consentVersion}">2026-09-v1</code></p>
-      <p class="muted">
+      <h2 th:text="#{dashboard.mcpCard.title}">MCP endpoint</h2>
+      <p><span th:text="#{dashboard.mcpCard.resourceId}">Resource identifier:</span>
+         <code th:text="${resourceIdentifier}">http://localhost:8080/mcp</code></p>
+      <p><span th:text="#{dashboard.mcpCard.consentVersion}">Consent version in force:</span>
+         <code th:text="${consentVersion}">2026-09-v1</code></p>
+      <p class="muted" th:text="#{dashboard.mcpCard.hint}">
         An MCP client sees only chats in state ACTIVE whose participants all hold current consent
         for that client's provider.
       </p>
@@ -51,8 +56,10 @@
   <table>
     <thead>
     <tr>
-      <th>Chat</th><th>Type</th><th>State</th><th>Consent</th><th>Providers</th>
-      <th>Stored</th><th>Sync</th><th></th>
+      <th th:text="#{dashboard.table.chat}">Chat</th><th th:text="#{dashboard.table.type}">Type</th>
+      <th th:text="#{dashboard.table.state}">State</th><th th:text="#{dashboard.table.consent}">Consent</th>
+      <th th:text="#{dashboard.table.providers}">Providers</th>
+      <th th:text="#{dashboard.table.stored}">Stored</th><th th:text="#{dashboard.table.sync}">Sync</th><th></th>
     </tr>
     </thead>
     <tbody>
@@ -62,7 +69,7 @@
       <td><span class="pill" th:classappend="${c.active} ? 'ok' : 'warn'"
                 th:text="${c.stateLabel}">INACTIVE</span></td>
       <td>
-        <span th:if="${c.coverage == null}" class="muted">not selected</span>
+        <span th:if="${c.coverage == null}" class="muted" th:text="#{dashboard.table.notSelected}">not selected</span>
         <span th:if="${c.coverage != null and c.consentComplete}" class="ok"
               th:text="${c.coverage.coveredParticipants} + '/' + ${c.coverage.requiredParticipants}">0/0</span>
         <span th:if="${c.coverage != null and !c.consentComplete}" class="warn"
@@ -72,13 +79,14 @@
       <td th:text="${c.stored.storedMessageCount}">0</td>
       <td>
         <span th:text="${c.syncState}">NEVER_STARTED</span>
-        <span class="warn" th:if="${c.selected and c.partialHistory}" title="Backfill incomplete">partial</span>
+        <span class="warn" th:if="${c.selected and c.partialHistory}" th:title="#{dashboard.table.partialTitle}"
+              th:text="#{dashboard.table.partialLabel}">partial</span>
         <span class="err" th:if="${c.lastErrorCode != null}" th:text="${c.lastErrorCode}"></span>
       </td>
-      <td><a th:href="@{'/chats/' + ${c.chat.id}}">Manage</a></td>
+      <td><a th:href="@{'/chats/' + ${c.chat.id}}" th:text="#{dashboard.table.manage}">Manage</a></td>
     </tr>
     <tr th:if="${#lists.isEmpty(chats)}">
-      <td colspan="8" class="muted">No chats discovered yet. Connect Telegram, then refresh the chat list.</td>
+      <td colspan="8" class="muted" th:text="#{dashboard.table.empty}">No chats discovered yet. Connect Telegram, then refresh the chat list.</td>
     </tr>
     </tbody>
   </table>

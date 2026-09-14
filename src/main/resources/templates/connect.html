@@ -1,80 +1,84 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page('Connection', ~{::section})}">
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.connection}, ~{::section})}">
 <body>
 <section>
-  <h1>Telegram connection</h1>
-  <p class="muted">
+  <h1 th:text="#{nav.connection}">Telegram connection</h1>
+  <p class="muted" th:text="#{connect.intro}">
     This connects the Telegram account whose chats you want to manage. It does not by itself
     share anything — you still choose, chat by chat, what gets read later.
   </p>
 
   <p class="banner demo" th:if="${demoMode}">
-    <strong>Demo mode</strong> (adapter <span th:text="${adapter}">MOCK</span>). Any code and any
-    password are accepted; nothing leaves this process.
+    <strong th:text="#{connect.demoBanner.strong}">Demo mode</strong>
+    <span th:text="#{connect.demoBanner.text(${adapter})}">(adapter MOCK). Any code and any
+      password are accepted; nothing leaves this process.</span>
   </p>
 
   <div class="card">
-    <h2>Status</h2>
-    <p>Stage: <span class="pill" th:text="${state.stage}">DISCONNECTED</span></p>
-    <p th:if="${state.message}" th:text="${state.message}" class="muted"></p>
-    <p th:if="${state.tgUsername}">Signed in as <code th:text="${state.tgUsername}"></code></p>
+    <h2 th:text="#{connect.status.title}">Status</h2>
+    <p><span th:text="#{connect.status.stage}">Stage:</span>
+       <span class="pill" th:text="${state.stage}">DISCONNECTED</span></p>
+    <p th:if="${statusMessage}" th:text="${statusMessage}" class="muted"></p>
+    <p th:if="${state.tgUsername}"><span th:text="#{connect.status.signedInAs}">Signed in as</span>
+       <code th:text="${state.tgUsername}"></code></p>
 
     <div th:if="${state.qrLoginLink}" class="qr">
-      <p>Open this link from a Telegram app that is already signed in:</p>
+      <p th:text="#{connect.qr.instructions}">Open this link from a Telegram app that is already signed in:</p>
       <code th:text="${state.qrLoginLink}"></code>
-      <p class="muted">This QR token is shown only on this protected page. It is never logged and
+      <p class="muted" th:text="#{connect.qr.hint}">This QR token is shown only on this protected page. It is never logged and
          is not reachable from any MCP tool.</p>
     </div>
   </div>
 
   <div class="grid">
     <div class="card">
-      <h2>Step 1 — Start login</h2>
-      <p class="muted">Pick QR code (easiest: scan with your phone) or phone number.</p>
+      <h2 th:text="#{connect.step1.title}">Step 1 — Start login</h2>
+      <p class="muted" th:text="#{connect.step1.hint}">Pick QR code (easiest: scan with your phone) or phone number.</p>
       <form th:action="@{/connect/start}" method="post" data-guard-resubmit>
-        <label for="method">Method</label>
+        <label for="method" th:text="#{connect.method.label}">Method</label>
         <select id="method" name="method">
-          <option value="QR_CODE">QR code (recommended)</option>
-          <option value="PHONE_NUMBER">Phone number</option>
+          <option value="QR_CODE" th:text="#{connect.method.qr}">QR code (recommended)</option>
+          <option value="PHONE_NUMBER" th:text="#{connect.method.phone}">Phone number</option>
         </select>
-        <label for="phoneNumber">Phone number (only for the phone method)</label>
+        <label for="phoneNumber" th:text="#{connect.phoneNumber.label}">Phone number (only for the phone method)</label>
         <input id="phoneNumber" name="phoneNumber" type="tel" autocomplete="off">
-        <button type="submit">Start</button>
+        <button type="submit" th:text="#{connect.start.button}">Start</button>
       </form>
     </div>
 
     <div class="card">
-      <h2>Step 2 — Login code</h2>
-      <p class="muted">Only needed for the phone method. Telegram sends this code to your app —
+      <h2 th:text="#{connect.step2.title}">Step 2 — Login code</h2>
+      <p class="muted" th:text="#{connect.step2.hint}">Only needed for the phone method. Telegram sends this code to your app —
          type it in exactly as shown.</p>
       <form th:action="@{/connect/code}" method="post" data-guard-resubmit>
-        <label for="code">Code from Telegram</label>
+        <label for="code" th:text="#{connect.code.label}">Code from Telegram</label>
         <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required>
-        <button type="submit">Submit code</button>
+        <button type="submit" th:text="#{connect.code.button}">Submit code</button>
       </form>
     </div>
 
     <div class="card">
-      <h2>Step 3 — Two-factor password</h2>
-      <p class="muted">Only needed if you personally turned on a Telegram password (most people
+      <h2 th:text="#{connect.step3.title}">Step 3 — Two-factor password</h2>
+      <p class="muted" th:text="#{connect.step3.hint}">Only needed if you personally turned on a Telegram password (most people
          have not). Skip this card otherwise.</p>
       <form th:action="@{/connect/password}" method="post" data-guard-resubmit>
-        <label for="password">Password</label>
+        <label for="password" th:text="#{connect.password.label}">Password</label>
         <input id="password" name="password" type="password" autocomplete="off" required>
-        <button type="submit">Submit password</button>
+        <button type="submit" th:text="#{connect.password.button}">Submit password</button>
       </form>
     </div>
   </div>
 
   <div class="card danger">
-    <h2>Disconnect</h2>
+    <h2 th:text="#{connect.disconnect.title}">Disconnect</h2>
     <p>
-      Removing the connection here destroys the local session material. It does not by itself
-      revoke the session inside Telegram. To do that, open Telegram →
-      <em>Settings → Devices → Active sessions</em> and terminate this session.
+      <span th:text="#{connect.disconnect.text1}">Removing the connection here destroys the local session material. It does not by itself
+      revoke the session inside Telegram. To do that, open Telegram →</span>
+      <em th:text="#{connect.disconnect.emphasis}">Settings → Devices → Active sessions</em>
+      <span th:text="#{connect.disconnect.text2}">and terminate this session.</span>
     </p>
     <form th:action="@{/connect/disconnect}" method="post" data-guard-resubmit>
-      <button type="submit" class="danger">Disconnect</button>
+      <button type="submit" class="danger" th:text="#{connect.disconnect.button}">Disconnect</button>
     </form>
   </div>
 </section>

@@ -7,6 +7,7 @@ import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 
+import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,20 +29,28 @@ public class ConnectionController {
     private final CurrentActor currentActor;
     private final TelegramConnectionService connectionService;
     private final AppProperties properties;
+    private final MessageSource messages;
 
     public ConnectionController(CurrentActor currentActor,
                                 TelegramConnectionService connectionService,
-                                AppProperties properties) {
+                                AppProperties properties,
+                                MessageSource messages) {
         this.currentActor = currentActor;
         this.connectionService = connectionService;
         this.properties = properties;
+        this.messages = messages;
     }
 
     @GetMapping("/connect")
     public String connect(Model model) {
         AuthenticatedActor actor = this.currentActor.require();
+        LoginState state = this.connectionService.status(actor);
         model.addAttribute("connection", this.connectionService.getOrCreate(actor));
-        model.addAttribute("state", this.connectionService.status(actor));
+        model.addAttribute("state", state);
+        // state.message() is a short code (see LoginState); resolved here so the template
+        // never has to know the difference between a translated status and a flash message.
+        model.addAttribute("statusMessage",
+                state.message() == null ? null : Messages.text(this.messages, state.message()));
         model.addAttribute("adapter", this.properties.telegram().adapter().name());
         model.addAttribute("demoMode", this.properties.telegram().adapter() == TelegramAdapterKind.MOCK);
         return "connect";
@@ -52,21 +61,21 @@ public class ConnectionController {
                         @RequestParam(name = "phoneNumber", required = false) String phoneNumber,
                         RedirectAttributes redirectAttributes) {
         LoginState state = this.connectionService.beginLogin(this.currentActor.require(), method, phoneNumber);
-        redirectAttributes.addFlashAttribute("message", state.message());
+        redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
     @PostMapping("/connect/code")
     public String code(@RequestParam("code") String code, RedirectAttributes redirectAttributes) {
         LoginState state = this.connectionService.submitCode(this.currentActor.require(), code);
-        redirectAttributes.addFlashAttribute("message", state.message());
+        redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
     @PostMapping("/connect/password")
     public String password(@RequestParam("password") String password, RedirectAttributes redirectAttributes) {
         LoginState state = this.connectionService.submitPassword(this.currentActor.require(), password);
-        redirectAttributes.addFlashAttribute("message", state.message());
+        redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
@@ -74,8 +83,7 @@ public class ConnectionController {
     public String discover(RedirectAttributes redirectAttributes) {
         int count = this.connectionService.discoverChats(this.currentActor.require()).size();
         redirectAttributes.addFlashAttribute("message",
-                count + " chat(s) are visible. Discovery is not authorization: nothing is synchronised "
-                        + "until a chat is activated with participant consent.");
+                Messages.text(this.messages, "connect.discover.success", count));
         return "redirect:/";
     }
 
@@ -83,8 +91,7 @@ public class ConnectionController {
     public String disconnect(RedirectAttributes redirectAttributes) {
         this.connectionService.disconnect(this.currentActor.require());
         redirectAttributes.addFlashAttribute("message",
-                "Local session removed. To revoke the session inside Telegram itself, open Telegram → "
-                        + "Settings → Devices → Active sessions and terminate this session.");
+                Messages.text(this.messages, "connect.disconnect.success"));
         return "redirect:/connect";
     }
 }

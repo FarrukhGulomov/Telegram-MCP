@@ -7,33 +7,40 @@
   <link rel="stylesheet" th:href="@{/css/app.css}">
 </head>
 <body class="centered">
+<div class="lang-switch">
+  <a href="#" data-lang="en">EN</a>
+  <a href="#" data-lang="uz">UZ</a>
+  <a href="#" data-lang="ru">RU</a>
+</div>
 <main class="card">
-  <h1>Telegram Consent MCP</h1>
+  <h1 th:text="#{login.heading}">Telegram Consent MCP</h1>
 
   <p class="banner demo" th:if="${demoMode}">
-    <strong>Demo mode.</strong> The Telegram adapter is
-    <span th:text="${adapter}">MOCK</span>: every chat, person and message is synthetic and no
-    Telegram account is contacted.
+    <strong th:text="#{login.demoMode.strong}">Demo mode.</strong>
+    <span th:text="#{login.demoMode.text(${adapter})}">The Telegram adapter is MOCK: every chat,
+      person and message is synthetic and no Telegram account is contacted.</span>
   </p>
 
-  <div class="flash err" th:if="${param.error}">Sign-in failed. Check your email and password.</div>
-  <div class="flash ok" th:if="${param.loggedOut}">Signed out.</div>
+  <div class="flash err" th:if="${param.error}" th:text="#{login.error}">Sign-in failed. Check your email and password.</div>
+  <div class="flash ok" th:if="${param.loggedOut}" th:text="#{login.loggedOut}">Signed out.</div>
 
   <form th:action="@{/login}" method="post" data-guard-resubmit>
-    <label for="username">Email</label>
+    <label for="username" th:text="#{login.email}">Email</label>
     <input id="username" name="username" type="email" required autocomplete="username"
            th:value="${demoMode} ? ${demoEmail} : ''">
 
-    <label for="password">Password</label>
+    <label for="password" th:text="#{login.password}">Password</label>
     <input id="password" name="password" type="password" required autocomplete="current-password">
 
-    <button type="submit">Sign in</button>
+    <button type="submit" th:text="#{login.signIn}">Sign in</button>
   </form>
   <script src="/js/forms.js" defer></script>
+  <script src="/js/lang.js" defer></script>
 
   <p class="muted" th:if="${demoMode}">
-    The demo password is printed in the server log at startup and defaults to
-    <code>demo-password</code>.
+    <span th:text="#{login.demoPasswordHint}">The demo password is printed in the server log at
+      startup and defaults to:</span>
+    <code>demo-password</code>
   </p>
 </main>
 </body>

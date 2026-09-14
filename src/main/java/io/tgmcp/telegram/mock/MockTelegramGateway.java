@@ -127,8 +127,8 @@ public class MockTelegramGateway implements TelegramGateway {
     public LoginState beginLogin(ConnectionRef ref, LoginMethod method, String phoneNumber) {
         LoginState state = (method == LoginMethod.QR_CODE)
                 ? new LoginState(LoginStage.WAIT_QR_SCAN, "tg://login?token=SYNTHETIC-DEMO-TOKEN", null, null,
-                        "Synthetic QR login. Submit any code to continue.")
-                : LoginState.of(LoginStage.WAIT_CODE, "Synthetic login. Submit any 5-digit code to continue.");
+                        "login.mock.qrLogin")
+                : LoginState.of(LoginStage.WAIT_CODE, "login.mock.waitCode");
         this.sessions.put(ref.connectionId(), state);
         return state;
     }
@@ -136,8 +136,7 @@ public class MockTelegramGateway implements TelegramGateway {
     @Override
     public LoginState submitCode(ConnectionRef ref, String code) {
         // The mock always asks for a 2FA password so that the two-step path is exercised.
-        LoginState state = LoginState.of(LoginStage.WAIT_PASSWORD,
-                "Synthetic two-factor step. Submit any password to continue.");
+        LoginState state = LoginState.of(LoginStage.WAIT_PASSWORD, "login.mock.waitPassword");
         this.sessions.put(ref.connectionId(), state);
         return state;
     }
@@ -145,7 +144,7 @@ public class MockTelegramGateway implements TelegramGateway {
     @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
         LoginState state = new LoginState(LoginStage.READY, null, 400001L, "synthetic_demo_owner",
-                "Connected to synthetic demo data. No real Telegram account was contacted.");
+                "login.mock.ready");
         this.sessions.put(ref.connectionId(), state);
         return state;
     }

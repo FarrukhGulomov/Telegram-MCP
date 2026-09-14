@@ -71,19 +71,19 @@ public class TdlibTelegramGateway implements TelegramGateway {
     LoginState mapAuthorizationState(JsonNode state) {
         return switch (state.path("@type").asString("")) {
             case "authorizationStateWaitPhoneNumber" ->
-                    LoginState.of(LoginStage.WAIT_PHONE_NUMBER, "Telegram is waiting for a phone number or QR login.");
+                    LoginState.of(LoginStage.WAIT_PHONE_NUMBER, "login.tdlib.waitPhone");
             case "authorizationStateWaitCode" ->
-                    LoginState.of(LoginStage.WAIT_CODE, "Telegram sent a login code.");
+                    LoginState.of(LoginStage.WAIT_CODE, "login.tdlib.waitCode");
             case "authorizationStateWaitOtherDeviceConfirmation" ->
                     new LoginState(LoginStage.WAIT_QR_SCAN, state.path("link").asString(null), null, null,
-                            "Scan this link from a Telegram app that is already signed in.");
+                            "login.tdlib.waitQrScan");
             case "authorizationStateWaitPassword" ->
-                    LoginState.of(LoginStage.WAIT_PASSWORD, "Two-factor authentication password required.");
-            case "authorizationStateReady" -> LoginState.of(LoginStage.READY, "Connected.");
+                    LoginState.of(LoginStage.WAIT_PASSWORD, "login.tdlib.waitPassword");
+            case "authorizationStateReady" -> LoginState.of(LoginStage.READY, "login.tdlib.ready");
             case "authorizationStateLoggingOut", "authorizationStateClosing", "authorizationStateClosed" ->
-                    LoginState.of(LoginStage.DISCONNECTED, "Session closed.");
+                    LoginState.of(LoginStage.DISCONNECTED, "login.tdlib.disconnected");
             case "authorizationStateWaitTdlibParameters" ->
-                    LoginState.of(LoginStage.DISCONNECTED, "Initialising Telegram client.");
+                    LoginState.of(LoginStage.DISCONNECTED, "login.tdlib.initialising");
             default -> LoginState.of(LoginStage.ERROR,
                     "Unsupported Telegram authorization state: " + state.path("@type").asString("unknown"));
         };
@@ -143,7 +143,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
     public void disconnect(ConnectionRef ref) {
         // logOut ends the Telegram-side session for this client; close only detaches locally.
         this.client.request("logOut", Map.of());
-        this.loginState.set(LoginState.of(LoginStage.DISCONNECTED, "Signed out."));
+        this.loginState.set(LoginState.of(LoginStage.DISCONNECTED, "login.tdlib.signedOut"));
     }
 
     // --- read-only data ---------------------------------------------------------------

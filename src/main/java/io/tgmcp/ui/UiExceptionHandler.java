@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.context.MessageSource;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
@@ -21,9 +22,21 @@ public class UiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(UiExceptionHandler.class);
 
+    private final MessageSource messages;
+
+    public UiExceptionHandler(MessageSource messages) {
+        this.messages = messages;
+    }
+
+    /**
+     * {@code ex.getMessage()} is usually a short message code (e.g. {@code
+     * "validation.selectProvider"}) raised by a service in this pass; {@link Messages#text}
+     * resolves it in the visitor's language, falling back to the raw message untranslated for
+     * any exception this pass didn't migrate.
+     */
     @ExceptionHandler(IllegalArgumentException.class)
     public String handleBadRequest(IllegalArgumentException ex, RedirectAttributes redirectAttributes) {
-        redirectAttributes.addFlashAttribute("error", ex.getMessage());
+        redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
         return "redirect:/";
     }
 
@@ -38,9 +51,7 @@ public class UiExceptionHandler {
             ServletRequestBindingException.class})
     public String handleMalformedForm(Exception ex, HttpServletRequest request,
                                       RedirectAttributes redirectAttributes) {
-        redirectAttributes.addFlashAttribute("error",
-                "That form was missing a required field or had a value it couldn't understand, so "
-                        + "nothing was changed. Please fill in every field and try again.");
+        redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "error.malformedForm"));
         return "redirect:" + backTo(request);
     }
 
@@ -64,14 +75,14 @@ public class UiExceptionHandler {
 
     @ExceptionHandler(IllegalStateException.class)
     public String handleConflict(IllegalStateException ex, RedirectAttributes redirectAttributes) {
-        redirectAttributes.addFlashAttribute("error", ex.getMessage());
+        redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
         return "redirect:/";
     }
 
     @ExceptionHandler(RuntimeException.class)
     public String handleUnexpected(RuntimeException ex, RedirectAttributes redirectAttributes) {
         log.error("Unhandled UI error", ex);
-        redirectAttributes.addFlashAttribute("error", "Something went wrong. Check the server log.");
+        redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "error.unexpected"));
         return "redirect:/";
     }
 }

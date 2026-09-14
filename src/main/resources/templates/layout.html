@@ -6,17 +6,23 @@
   <title th:text="'Telegram Consent MCP — ' + ${title}">Telegram Consent MCP</title>
   <link rel="stylesheet" th:href="@{/css/app.css}">
   <script src="/js/forms.js" defer></script>
+  <script src="/js/lang.js" defer></script>
 </head>
 <body>
 <header>
   <a class="brand" th:href="@{/}">Telegram Consent MCP</a>
   <nav>
-    <a th:href="@{/}">Chats</a>
-    <a th:href="@{/connect}">Connection</a>
-    <a th:href="@{/audit}">Audit</a>
+    <a th:href="@{/}" th:text="#{nav.chats}">Chats</a>
+    <a th:href="@{/connect}" th:text="#{nav.connection}">Connection</a>
+    <a th:href="@{/audit}" th:text="#{nav.audit}">Audit</a>
     <form th:action="@{/logout}" method="post" data-guard-resubmit class="inline">
-      <button type="submit" class="link">Sign out</button>
+      <button type="submit" class="link" th:text="#{nav.signOut}">Sign out</button>
     </form>
+    <div class="lang-switch">
+      <a href="#" data-lang="en">EN</a>
+      <a href="#" data-lang="uz">UZ</a>
+      <a href="#" data-lang="ru">RU</a>
+    </div>
   </nav>
 </header>
 <main>
@@ -25,7 +31,7 @@
   <div th:replace="${content}">content</div>
 </main>
 <footer>
-  <p>Read-only access to explicitly authorized chats. Message text shown here is third-party
+  <p th:text="#{footer.notice}">Read-only access to explicitly authorized chats. Message text shown here is third-party
      content and is always rendered as escaped text, never as markup.</p>
 </footer>
 </body>

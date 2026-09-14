@@ -30,6 +30,11 @@ header .brand { font-weight: 700; text-decoration: none; color: var(--fg); }
 header nav { display: flex; align-items: center; gap: 16px; }
 header nav a { color: var(--accent); text-decoration: none; }
 
+.lang-switch { display: flex; gap: 4px; align-items: center; font-size: 12px; }
+.lang-switch a { color: var(--muted); text-decoration: none; padding: 2px 5px; border-radius: 4px; }
+.lang-switch a:hover { background: #eceff3; color: var(--fg); }
+body.centered .lang-switch { justify-content: center; margin-bottom: 12px; }
+
 main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 48px; }
 footer { max-width: 1180px; margin: 0 auto; padding: 0 16px 32px; color: var(--muted); font-size: 13px; }
 

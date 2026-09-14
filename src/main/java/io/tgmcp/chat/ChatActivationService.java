@@ -80,10 +80,10 @@ public class ChatActivationService {
                                   int retentionDays) {
         Chat chat = requireChat(actor, chatId);
         if (approvedTo.isBefore(approvedFrom)) {
-            throw new IllegalArgumentException("The approved range must end after it starts");
+            throw new IllegalArgumentException("validation.dateRange");
         }
         if (providers.isEmpty()) {
-            throw new IllegalArgumentException("Select at least one provider");
+            throw new IllegalArgumentException("validation.selectProvider");
         }
         importParticipants(actor, chat);
 
@@ -179,10 +179,10 @@ public class ChatActivationService {
                                          List<String> providers, Instant approvedFrom, Instant approvedTo,
                                          int retentionDays) {
         if (approvedTo.isBefore(approvedFrom)) {
-            throw new IllegalArgumentException("The approved range must end after it starts");
+            throw new IllegalArgumentException("validation.dateRange");
         }
         if (providers.isEmpty()) {
-            throw new IllegalArgumentException("Select at least one provider");
+            throw new IllegalArgumentException("validation.selectProvider");
         }
         ChatActivation existing = require(actor, chatId);
         boolean contextChanged = !existing.purpose().equals(purpose)
