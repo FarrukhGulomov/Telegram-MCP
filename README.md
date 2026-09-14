@@ -61,7 +61,7 @@ docker compose up --build
 
 This starts a real PostgreSQL (search uses a generated `tsvector`/GIN index and pagination
 uses row-value comparisons — an in-memory substitute would test something else) and runs the
-full suite: **178 tests**, ~30 seconds. See [Test results](#test-results) below for what's
+full suite: **218 tests**, ~30 seconds. See [Test results](#test-results) below for what's
 covered.
 
 ## Connecting Claude or ChatGPT
@@ -157,26 +157,29 @@ listed the specific questions that need answering in
 
 ## Test results
 
-178 tests, all passing, run against real PostgreSQL 16 (not H2/mocked). This count reflects a
-security audit (see below) that added regression coverage for ten P0 findings on top of the
+218 tests, all passing, run against real PostgreSQL 16 (not H2/mocked). This count reflects a
+security audit (see below) that added regression coverage for all twenty findings on top of the
 original suite:
 
 | Suite | Count | Covers |
 |---|---|---|
 | `McpProtocolTests` | 16 | Real MCP SDK client: init, discovery, tool calls, auth rejections (bad/expired/wrong-audience/wrong-issuer/no-scope tokens) |
-| `AccessPolicyTests` | 18 | Cross-tenant denial, unknown-vs-unauthorized indistinguishability, every consent gap, provider scoping, window clamping, an immutable-context-revision reversion case |
-| `SyncBehaviourTests` | 21 | Idempotent ingestion, restart recovery, edits/deletions, membership-change pausing, flood-wait, exponential backoff, halt-on-auth-failure, PAUSED-chat ingestion refusal, concurrent-revoke fencing (incl. the revoke-then-reactivate ABA case) |
+| `AccessPolicyTests` | 19 | Cross-tenant denial, unknown-vs-unauthorized indistinguishability, every consent gap, provider scoping, window clamping, an immutable-context-revision reversion case, per-chat (not shared) window clamping across a multi-chat search |
+| `SyncBehaviourTests` | 22 | Idempotent ingestion, restart recovery, edits/deletions, membership-change pausing, flood-wait, exponential backoff, halt-on-auth-failure, PAUSED-chat ingestion refusal, concurrent-revoke fencing (incl. the revoke-then-reactivate ABA case), pagination continuing past an empty-but-not-exhausted page |
 | `PaginationAndLimitsTests` | 16 | Full pagination walk, 5 cursor-tampering variants, every input cap |
-| `RetentionAndRevocationTests` | 10 | Immediate access block, idempotent purge, mid-request revocation race, retention sweep removing rows from search |
+| `RetentionAndRevocationTests` | 11 | Immediate access block, idempotent purge, mid-request revocation race, retention sweep removing rows from search, immediate purge of a single revoked participant's own messages |
 | `EndToEndMockFlowTests` | 4 | The full UI+MCP journey; CSRF rejection; XSS-escaping of Telegram-controlled titles |
 | `UntrustedContentTests` | 6 | The seeded prompt-injection message stays inert data in every response |
-| `TelegramConnectionIsolationTests` | 3 | Single-active-owner guard on the TDLIB adapter, no-op under MOCK |
+| `TelegramConnectionIsolationTests`, `TelegramConnectionAsyncStateTests`, `TelegramDisconnectLifecycleTests` | 7 | Single-active-owner guard on the TDLIB adapter (no-op under MOCK); an asynchronous QR-login READY transition persists reliably; disconnecting pauses every active chat under that connection |
 | `ConsentMethodGuardTests` | 5 | Self-service consent always rejected; demo-synthetic consent rejected once a real adapter is in play |
 | `ConsentContextRevisionTests` | 2 | Widening retention alone invalidates consent; reverting to an old context never resurrects its old consent |
-| `DynamicClientRegistrationTests` | 3 | Open DCR accepts `mcp:read`, rejects a self-declared `provider:*` scope, still requires `redirect_uris` |
-| `TelegramConfigurationTests`, `ProductionSafetyValidatorTests` | 11 | TDLIB startup warns about the missing edit/delete pipeline; real-account startup refuses every unsafe demo/secret/HTTPS combination |
+| `DynamicClientRegistrationTests`, `OAuth2ResourceParameterTests`, `AuthorizationServerConfigTests` | 9 | Open DCR accepts `mcp:read`, rejects a self-declared `provider:*` scope, still requires `redirect_uris`; a real HTTP `/oauth2/authorize` call rejects a mismatched RFC 8707 `resource` and allows this server's own; persistent vs. ephemeral JWT signing key |
+| `TelegramConfigurationTests`, `ProductionSafetyValidatorTests` | 12 | TDLIB startup warns about the missing edit/delete pipeline; real-account startup refuses every unsafe demo/secret/HTTPS combination, including a missing OAuth signing key |
+| `RoleBasedAuthorizationTests` | 4 | Management POSTs (`/chats/**`, `/connect/**`) require OWNER/ADMIN; MEMBER can still view pages |
 | `ChatFormValidationTests`, `ForwardedHeaderRedirectTests`, `LocalizationTests` | 9 | Chat form validation errors surface in the UI instead of a raw 400; reverse-proxy header handling; every enum-backed label resolves in all three locales |
-| `CursorCodecTests`, `AudienceValidatorTests`, `KeyMaterialTests`, `RateLimitAndResponseCapTests`, `TdlibTelegramGatewayTests`, `TdlibErrorTranslationTests`, `BackoffTests` | 54 | Unit-level: cursor binding/tampering, RFC 8707 audience matching, key-length validation, rate limiting, response byte caps, TDLib JSON mapping (incl. multi-page membership pagination), error classification |
+| `ByteCapPaginationTests` | 1 | Chaining `get_chat_history` cursors under a tiny response-byte cap retrieves every synthetic message exactly once, with no gaps or duplicates |
+| `AuditServiceTests`, `McpAuditAttributionTests` | 5 | An audit row survives its enclosing transaction being rolled back; every MCP tool call attributes its audit row to the chat(s) actually named, with one row per chat for a multi-chat search |
+| `CursorCodecTests`, `AudienceValidatorTests`, `KeyMaterialTests`, `RateLimitAndResponseCapTests`, `TdlibTelegramGatewayTests`, `NativeTdlibClientTests`, `TdlibErrorTranslationTests`, `BackoffTests` | 70 | Unit-level: cursor binding/tampering, RFC 8707 audience matching, key derivation/length validation, rate limiting, response byte caps, TDLib JSON mapping (incl. multi-page history/membership pagination and async READY-state push), a reproduction of the TDLib receive-loop self-deadlock, error classification |
 
 No test result here is asserted without having actually been run in this environment; the
 numbers above are from the run in this session's build log.
@@ -184,8 +187,8 @@ numbers above are from the run in this session's build log.
 ## Security audit (2026-09)
 
 A senior architecture/security/product/DevOps audit against this codebase produced twenty
-findings (F01–F20), ten of them P0 (blocking). All ten P0 findings are fixed, each as its own
-commit with its own regression test:
+findings (F01–F20), ten of them P0 (blocking) and ten P1. All twenty are fixed, each as its
+own commit with its own regression test:
 
 | ID | Risk | Fix | Files | Verified by |
 |---|---|---|---|---|
@@ -198,18 +201,28 @@ commit with its own regression test:
 | F07 | A revoke landing mid-fetch (including revoke-then-reactivate) had no way to stop content already fetched but not yet stored | Monotonic `epoch` fencing token, bumped only by revoke; re-checked before every commit inside a sync run | `ChatActivation`, `ChatActivationRepository`, `ChatActivationService`, `ChatSyncService`, `V4` migration | `SyncBehaviourTests` |
 | F08 | A comment claimed the TDLIB adapter's missing edit/delete pipeline was already handled by a nonexistent class | False comment replaced with an accurate one; loud startup warning; documented as a blocking gap | `TdlibTelegramGateway`, `TelegramConfiguration`, `docs/production-prerequisites.md` | `TelegramConfigurationTests` |
 | F09 | Open dynamic client registration let any anonymous caller self-declare a `provider:*` scope, letting an impostor client claim to be Claude or ChatGPT | Registration validator now rejects any self-declared `provider:*` scope; `mcp:read` remains open | `AuthorizationServerConfig` | `DynamicClientRegistrationTests` |
-| F10 | Nothing stopped starting with real Telegram access authorized alongside demo seeding, dev-derived keys, or plain-HTTP OAuth/cookies | Fail-fast `ProductionSafetyValidator`, a no-op unless real access is authorized, then refuses to start with every unsafe setting listed at once | `ProductionSafetyValidator` (new) | `ProductionSafetyValidatorTests` (10) |
+| F10 | Nothing stopped starting with real Telegram access authorized alongside demo seeding, dev-derived keys, or plain-HTTP OAuth/cookies | Fail-fast `ProductionSafetyValidator`, a no-op unless real access is authorized, then refuses to start with every unsafe setting listed at once | `ProductionSafetyValidator` (new) | `ProductionSafetyValidatorTests` (11) |
+| F11 | The TDLib receive loop dispatched updates inline on the same thread that read responses, so a listener calling back into `request()` (e.g. fetching account identity on READY) could deadlock the client against itself | `CompletableFuture`-based request/response correlation; update dispatch moved to a dedicated single-threaded executor so a listener may safely call `request()` | `NativeTdlibClient`, `TdlibClient`, `TdlibTelegramGateway` | `NativeTdlibClientTests` (5) |
+| F12 | TDLib's backward-only pagination meant a single raw page could never reach content "behind" a large newer-than-window or all-outside-window backlog, silently truncating catch-up and backfill | Bounded internal multi-page traversal inside one `fetchMessages()` call, with a `resumeCursor` so hitting the internal cap never loses progress across calls | `TdlibTelegramGateway`, `MessageWindow`, `RemoteMessagePage`, `ChatSyncService` | `TdlibTelegramGatewayTests`, `SyncBehaviourTests` |
+| F13 | QR-login `READY` was only ever handled synchronously; an async READY transition (a QR code scanned on another device) had nothing persisting its account identity, and doing so from inside the triggering method would have hit Spring's self-invocation trap | Gateway-level `onStateChange` listener fetches identity and notifies on every transition; persistence goes through an imperative `TransactionTemplate` rather than a same-bean `@Transactional` call | `TelegramGateway`, `TdlibTelegramGateway`, `TelegramConnectionService` | `TdlibTelegramGatewayTests`, `TelegramConnectionAsyncStateTests` (2) |
+| F14 | A multi-chat search intersected every requested chat's own approved window into one shared range before searching, so one chat's narrow window could zero out an unrelated chat's own results | Per-chat window computed independently via a `VALUES`-joined SQL query; only a chat whose own window is empty is excluded | `MessageRepository`, `McpTools` | `AccessPolicyTests` |
+| F15 | Trimming a page to the response byte cap could drop the item the pagination cursor was derived from, silently skipping messages on the next page | Cursor is derived from the last item that actually survives the byte cap, not the DB page's original boundary — works for both pagination directions | `ToolResponses`, `McpTools` | `RateLimitAndResponseCapTests`, `ByteCapPaginationTests` |
+| F16 | Disconnecting a Telegram connection, or revoking one participant's consent, left already-active chats and that participant's own messages untouched | Disconnect pauses every ACTIVE chat under the connection; revoking one participant purges only their own messages immediately | `TelegramConnectionService`, `ConsentService` | `TelegramDisconnectLifecycleTests` (2), `RetentionAndRevocationTests` |
+| F17 | The management UI's security chain only required `authenticated()`, so any signed-in user of a tenant — any role — could pause, revoke, or reconfigure any chat | `POST /chats/**` and `/connect/**` now require `hasAnyRole("OWNER", "ADMIN")`; MEMBER can still view | `WebSecurityConfig` | `RoleBasedAuthorizationTests` (4) |
+| F18 | The OAuth JWT signing key was always ephemeral (every restart invalidated every token; every replica minted incompatible tokens); a client naming an RFC 8707 `resource` other than this server's own was silently ignored rather than rejected | Persistent, configurable signing key (`tgmcp.secrets.oauth-rsa-private-key`), tied into the F10 safety gate; authorize-endpoint validator now rejects a mismatched `resource` with `invalid_target` | `AuthorizationServerConfig`, `ProductionSafetyValidator`, `AppProperties` | `AuthorizationServerConfigTests` (4), `OAuth2ResourceParameterTests` (2) |
+| F19 | `setTdlibParameters` never set `database_encryption_key`, leaving the TDLIB adapter's local session/chat-metadata database completely unencrypted on disk | Key derived via HMAC-SHA256 from the existing `session-encryption-key` (no new secret to configure), kept cryptographically distinct from the AES key `SessionCipher` derives from the same root | `TdlibTelegramGateway`, `KeyMaterial`, `TelegramConfiguration` | `TdlibTelegramGatewayTests`, `KeyMaterialTests` |
+| F20 | `AuditService`'s `record(actor, ...)`/`system(...)` called the `@Transactional(REQUIRES_NEW)` overload via same-bean self-invocation, silently dropping the annotation; `McpTools.guarded()` always audited with `chatId=null`, so no MCP audit row (allowed, denied, or rate-limited) was ever attributed to a chat | Imperative `TransactionTemplate` instead of the annotation (immune to self-invocation); `guarded()` now records against the chat id(s) each tool body actually parses, one row per chat for a multi-chat search | `AuditService`, `McpTools` | `AuditServiceTests` (2), `McpAuditAttributionTests` (3) |
 
-**Remaining risk after F01–F10:** F11–F20 (P1 code-quality/product findings from the same
-audit) are analyzed but not yet fixed — notably F11 (the native TDLib receive loop can
-deadlock synchronous requests against itself, which is also what blocks building the
-edit/delete pipeline F08 documents as missing) and F12 (real-adapter history pagination can
-skip messages across a large backlog). Separately, the audit's platform/legal-risk section
-flags that Telegram's API Terms §1.5 and Content Licensing terms narrowly restrict AI-purpose
-use and require individual, informed, ongoing, context-limited consent from every participant
-— account-owner consent alone is not sufficient, and this has not been reviewed with counsel.
-See [docs/production-prerequisites.md](docs/production-prerequisites.md) §1 for the specific
-unresolved questions.
+**Remaining risk after F01–F20:** the audit's platform/legal-risk section flags that
+Telegram's API Terms §1.5 and Content Licensing terms narrowly restrict AI-purpose use and
+require individual, informed, ongoing, context-limited consent from every participant —
+account-owner consent alone is not sufficient, and this has not been reviewed with counsel.
+The TDLIB adapter also remains unverified against a live Telegram account (see
+[docs/production-prerequisites.md](docs/production-prerequisites.md) §3), and dynamic client
+registration is still open to any anonymous caller (registration policy — allowed redirect
+URIs, allowed scopes, approval, rate limiting — is a deliberately separate, larger piece of
+work). See [docs/production-prerequisites.md](docs/production-prerequisites.md) §1 for the
+specific unresolved legal questions and §3 for the full outstanding-work list.
 
 ## Configuration reference
 

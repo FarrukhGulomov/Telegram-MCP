@@ -72,10 +72,13 @@ this service has ingested it will silently keep showing its original, stale cont
 never be marked deleted. The application logs a warning to this effect every time the TDLIB
 adapter starts (see `TelegramConfiguration`). Building that pipeline means routing
 `td_receive()` updates into the sync worker under the adapter's per-connection locking — the
-same locking this security pass added for finding F01 — which is a distinct, larger piece of
-work than the P0 fixes in this pass (tracked as security-audit finding F11) and is explicitly
-out of scope here. **Do not deploy the TDLIB adapter for any chat where stale edits or
-undetected deletions are a real risk until this is built.**
+same locking this security pass added for finding F01. Security-audit finding F11 fixed a
+prerequisite for that work (the receive loop used to dispatch updates inline on the same
+thread that read responses, so a listener calling back into the client could deadlock it
+against itself — see `NativeTdlibClient`) but did not build the pipeline itself, which remains
+a distinct, larger piece of work and is explicitly out of scope here. **Do not deploy the
+TDLIB adapter for any chat where stale edits or undetected deletions are a real risk until
+this is built.**
 
 **Verified against live Claude or ChatGPT: no.** The MCP server is driven end to end by the
 official MCP Java SDK client in the test suite (initialize, tools/list, tools/call, and the
