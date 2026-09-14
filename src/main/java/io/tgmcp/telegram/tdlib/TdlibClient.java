@@ -24,6 +24,14 @@ public interface TdlibClient extends AutoCloseable {
     /** Registers a listener for TDLib {@code update*} objects (new messages, edits, deletions). */
     void onUpdate(Consumer<JsonNode> listener);
 
+    /**
+     * Begins receiving from TDLib, once every listener that must not miss an early update
+     * (see security-audit finding F11) has been registered via {@link #onUpdate}. A no-op by
+     * default for implementations with nothing to start.
+     */
+    default void start() {
+    }
+
     @Override
     void close();
 }

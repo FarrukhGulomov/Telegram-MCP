@@ -55,7 +55,10 @@ public class TdlibTelegramGateway implements TelegramGateway {
     public TdlibTelegramGateway(TdlibClient client, AppProperties.Telegram config) {
         this.client = client;
         this.config = config;
+        // Security-audit finding F11: registered before start() so this listener cannot miss
+        // the very first update TDLib sends (in practice, the initial updateAuthorizationState).
         this.client.onUpdate(this::handleUpdate);
+        this.client.start();
     }
 
     @Override
