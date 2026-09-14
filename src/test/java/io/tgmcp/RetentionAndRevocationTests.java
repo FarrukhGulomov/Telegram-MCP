@@ -124,7 +124,6 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
             return slice;
         }).when(this.messages).search(org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt());
 
         McpSchema.CallToolResult result = search(chat, "backpressure");

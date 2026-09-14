@@ -119,14 +119,20 @@ public class McpTools {
                         McpToolNames.SEARCH_MESSAGES, context.actor(), scopeHash, queryHash, from, to));
             }
 
-            // Clamp the caller's range to what each chat actually authorises.
-            Instant windowStart = from;
-            Instant windowEnd = to;
-            for (AuthorizedChat allowed : authorized.values()) {
-                windowStart = latest(windowStart, allowed.windowStart(now));
-                windowEnd = earliest(windowEnd, allowed.windowEnd(now));
+            // Security-audit finding F14: the caller's requested range is clamped to what
+            // *each* chat individually authorises, not intersected across every requested
+            // chat into one shared range -- a chat approved only for January must not zero
+            // out a February-approved chat's own, unrelated results.
+            Map<UUID, MessageRepository.ChatWindow> windowsByChat = new LinkedHashMap<>();
+            for (Map.Entry<UUID, AuthorizedChat> entry : authorized.entrySet()) {
+                AuthorizedChat allowed = entry.getValue();
+                Instant chatFrom = latest(from, allowed.windowStart(now));
+                Instant chatTo = earliest(to, allowed.windowEnd(now));
+                if (chatTo.isAfter(chatFrom)) {
+                    windowsByChat.put(entry.getKey(), new MessageRepository.ChatWindow(chatFrom, chatTo));
+                }
             }
-            if (!windowEnd.isAfter(windowStart)) {
+            if (windowsByChat.isEmpty()) {
                 Map<String, Object> empty = envelope();
                 empty.put("items", List.of());
                 empty.put("pagination", pagination(null, false, limit));
@@ -135,8 +141,8 @@ public class McpTools {
                 return this.responses.success(empty);
             }
 
-            MessageSlice slice = this.messageRepository.search(context.actor().tenantId(), chatIds, query,
-                    windowStart, windowEnd, after, limit);
+            MessageSlice slice = this.messageRepository.search(context.actor().tenantId(), windowsByChat, query,
+                    after, limit);
 
             // Authorization is re-checked after the read and before anything is emitted.
             this.accessService.reverify(context.actor(), chatIds, context.provider());
@@ -156,7 +162,7 @@ public class McpTools {
             payload.put("pagination", pagination(nextCursor, slice.hasMore(), limit));
             payload.put("query", Map.of("text", query, "matching", "PostgreSQL websearch_to_tsquery, english"));
             payload.put("requestedRange", range(from, to));
-            payload.put("effectiveRange", range(windowStart, windowEnd));
+            payload.put("effectiveRangeByChat", effectiveRangeByChat(windowsByChat));
             payload.put("coverageByChat", coverageByChat(authorized, now));
             payload.put("truncation", ToolResponses.truncation(false, null, 0));
             return this.responses.success(payload);
@@ -401,6 +407,18 @@ public class McpTools {
     private Map<String, Object> coverageByChat(Map<UUID, AuthorizedChat> authorized, Instant now) {
         Map<String, Object> map = new LinkedHashMap<>();
         authorized.forEach((chatId, allowed) -> map.put(chatId.toString(), coverage(allowed, now)));
+        return map;
+    }
+
+    /**
+     * Security-audit finding F14: replaces a single shared {@code effectiveRange} for a
+     * multi-chat search, which could only ever describe one (wrong, intersected) range. A
+     * chat absent here had no overlap between the caller's requested range and its own
+     * approved window, and therefore contributed no results.
+     */
+    private Map<String, Object> effectiveRangeByChat(Map<UUID, MessageRepository.ChatWindow> windowsByChat) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        windowsByChat.forEach((chatId, window) -> map.put(chatId.toString(), range(window.from(), window.to())));
         return map;
     }
 

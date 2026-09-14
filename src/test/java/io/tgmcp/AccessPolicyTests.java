@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import io.modelcontextprotocol.spec.McpSchema;
 import io.tgmcp.chat.ActivationState;
+import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatActivationRepository;
 import io.tgmcp.chat.ChatParticipant;
@@ -17,18 +18,22 @@ import io.tgmcp.consent.ConsentMethod;
 import io.tgmcp.consent.ConsentRecord;
 import io.tgmcp.consent.ConsentRepository;
 import io.tgmcp.mcp.McpCallContext;
+import io.tgmcp.mcp.McpToolNames;
 import io.tgmcp.mcp.McpTools;
 import io.tgmcp.security.McpScopes;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
 import io.tgmcp.sync.ChatSyncService;
+import io.tgmcp.telegram.mock.SyntheticDataset;
 import io.tgmcp.tenancy.AuthenticatedActor;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 
+import static io.tgmcp.McpProtocolTests.asMap;
 import static io.tgmcp.McpProtocolTests.errorCode;
 import static io.tgmcp.McpProtocolTests.items;
+import static io.tgmcp.McpProtocolTests.structured;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -283,6 +288,58 @@ class AccessPolicyTests extends AbstractIntegrationTest {
 
         assertThat(Instant.parse((String) effective.get("from")))
                 .isEqualTo(this.clock.instant().minus(Duration.ofDays(10)));
+    }
+
+    @Test
+    void searchAcrossChatsWithNonOverlappingApprovedWindowsReturnsEachChatsOwnResults() {
+        // Security-audit finding F14: chat A is approved only for an older window, chat B
+        // only for a recent one, with a one-day gap between them -- their intersection is
+        // empty. The old code intersected every requested chat's window into one shared
+        // range before searching, so a call spanning both chats returned nothing at all for
+        // either. Each chat's own results must come back instead.
+        Instant now = this.clock.instant();
+        Fixtures.Team team = this.fixtures.team("f14");
+
+        Chat chatA = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT,
+                "[SYNTHETIC DEMO] Orbital Widgets — Engineering", null);
+        this.fixtures.participants(team, chatA, Fixtures.ENGINEERING_MEMBERS);
+        ChatActivation activationA = this.fixtures.activation(team, chatA, ActivationState.ACTIVE,
+                now.minus(Duration.ofDays(25)), now.minus(Duration.ofDays(15)), 3650,
+                McpScopes.ANTHROPIC_CLAUDE);
+        this.fixtures.consentAll(team, chatA, activationA, now.minus(Duration.ofDays(30)),
+                now.plus(Duration.ofDays(300)));
+
+        Chat chatB = this.fixtures.chat(team, SyntheticDataset.LAUNCH_OPS_CHAT,
+                "[SYNTHETIC DEMO] Orbital Widgets — Launch Ops", "synthetic_launch_ops");
+        this.fixtures.participants(team, chatB, Fixtures.LAUNCH_OPS_MEMBERS);
+        ChatActivation activationB = this.fixtures.activation(team, chatB, ActivationState.ACTIVE,
+                now.minus(Duration.ofDays(14)), now, 3650, McpScopes.ANTHROPIC_CLAUDE);
+        this.fixtures.consentAll(team, chatB, activationB, now.minus(Duration.ofDays(30)),
+                now.plus(Duration.ofDays(300)));
+
+        this.syncService.sync(team.tenant().id(), chatA.id());
+        this.syncService.sync(team.tenant().id(), chatB.id());
+
+        // "backpressure" only appears in the engineering chat's script; "Thursday" only in
+        // launch ops's -- a hit on either proves that chat's own content was actually reached.
+        McpSchema.CallToolResult result = this.tools.searchMessages(contextFor(team),
+                new McpSchema.CallToolRequest(McpToolNames.SEARCH_MESSAGES, Map.of(
+                        "chat_ids", List.of(chatA.id().toString(), chatB.id().toString()),
+                        "query", "backpressure OR Thursday",
+                        "from", now.minus(Duration.ofDays(30)).toString(),
+                        "to", now.toString(),
+                        "limit", 50)));
+
+        List<UUID> chatIdsInResults = items(result).stream()
+                .map(item -> UUID.fromString((String) item.get("chatId")))
+                .distinct()
+                .toList();
+        assertThat(chatIdsInResults)
+                .as("each chat's own results must survive, not just one or neither")
+                .containsExactlyInAnyOrder(chatA.id(), chatB.id());
+
+        Map<String, Object> effectiveRangeByChat = asMap(structured(result).get("effectiveRangeByChat"));
+        assertThat(effectiveRangeByChat).containsKeys(chatA.id().toString(), chatB.id().toString());
     }
 
     private Fixtures.ReadyChat readyAndSynced(String slug) {

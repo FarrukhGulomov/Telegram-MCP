@@ -5,8 +5,8 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -103,34 +103,63 @@ public class MessageRepository {
      * Full-text search across an explicit set of chats and an explicit time range.
      * Ordered newest first with a deterministic tiebreak so that keyset paging is stable.
      */
-    public MessageSlice search(UUID tenantId, Collection<UUID> chatIds, String query,
-                               Instant from, Instant to, MessagePageKey after, int limit) {
-        if (chatIds.isEmpty()) {
+    /**
+     * The approved (and retention-clamped) date range for one chat within a multi-chat
+     * search. Security-audit finding F14: this must be applied per chat, not intersected
+     * across every requested chat into one shared range -- a chat approved for a narrower
+     * period must not silently zero out another chat's own, unrelated results.
+     */
+    public record ChatWindow(Instant from, Instant to) {
+    }
+
+    public MessageSlice search(UUID tenantId, Map<UUID, ChatWindow> windowsByChat, String query,
+                               MessagePageKey after, int limit) {
+        if (windowsByChat.isEmpty()) {
             return MessageSlice.empty();
         }
+        List<UUID> chatIds = new ArrayList<>(windowsByChat.keySet());
+        StringBuilder valuesClause = new StringBuilder();
+        for (int i = 0; i < chatIds.size(); i++) {
+            if (i > 0) {
+                valuesClause.append(", ");
+            }
+            valuesClause.append("(:chatId").append(i).append("::uuid, :winFrom").append(i)
+                    .append("::timestamptz, :winTo").append(i).append("::timestamptz)");
+        }
+
+        // Joined against a per-chat VALUES list (rather than a single sent_at BETWEEN :from
+        // AND :to shared by every chat_id) so each chat's own approved window is enforced
+        // independently at the database, not merged into one intersection beforehand.
         String sql = "SELECT " + COLUMNS + """
                  FROM messages
-                WHERE tenant_id = :tenantId
-                  AND chat_id IN (:chatIds)
-                  AND deleted_at IS NULL
-                  AND sent_at >= :from AND sent_at <= :to
-                  AND content_tsv @@ websearch_to_tsquery('english', :query)
+                 JOIN (VALUES """ + valuesClause + """
+                      ) AS w(w_chat_id, win_from, win_to)
+                   ON messages.chat_id = w.w_chat_id
+                  AND messages.sent_at >= w.win_from AND messages.sent_at <= w.win_to
+                WHERE messages.tenant_id = :tenantId
+                  AND messages.deleted_at IS NULL
+                  AND messages.content_tsv @@ websearch_to_tsquery('english', :query)
                 """
                 + (after == null ? "" : """
-                  AND (sent_at, chat_id, tg_message_id) < (:afterSentAt, :afterChatId, :afterMessageId)
+                  AND (messages.sent_at, messages.chat_id, messages.tg_message_id)
+                      < (:afterSentAt, :afterChatId, :afterMessageId)
                 """)
                 + """
-                ORDER BY sent_at DESC, chat_id DESC, tg_message_id DESC
+                ORDER BY messages.sent_at DESC, messages.chat_id DESC, messages.tg_message_id DESC
                 LIMIT :limit
                 """;
 
         JdbcClient.StatementSpec spec = this.jdbc.sql(sql)
                 .param("tenantId", tenantId)
-                .param("chatIds", new ArrayList<>(chatIds))
                 .param("query", query)
-                .param("from", Timestamp.from(from))
-                .param("to", Timestamp.from(to))
                 .param("limit", limit + 1);
+        for (int i = 0; i < chatIds.size(); i++) {
+            UUID chatId = chatIds.get(i);
+            ChatWindow window = windowsByChat.get(chatId);
+            spec = spec.param("chatId" + i, chatId)
+                    .param("winFrom" + i, Timestamp.from(window.from()))
+                    .param("winTo" + i, Timestamp.from(window.to()));
+        }
         if (after != null) {
             spec = spec.param("afterSentAt", Timestamp.from(after.sentAt()))
                     .param("afterChatId", after.chatId())
