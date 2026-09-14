@@ -175,7 +175,7 @@ class AccessPolicyTests extends AbstractIntegrationTest {
         // A new consent version (and therefore a new context revision) means the recorded
         // consents no longer describe what is being asked.
         this.activations.upsert(new ChatActivation(activation.id(), activation.tenantId(),
-                activation.chatId(), activation.state(), activation.purpose(), activation.providerScope(),
+                activation.chatId(), activation.state(), activation.epoch(), activation.purpose(), activation.providerScope(),
                 "2027-01-v2", io.tgmcp.common.Ids.newId().toString(), activation.approvedFrom(),
                 activation.approvedTo(), activation.retentionDays(), activation.membershipFingerprint(),
                 null, activation.activatedAt(), activation.activatedByUserId()));

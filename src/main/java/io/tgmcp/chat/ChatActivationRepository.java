@@ -16,7 +16,7 @@ import io.tgmcp.common.Jdbc;
 public class ChatActivationRepository {
 
     private static final String COLUMNS = """
-            id, tenant_id, chat_id, state, purpose, provider_scope, consent_version,
+            id, tenant_id, chat_id, state, epoch, purpose, provider_scope, consent_version,
             context_revision, approved_from, approved_to, retention_days, membership_fingerprint,
             pause_reason, activated_at, activated_by_user_id
             """;
@@ -61,16 +61,17 @@ public class ChatActivationRepository {
     public void upsert(ChatActivation activation) {
         jdbc.sql("""
                         INSERT INTO chat_activations
-                            (id, tenant_id, chat_id, state, purpose, provider_scope, consent_version,
+                            (id, tenant_id, chat_id, state, epoch, purpose, provider_scope, consent_version,
                              context_revision, approved_from, approved_to, retention_days,
                              membership_fingerprint, pause_reason, activated_at, activated_by_user_id,
                              updated_at)
                         VALUES
-                            (:id, :tenantId, :chatId, :state, :purpose, :providerScope, :consentVersion,
+                            (:id, :tenantId, :chatId, :state, :epoch, :purpose, :providerScope, :consentVersion,
                              :contextRevision, :approvedFrom, :approvedTo, :retentionDays,
                              :membershipFingerprint, :pauseReason, :activatedAt, :activatedByUserId, now())
                         ON CONFLICT (chat_id) DO UPDATE SET
                              state = EXCLUDED.state,
+                             epoch = EXCLUDED.epoch,
                              purpose = EXCLUDED.purpose,
                              provider_scope = EXCLUDED.provider_scope,
                              consent_version = EXCLUDED.consent_version,
@@ -88,6 +89,7 @@ public class ChatActivationRepository {
                 .param("tenantId", activation.tenantId())
                 .param("chatId", activation.chatId())
                 .param("state", activation.state().name())
+                .param("epoch", activation.epoch())
                 .param("purpose", activation.purpose())
                 .param("providerScope", activation.providerScope())
                 .param("consentVersion", activation.consentVersion())
@@ -116,6 +118,23 @@ public class ChatActivationRepository {
                 .update();
     }
 
+    /**
+     * Revokes the activation and bumps its fencing epoch in the same statement, so any sync
+     * run already holding an older epoch value is detectable as stale even if the chat is
+     * later re-proposed and re-activated (security audit finding F07).
+     */
+    public void revoke(UUID tenantId, UUID chatId, String reason) {
+        jdbc.sql("""
+                        UPDATE chat_activations
+                           SET state = 'REVOKED', pause_reason = :reason, epoch = epoch + 1, updated_at = now()
+                         WHERE tenant_id = :tenantId AND chat_id = :chatId
+                        """)
+                .param("tenantId", tenantId)
+                .param("chatId", chatId)
+                .param("reason", reason)
+                .update();
+    }
+
     public void updateMembershipFingerprint(UUID tenantId, UUID chatId, String fingerprint) {
         jdbc.sql("""
                         UPDATE chat_activations
@@ -134,6 +153,7 @@ public class ChatActivationRepository {
                 rs.getObject("tenant_id", UUID.class),
                 rs.getObject("chat_id", UUID.class),
                 ActivationState.valueOf(rs.getString("state")),
+                rs.getLong("epoch"),
                 rs.getString("purpose"),
                 rs.getString("provider_scope"),
                 rs.getString("consent_version"),

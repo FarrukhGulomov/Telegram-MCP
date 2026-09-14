@@ -15,11 +15,19 @@ import java.util.UUID;
  * whenever any of those change — see {@link io.tgmcp.chat.ChatActivationService} — so a consent
  * record only ever covers the exact revision it was granted under, never a context that merely
  * happens to share some of the same field values (security audit finding F03).
+ *
+ * <p>{@code epoch} is a fencing token bumped every time this chat is revoked (see
+ * {@link ChatActivationRepository#revoke}). A sync run in flight captures the epoch it started
+ * with and aborts if a fresh read shows it has moved on -- catching not just a plain
+ * revoke-while-fetching race but also the ABA case where the chat is revoked and then
+ * re-proposed/re-activated before the in-flight run gets a chance to recheck (security audit
+ * finding F07).
  */
 public record ChatActivation(UUID id,
                              UUID tenantId,
                              UUID chatId,
                              ActivationState state,
+                             long epoch,
                              String purpose,
                              String providerScope,
                              String consentVersion,

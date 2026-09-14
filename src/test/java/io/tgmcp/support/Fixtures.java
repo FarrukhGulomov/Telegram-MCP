@@ -120,7 +120,7 @@ public class Fixtures {
     public ChatActivation activation(Team team, Chat chat, ActivationState state, Instant from, Instant to,
                                      int retentionDays, String... providers) {
         String scope = providers.length == 0 ? McpScopes.ANTHROPIC_CLAUDE : String.join(",", providers);
-        ChatActivation activation = new ChatActivation(Ids.newId(), team.tenant().id(), chat.id(), state,
+        ChatActivation activation = new ChatActivation(Ids.newId(), team.tenant().id(), chat.id(), state, 0L,
                 PURPOSE, scope, CONSENT_VERSION, Ids.newId().toString(), from, to, retentionDays,
                 this.participants.membershipFingerprint(team.tenant().id(), chat.id()), null,
                 Instant.parse("2026-06-01T00:00:00Z"), team.user().id());

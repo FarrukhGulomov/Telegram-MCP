@@ -46,6 +46,12 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
     @Autowired
     private io.tgmcp.consent.ConsentService consentService;
 
+    @Autowired
+    private io.tgmcp.chat.ChatActivationService activationService;
+
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    private io.tgmcp.telegram.gateway.TelegramGateway gateway;
+
     private Fixtures.ReadyChat chat;
 
     private Fixtures.ReadyChat ready() {
@@ -390,6 +396,60 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
         assertThat(storedCount())
                 .as("content must not be retained while a chat awaits activation")
                 .isZero();
+    }
+
+    // --- concurrent revoke (F07) --------------------------------------------------------
+
+    @Test
+    void abortsMidFetchWithoutStoringAnythingWhenTheActivationIsRevokedBeforeTheFirstCommit() {
+        org.mockito.Mockito.doAnswer(invocation -> {
+            Object page = invocation.callRealMethod();
+            this.activationService.revoke(ready().team().actor(), ready().chat().id(), "revoked mid-fetch");
+            return page;
+        }).when(this.gateway).fetchMessages(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
+
+        SyncOutcome outcome = sync();
+
+        assertThat(outcome.status()).isEqualTo(SyncOutcome.Status.HALTED);
+        assertThat(outcome.messagesIngested()).isZero();
+        assertThat(storedCount())
+                .as("content fetched after a mid-flight revoke must never be committed")
+                .isZero();
+    }
+
+    @Test
+    void abortsWhenTheEpochMovesOnEvenIfTheStateReadsActiveAgain() {
+        sync();
+        long afterFirstSync = storedCount();
+        assertThat(afterFirstSync).isPositive();
+
+        this.checkpoints.reset(ready().team().tenant().id(), ready().chat().id());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            Object page = invocation.callRealMethod();
+            // Simulates the ABA case a plain state check cannot catch: the chat is revoked and
+            // re-activated (same activation row, same ACTIVE state) while a fetch was already
+            // in flight against the earlier epoch. A bare "is it still ACTIVE?" recheck would
+            // pass here; only the fencing epoch tells this in-flight run it is stale.
+            io.tgmcp.chat.ChatActivation current = this.activations
+                    .find(ready().team().tenant().id(), ready().chat().id()).orElseThrow();
+            this.activations.upsert(new io.tgmcp.chat.ChatActivation(current.id(), current.tenantId(),
+                    current.chatId(), ActivationState.ACTIVE, current.epoch() + 1, current.purpose(),
+                    current.providerScope(), current.consentVersion(), current.contextRevision(),
+                    current.approvedFrom(), current.approvedTo(), current.retentionDays(),
+                    current.membershipFingerprint(), current.pauseReason(), current.activatedAt(),
+                    current.activatedByUserId()));
+            return page;
+        }).when(this.gateway).fetchMessages(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
+
+        SyncOutcome outcome = sync();
+
+        assertThat(outcome.status()).isEqualTo(SyncOutcome.Status.HALTED);
+        assertThat(outcome.messagesIngested()).isZero();
+        assertThat(storedCount())
+                .as("a stale run must not resume just because the state reads ACTIVE again")
+                .isEqualTo(afterFirstSync);
     }
 
     private StoredMessage firstStored() {

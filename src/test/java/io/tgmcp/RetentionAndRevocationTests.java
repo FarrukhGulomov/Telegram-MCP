@@ -221,7 +221,7 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
         ChatActivation existing = this.activations.find(chat.team().tenant().id(), chat.chat().id())
                 .orElseThrow();
         ChatActivation updated = new ChatActivation(existing.id(), existing.tenantId(), existing.chatId(),
-                existing.state(), existing.purpose(), existing.providerScope(), existing.consentVersion(),
+                existing.state(), existing.epoch(), existing.purpose(), existing.providerScope(), existing.consentVersion(),
                 existing.contextRevision(), existing.approvedFrom(), existing.approvedTo(), retentionDays,
                 existing.membershipFingerprint(), existing.pauseReason(), existing.activatedAt(),
                 existing.activatedByUserId());

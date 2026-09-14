@@ -86,8 +86,15 @@ public class ChatActivationService {
         validateProviders(providers);
         importParticipants(actor, chat);
 
+        Optional<ChatActivation> existing = this.activationRepository.find(actor.tenantId(), chatId);
+        // Re-proposing a chat keeps its epoch, rather than resetting it to zero, so the
+        // fencing token stays monotonic across the whole lifetime of the row (security audit
+        // finding F07): a sync run that captured an epoch from a previous cycle must never be
+        // able to match again after this chat has since been revoked.
+        UUID id = existing.map(ChatActivation::id).orElseGet(Ids::newId);
+        long epoch = existing.map(ChatActivation::epoch).orElse(0L);
         ChatActivation activation = new ChatActivation(
-                existingId(actor, chatId), actor.tenantId(), chatId, ActivationState.AWAITING_CONSENT,
+                id, actor.tenantId(), chatId, ActivationState.AWAITING_CONSENT, epoch,
                 purpose, String.join(",", providers), this.properties.consent().currentVersion(),
                 Ids.newId().toString(), approvedFrom, approvedTo, retentionDays,
                 this.participantRepository.membershipFingerprint(actor.tenantId(), chatId),
@@ -119,7 +126,7 @@ public class ChatActivationService {
             throw new IllegalStateException(String.valueOf(coverage.gaps().size()));
         }
         ChatActivation activated = new ChatActivation(activation.id(), activation.tenantId(),
-                activation.chatId(), ActivationState.ACTIVE, activation.purpose(),
+                activation.chatId(), ActivationState.ACTIVE, activation.epoch(), activation.purpose(),
                 activation.providerScope(), activation.consentVersion(), activation.contextRevision(),
                 activation.approvedFrom(), activation.approvedTo(), activation.retentionDays(),
                 this.participantRepository.membershipFingerprint(actor.tenantId(), chatId), null,
@@ -151,7 +158,7 @@ public class ChatActivationService {
     @Transactional
     public void revoke(AuthenticatedActor actor, UUID chatId, String reason) {
         require(actor, chatId);
-        this.activationRepository.updateState(actor.tenantId(), chatId, ActivationState.REVOKED, reason);
+        this.activationRepository.revoke(actor.tenantId(), chatId, reason);
         this.consentService.revokeChat(actor, chatId, reason);
         int deleted = this.messageRepository.deleteForChat(actor.tenantId(), chatId);
         this.checkpointRepository.reset(actor.tenantId(), chatId);
@@ -197,7 +204,7 @@ public class ChatActivationService {
         ActivationState state = contextChanged ? ActivationState.AWAITING_CONSENT : existing.state();
         String contextRevision = contextChanged ? Ids.newId().toString() : existing.contextRevision();
         ChatActivation updated = new ChatActivation(existing.id(), existing.tenantId(), chatId, state,
-                purpose, String.join(",", providers), this.properties.consent().currentVersion(),
+                existing.epoch(), purpose, String.join(",", providers), this.properties.consent().currentVersion(),
                 contextRevision, approvedFrom, approvedTo, retentionDays, existing.membershipFingerprint(),
                 contextChanged ? "Processing context changed; consent must be re-collected" : existing.pauseReason(),
                 existing.activatedAt(), existing.activatedByUserId());
@@ -260,11 +267,5 @@ public class ChatActivationService {
         if (!McpScopes.KNOWN_PROVIDERS.containsAll(providers)) {
             throw new IllegalArgumentException("validation.unknownProvider");
         }
-    }
-
-    private UUID existingId(AuthenticatedActor actor, UUID chatId) {
-        return this.activationRepository.find(actor.tenantId(), chatId)
-                .map(ChatActivation::id)
-                .orElseGet(Ids::newId);
     }
 }

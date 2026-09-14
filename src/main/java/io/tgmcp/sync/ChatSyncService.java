@@ -158,18 +158,31 @@ public class ChatSyncService {
             }
 
             int ingested = 0;
-            ingested += pullForward(tenantId, chat, ref, checkpoint, windowStart, windowEnd);
-            ingested += backfill(tenantId, chat, ref, windowStart, windowEnd);
-            int revisions = applyRevisions(tenantId, chat, ref, checkpoint, now);
+            try {
+                ingested += pullForward(tenantId, chat, ref, checkpoint, windowStart, windowEnd, activation.epoch());
+                ingested += backfill(tenantId, chat, ref, windowStart, windowEnd, activation.epoch());
+                int revisions = applyRevisions(tenantId, chat, ref, checkpoint, now, activation.epoch());
 
-            SyncCheckpoint refreshed = this.checkpointRepository.findOrCreate(tenantId, chatId);
-            this.checkpointRepository.recordSuccess(tenantId, chatId,
-                    refreshed.newestSyncedMessageId(), refreshed.oldestSyncedMessageId(),
-                    refreshed.syncedFrom(), refreshed.syncedTo(), refreshed.backfillComplete(), now);
+                SyncCheckpoint refreshed = this.checkpointRepository.findOrCreate(tenantId, chatId);
+                this.checkpointRepository.recordSuccess(tenantId, chatId,
+                        refreshed.newestSyncedMessageId(), refreshed.oldestSyncedMessageId(),
+                        refreshed.syncedFrom(), refreshed.syncedTo(), refreshed.backfillComplete(), now);
 
-            this.auditService.system(tenantId, AuditAction.SYNC_SUCCEEDED, chatId, AuditService.ALLOWED,
-                    Map.of("messagesIngested", ingested, "revisionsApplied", revisions));
-            return new SyncOutcome(SyncOutcome.Status.SYNCED, ingested, revisions, "ok");
+                this.auditService.system(tenantId, AuditAction.SYNC_SUCCEEDED, chatId, AuditService.ALLOWED,
+                        Map.of("messagesIngested", ingested, "revisionsApplied", revisions));
+                return new SyncOutcome(SyncOutcome.Status.SYNCED, ingested, revisions, "ok");
+            }
+            catch (ConcurrentRevocationException ex) {
+                // Security-audit finding F07: access was revoked (and, in the ABA case, possibly
+                // re-proposed under a fresh epoch) while this run already held content fetched
+                // from Telegram but not yet committed. requireNotFenced() below caught it before
+                // that content reached the database, so nothing revoked-against was stored.
+                this.auditService.system(tenantId, AuditAction.SYNC_HALTED, chatId, AuditService.DENIED,
+                        Map.of("reason", "activation changed during sync (revoked or superseded)",
+                                "messagesIngestedBeforeAbort", ingested));
+                return new SyncOutcome(SyncOutcome.Status.HALTED, ingested, 0,
+                        "Activation changed during sync; aborted before committing further content");
+            }
         }
         catch (TelegramFloodWaitException ex) {
             // Telegram told us exactly how long to wait. Honour it rather than backing off blindly.
@@ -297,7 +310,7 @@ public class ChatSyncService {
 
     /** Incremental catch-up: everything newer than the newest id we already hold. */
     private int pullForward(UUID tenantId, Chat chat, ConnectionRef ref, SyncCheckpoint checkpoint,
-                            Instant windowStart, Instant windowEnd) {
+                            Instant windowStart, Instant windowEnd, long epoch) {
         int ingested = 0;
         Long cursor = checkpoint.newestSyncedMessageId();
         for (int page = 0; page < this.properties.sync().maxPagesPerRun(); page++) {
@@ -307,6 +320,7 @@ public class ChatSyncService {
             if (remotePage.messages().isEmpty()) {
                 break;
             }
+            requireNotFenced(tenantId, chat.id(), epoch);
             ingested += store(tenantId, chat, remotePage.messages());
             cursor = remotePage.messages().get(remotePage.messages().size() - 1).messageId();
             if (!remotePage.hasMore()) {
@@ -317,7 +331,8 @@ public class ChatSyncService {
     }
 
     /** Bounded backwards backfill, stopping at the approved/retention floor. */
-    private int backfill(UUID tenantId, Chat chat, ConnectionRef ref, Instant windowStart, Instant windowEnd) {
+    private int backfill(UUID tenantId, Chat chat, ConnectionRef ref, Instant windowStart, Instant windowEnd,
+                         long epoch) {
         SyncCheckpoint checkpoint = this.checkpointRepository.findOrCreate(tenantId, chat.id());
         if (checkpoint.backfillComplete()) {
             return 0;
@@ -333,6 +348,7 @@ public class ChatSyncService {
                 complete = true;
                 break;
             }
+            requireNotFenced(tenantId, chat.id(), epoch);
             ingested += store(tenantId, chat, remotePage.messages());
             cursor = remotePage.messages().get(0).messageId();
             if (!remotePage.hasMore()) {
@@ -350,13 +366,14 @@ public class ChatSyncService {
 
     /** Applies upstream edits and deletions to rows we already hold. */
     private int applyRevisions(UUID tenantId, Chat chat, ConnectionRef ref, SyncCheckpoint checkpoint,
-                               Instant now) {
+                               Instant now, long epoch) {
         Instant since = checkpoint.lastSuccessAt() == null
                 ? now.minus(Duration.ofDays(1)) : checkpoint.lastSuccessAt();
         List<RemoteMessage> revisions = this.gateway.fetchRevisions(ref, chat.tgChatId(), since,
                 this.properties.sync().pageSize());
         int applied = 0;
         for (RemoteMessage revision : revisions) {
+            requireNotFenced(tenantId, chat.id(), epoch);
             if (revision.deleted()) {
                 applied += this.messageRepository.markDeleted(tenantId, chat.id(), revision.messageId(), now);
             }
@@ -366,6 +383,26 @@ public class ChatSyncService {
             }
         }
         return applied;
+    }
+
+    /**
+     * Security-audit finding F07: re-checked immediately before every content commit inside a
+     * sync run, so a revoke (or a revoke-then-reactivate cycle, which only a fencing epoch and
+     * not a plain state check can catch) that lands while this run is mid-fetch stops it before
+     * any further content lands, rather than only being noticed on the next scheduled run.
+     */
+    private void requireNotFenced(UUID tenantId, UUID chatId, long epoch) {
+        Optional<ChatActivation> current = this.activationRepository.find(tenantId, chatId);
+        if (current.isEmpty() || current.get().state() != ActivationState.ACTIVE
+                || current.get().epoch() != epoch) {
+            throw new ConcurrentRevocationException();
+        }
+    }
+
+    private static final class ConcurrentRevocationException extends RuntimeException {
+        ConcurrentRevocationException() {
+            super(null, null, false, false);
+        }
     }
 
     private int store(UUID tenantId, Chat chat, List<RemoteMessage> messages) {
