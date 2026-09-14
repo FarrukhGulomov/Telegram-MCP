@@ -27,8 +27,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationContext;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientRegistrationAuthenticationValidator;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
@@ -57,6 +61,24 @@ public class AuthorizationServerConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AuthorizationServerConfig.class);
 
+    /**
+     * Security-audit finding F09: rejects any Dynamic Client Registration request that
+     * declares a {@code provider:*} scope for itself. Those scopes are what every
+     * provider-gated MCP response ultimately trusts, so they must only ever be granted to a
+     * client that was registered through a trusted path -- never one an anonymous caller
+     * chose for itself over the open registration endpoint.
+     */
+    private static void rejectSelfRegisteredProviderScope(OAuth2ClientRegistrationAuthenticationContext context) {
+        OAuth2ClientRegistrationAuthenticationToken authentication = context.getAuthentication();
+        java.util.List<String> scopes = authentication.getClientRegistration().getScopes();
+        if (scopes != null && scopes.stream().anyMatch(scope -> scope.startsWith(McpScopes.PROVIDER_PREFIX))) {
+            throw new OAuth2AuthenticationException(new OAuth2Error("invalid_client_metadata",
+                    "Dynamic client registration cannot claim a provider identity (scopes starting with '"
+                            + McpScopes.PROVIDER_PREFIX + "'); that identity is reserved to clients "
+                            + "registered through a trusted, non-self-service path.", null));
+        }
+    }
+
     @Bean
     @Order(1)
     public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http) throws Exception {
@@ -76,10 +98,20 @@ public class AuthorizationServerConfig {
                         //    which real MCP clients do (they declare the scope they intend to use).
                         //    We swap in Spring's own SIMPLE_SCOPE_VALIDATOR, a documented no-op
                         //    alternative, and accept the client's declared scope as its registered
-                        //    scope. This does not widen what data is reachable: every MCP tool call
-                        //    still requires a real user's own login at /oauth2/authorize, and the
-                        //    resulting token's tenant/user identity — not the client's self-declared
-                        //    scope — is what every chat-level authorization check keys on.
+                        //    scope -- but layered with rejectSelfRegisteredProviderScope() below
+                        //    (security audit finding F09): SIMPLE_SCOPE_VALIDATOR by itself would
+                        //    let ANY anonymous registrant declare a provider:* scope for itself,
+                        //    which is exactly the identity chat_activations.provider_scope and
+                        //    every provider-gated MCP response trust -- an unregistered impostor
+                        //    client could self-register claiming to be "the real Claude" or "the
+                        //    real ChatGPT" and, once a user completed the ordinary login-and-
+                        //    consent flow at /oauth2/authorize, walk away with a token scoped to
+                        //    read content that was only ever meant for the genuine provider. A
+                        //    provider:* scope must only ever reach a client that was registered
+                        //    through a trusted, non-self-service path (today: DemoDataSeeder).
+                        //    mcp:read remains open to self-registration, since it grants nothing
+                        //    beyond "this client may attempt MCP calls" -- chat-level access is
+                        //    still gated entirely by the authenticated user's own tenant/chat data.
                         .clientRegistrationEndpoint(registration -> registration
                                 .openRegistrationAllowed(true)
                                 .authenticationProviders(providers -> providers.forEach(provider -> {
@@ -87,7 +119,8 @@ public class AuthorizationServerConfig {
                                         p.setAuthenticationValidator(
                                                 OAuth2ClientRegistrationAuthenticationValidator.DEFAULT_REDIRECT_URI_VALIDATOR
                                                         .andThen(OAuth2ClientRegistrationAuthenticationValidator.DEFAULT_JWK_SET_URI_VALIDATOR)
-                                                        .andThen(OAuth2ClientRegistrationAuthenticationValidator.SIMPLE_SCOPE_VALIDATOR));
+                                                        .andThen(OAuth2ClientRegistrationAuthenticationValidator.SIMPLE_SCOPE_VALIDATOR)
+                                                        .andThen(AuthorizationServerConfig::rejectSelfRegisteredProviderScope));
                                     }
                                 })))
                         .oidc(Customizer.withDefaults()))

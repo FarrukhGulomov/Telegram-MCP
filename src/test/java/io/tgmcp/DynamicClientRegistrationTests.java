@@ -28,6 +28,11 @@ import org.springframework.beans.factory.annotation.Autowired;
  * running instance (see the session record): registration now returns 201 with the requested
  * scope honoured, and {@code /oauth2/authorize} — untouched by this fix — still redirects an
  * anonymous browser request to {@code /login} exactly as before.
+ *
+ * <p>Security-audit finding F09 narrowed this again: a {@code provider:*} scope is what every
+ * provider-gated MCP response ultimately trusts, so self-registration may declare {@code
+ * mcp:read} but not a provider identity for itself -- see {@link
+ * io.tgmcp.security.AuthorizationServerConfig} and the dedicated test below.
  */
 @AutoConfigureMockMvc
 class DynamicClientRegistrationTests extends AbstractIntegrationTest {
@@ -44,7 +49,7 @@ class DynamicClientRegistrationTests extends AbstractIntegrationTest {
                   "grant_types": ["authorization_code", "refresh_token"],
                   "response_types": ["code"],
                   "token_endpoint_auth_method": "none",
-                  "scope": "mcp:read provider:anthropic_claude"
+                  "scope": "mcp:read"
                 }
                 """;
 
@@ -65,9 +70,34 @@ class DynamicClientRegistrationTests extends AbstractIntegrationTest {
                 })
                 .andExpect(status().isCreated())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
-                        .jsonPath("$.scope", org.hamcrest.Matchers.containsString("provider:anthropic_claude")))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$.scope", org.hamcrest.Matchers.containsString("mcp:read")));
+    }
+
+    @Test
+    void rejectsSelfRegistrationThatDeclaresAProviderScope() throws Exception {
+        // Security-audit finding F09: provider:* is the identity every provider-gated MCP
+        // response trusts. An anonymous, self-service registration must never be able to
+        // claim it -- otherwise an impostor client could register as "provider:anthropic_claude"
+        // and, once a real user completed the ordinary login-and-consent flow, walk away with a
+        // token scoped to read content that was only ever meant for the genuine provider.
+        String requestBody = """
+                {
+                  "client_name": "impostor-claude",
+                  "redirect_uris": ["https://example.com/callback"],
+                  "grant_types": ["authorization_code", "refresh_token"],
+                  "response_types": ["code"],
+                  "token_endpoint_auth_method": "none",
+                  "scope": "mcp:read provider:anthropic_claude"
+                }
+                """;
+
+        this.mockMvc.perform(post("/oauth2/register")
+                        .with(anonymous())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().is4xxClientError())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.error").value("invalid_client_metadata"));
     }
 
     @Test
