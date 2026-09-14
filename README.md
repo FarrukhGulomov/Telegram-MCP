@@ -61,7 +61,7 @@ docker compose up --build
 
 This starts a real PostgreSQL (search uses a generated `tsvector`/GIN index and pagination
 uses row-value comparisons — an in-memory substitute would test something else) and runs the
-full suite: **139 tests**, ~35 seconds. See [Test results](#test-results) below for what's
+full suite: **178 tests**, ~30 seconds. See [Test results](#test-results) below for what's
 covered.
 
 ## Connecting Claude or ChatGPT
@@ -157,21 +157,59 @@ listed the specific questions that need answering in
 
 ## Test results
 
-139 tests, all passing, run against real PostgreSQL 16 (not H2/mocked):
+178 tests, all passing, run against real PostgreSQL 16 (not H2/mocked). This count reflects a
+security audit (see below) that added regression coverage for ten P0 findings on top of the
+original suite:
 
 | Suite | Count | Covers |
 |---|---|---|
 | `McpProtocolTests` | 16 | Real MCP SDK client: init, discovery, tool calls, auth rejections (bad/expired/wrong-audience/wrong-issuer/no-scope tokens) |
-| `AccessPolicyTests` | 18 | Cross-tenant denial, unknown-vs-unauthorized indistinguishability, every consent gap, provider scoping, window clamping |
-| `SyncBehaviourTests` | 16 | Idempotent ingestion, restart recovery, edits/deletions, membership-change pausing, flood-wait, exponential backoff, halt-on-auth-failure |
+| `AccessPolicyTests` | 18 | Cross-tenant denial, unknown-vs-unauthorized indistinguishability, every consent gap, provider scoping, window clamping, an immutable-context-revision reversion case |
+| `SyncBehaviourTests` | 21 | Idempotent ingestion, restart recovery, edits/deletions, membership-change pausing, flood-wait, exponential backoff, halt-on-auth-failure, PAUSED-chat ingestion refusal, concurrent-revoke fencing (incl. the revoke-then-reactivate ABA case) |
 | `PaginationAndLimitsTests` | 16 | Full pagination walk, 5 cursor-tampering variants, every input cap |
 | `RetentionAndRevocationTests` | 10 | Immediate access block, idempotent purge, mid-request revocation race, retention sweep removing rows from search |
 | `EndToEndMockFlowTests` | 4 | The full UI+MCP journey; CSRF rejection; XSS-escaping of Telegram-controlled titles |
 | `UntrustedContentTests` | 6 | The seeded prompt-injection message stays inert data in every response |
-| `CursorCodecTests`, `AudienceValidatorTests`, `KeyMaterialTests`, `RateLimitAndResponseCapTests`, `TdlibTelegramGatewayTests`, `TdlibErrorTranslationTests`, `BackoffTests` | 63 | Unit-level: cursor binding/tampering, RFC 8707 audience matching, key-length validation, rate limiting, response byte caps, TDLib JSON mapping, error classification |
+| `TelegramConnectionIsolationTests` | 3 | Single-active-owner guard on the TDLIB adapter, no-op under MOCK |
+| `ConsentMethodGuardTests` | 5 | Self-service consent always rejected; demo-synthetic consent rejected once a real adapter is in play |
+| `ConsentContextRevisionTests` | 2 | Widening retention alone invalidates consent; reverting to an old context never resurrects its old consent |
+| `DynamicClientRegistrationTests` | 3 | Open DCR accepts `mcp:read`, rejects a self-declared `provider:*` scope, still requires `redirect_uris` |
+| `TelegramConfigurationTests`, `ProductionSafetyValidatorTests` | 11 | TDLIB startup warns about the missing edit/delete pipeline; real-account startup refuses every unsafe demo/secret/HTTPS combination |
+| `ChatFormValidationTests`, `ForwardedHeaderRedirectTests`, `LocalizationTests` | 9 | Chat form validation errors surface in the UI instead of a raw 400; reverse-proxy header handling; every enum-backed label resolves in all three locales |
+| `CursorCodecTests`, `AudienceValidatorTests`, `KeyMaterialTests`, `RateLimitAndResponseCapTests`, `TdlibTelegramGatewayTests`, `TdlibErrorTranslationTests`, `BackoffTests` | 54 | Unit-level: cursor binding/tampering, RFC 8707 audience matching, key-length validation, rate limiting, response byte caps, TDLib JSON mapping (incl. multi-page membership pagination), error classification |
 
 No test result here is asserted without having actually been run in this environment; the
 numbers above are from the run in this session's build log.
+
+## Security audit (2026-09)
+
+A senior architecture/security/product/DevOps audit against this codebase produced twenty
+findings (F01–F20), ten of them P0 (blocking). All ten P0 findings are fixed, each as its own
+commit with its own regression test:
+
+| ID | Risk | Fix | Files | Verified by |
+|---|---|---|---|---|
+| F01 | The single process-wide TDLib session let a second tenant/owner silently take over an in-flight real-account connection | Hard single-active-owner guard before `beginLogin()` on the TDLIB adapter (no-op under MOCK) | `TelegramConnectionRepository`, `TelegramConnectionService` | `TelegramConnectionIsolationTests` (3) |
+| F02 | `SELF_SERVICE_LINK` consent had no participant-identity verification behind it; `DEMO_SYNTHETIC` consent could be recorded against a real account | Both methods rejected outright — the first has no real flow to fall back to, the second only ever valid under the MOCK adapter | `ConsentService`, `chat.html` | `ConsentMethodGuardTests` (5) |
+| F03 | Reverting settings to values that matched an old, still-valid consent record silently resurrected that old consent; retention widening didn't invalidate anything | Immutable `contextRevision` (fresh random UUID) stamped on every activation and consent record; consent only ever covers the exact revision it was granted under | `ChatActivation`, `ConsentRecord`, `ConsentService`, `ChatActivationService`, `V3` migration | `ConsentContextRevisionTests` (2), `AccessPolicyTests` |
+| F04 | Supergroups over 200 members silently reported only the first page; a transient empty membership response was treated as "nothing changed" | Paginated `listParticipants()` (capped at 5000); an empty response after a known non-empty membership now pauses instead of being ignored | `TdlibTelegramGateway`, `ChatSyncService` | `TdlibTelegramGatewayTests`, `SyncBehaviourTests` |
+| F05 | A participant's messages kept circulating after they left without ever having valid consent for the chat's current context | Their messages are purged the moment their departure is detected, unless they hold valid consent for the current context revision | `ChatParticipantRepository`, `MessageRepository`, `ChatSyncService` | `SyncBehaviourTests` |
+| F06 | A PAUSED chat could still ingest new content via the always-reachable manual "Sync now" action | Only an ACTIVE chat with verified-complete coverage may fetch new content; every other retainable state stops before fetching | `ChatSyncService` | `SyncBehaviourTests` |
+| F07 | A revoke landing mid-fetch (including revoke-then-reactivate) had no way to stop content already fetched but not yet stored | Monotonic `epoch` fencing token, bumped only by revoke; re-checked before every commit inside a sync run | `ChatActivation`, `ChatActivationRepository`, `ChatActivationService`, `ChatSyncService`, `V4` migration | `SyncBehaviourTests` |
+| F08 | A comment claimed the TDLIB adapter's missing edit/delete pipeline was already handled by a nonexistent class | False comment replaced with an accurate one; loud startup warning; documented as a blocking gap | `TdlibTelegramGateway`, `TelegramConfiguration`, `docs/production-prerequisites.md` | `TelegramConfigurationTests` |
+| F09 | Open dynamic client registration let any anonymous caller self-declare a `provider:*` scope, letting an impostor client claim to be Claude or ChatGPT | Registration validator now rejects any self-declared `provider:*` scope; `mcp:read` remains open | `AuthorizationServerConfig` | `DynamicClientRegistrationTests` |
+| F10 | Nothing stopped starting with real Telegram access authorized alongside demo seeding, dev-derived keys, or plain-HTTP OAuth/cookies | Fail-fast `ProductionSafetyValidator`, a no-op unless real access is authorized, then refuses to start with every unsafe setting listed at once | `ProductionSafetyValidator` (new) | `ProductionSafetyValidatorTests` (10) |
+
+**Remaining risk after F01–F10:** F11–F20 (P1 code-quality/product findings from the same
+audit) are analyzed but not yet fixed — notably F11 (the native TDLib receive loop can
+deadlock synchronous requests against itself, which is also what blocks building the
+edit/delete pipeline F08 documents as missing) and F12 (real-adapter history pagination can
+skip messages across a large backlog). Separately, the audit's platform/legal-risk section
+flags that Telegram's API Terms §1.5 and Content Licensing terms narrowly restrict AI-purpose
+use and require individual, informed, ongoing, context-limited consent from every participant
+— account-owner consent alone is not sufficient, and this has not been reviewed with counsel.
+See [docs/production-prerequisites.md](docs/production-prerequisites.md) §1 for the specific
+unresolved questions.
 
 ## Configuration reference
 
