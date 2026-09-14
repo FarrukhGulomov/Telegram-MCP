@@ -8,6 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import io.modelcontextprotocol.spec.McpSchema;
 import io.tgmcp.access.AccessErrorCode;
@@ -74,7 +76,7 @@ public class McpTools {
     // --- tools -------------------------------------------------------------------------
 
     public McpSchema.CallToolResult listAllowedChats(McpCallContext context, McpSchema.CallToolRequest request) {
-        return guarded(context, McpToolNames.LIST_ALLOWED_CHATS, null, () -> {
+        return guarded(context, McpToolNames.LIST_ALLOWED_CHATS, reportChatIds -> {
             new ToolArguments(request.arguments()).rejectUnknown(List.of());
             Instant now = this.clock.instant();
 
@@ -94,11 +96,12 @@ public class McpTools {
     public McpSchema.CallToolResult searchMessages(McpCallContext context, McpSchema.CallToolRequest request) {
         // Parsing happens inside guarded() so that an argument error becomes a structured
         // INVALID_ARGUMENT result rather than escaping as a protocol-level exception.
-        return guarded(context, McpToolNames.SEARCH_MESSAGES, null, () -> {
+        return guarded(context, McpToolNames.SEARCH_MESSAGES, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
             args.rejectUnknown(List.of("chat_ids", "query", "from", "to", "cursor", "limit"));
 
             List<UUID> chatIds = args.requiredUuidList("chat_ids", this.limits.maxChatIdsPerQuery());
+            reportChatIds.accept(chatIds);
             String query = args.requiredText("query", this.limits.maxQueryLength());
             Instant from = args.requiredInstant("from");
             Instant to = args.requiredInstant("to");
@@ -174,11 +177,12 @@ public class McpTools {
     }
 
     public McpSchema.CallToolResult getChatHistory(McpCallContext context, McpSchema.CallToolRequest request) {
-        return guarded(context, McpToolNames.GET_CHAT_HISTORY, null, () -> {
+        return guarded(context, McpToolNames.GET_CHAT_HISTORY, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
             args.rejectUnknown(List.of("chat_id", "from", "to", "cursor", "limit"));
 
             UUID chatId = args.requiredUuid("chat_id");
+            reportChatIds.accept(List.of(chatId));
             Instant from = args.requiredInstant("from");
             Instant to = args.requiredInstant("to");
             ToolArguments.validateRange(from, to, this.limits.maxRangeDays());
@@ -237,11 +241,12 @@ public class McpTools {
     }
 
     public McpSchema.CallToolResult getMessageContext(McpCallContext context, McpSchema.CallToolRequest request) {
-        return guarded(context, McpToolNames.GET_MESSAGE_CONTEXT, null, () -> {
+        return guarded(context, McpToolNames.GET_MESSAGE_CONTEXT, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
             args.rejectUnknown(List.of("chat_id", "message_id", "before", "after"));
 
             UUID chatId = args.requiredUuid("chat_id");
+            reportChatIds.accept(List.of(chatId));
             long messageId = args.requiredLong("message_id");
             int before = args.optionalInt("before", 5, 0, this.limits.maxContextMessages());
             int after = args.optionalInt("after", 5, 0, this.limits.maxContextMessages());
@@ -286,10 +291,11 @@ public class McpTools {
     }
 
     public McpSchema.CallToolResult getSyncStatus(McpCallContext context, McpSchema.CallToolRequest request) {
-        return guarded(context, McpToolNames.GET_SYNC_STATUS, null, () -> {
+        return guarded(context, McpToolNames.GET_SYNC_STATUS, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
             args.rejectUnknown(List.of("chat_id"));
             UUID chatId = args.requiredUuid("chat_id");
+            reportChatIds.accept(List.of(chatId));
 
             Instant now = this.clock.instant();
             // requireSynced=false: reporting "not synced yet" is the point of this tool.
@@ -307,29 +313,46 @@ public class McpTools {
 
     // --- shared plumbing ---------------------------------------------------------------
 
-    private McpSchema.CallToolResult guarded(McpCallContext context, String tool, UUID chatId,
-                                             java.util.function.Supplier<McpSchema.CallToolResult> body) {
+    /**
+     * Security-audit finding F20: {@code guarded} used to take a single {@code chatId}, fixed
+     * at the call site before any request argument had been parsed -- every call site passed
+     * {@code null}, so every audit row this method wrote (rate-limited, allowed, denied) was
+     * unattributed to any chat, for every tool, not only the multi-chat ones. {@code body} is
+     * instead handed a callback it invokes with the chat id(s) the request actually names, as
+     * soon as they are parsed and before anything that could throw runs -- so a denial is
+     * attributed exactly as precisely as a success. A tool touching several chats (only {@link
+     * #searchMessages}) reports all of them and gets one audit row per chat, matching how every
+     * other multi-chat action in this codebase (see {@code ChatActivationService#pause} from
+     * finding F16) already records one row per chat rather than one row with none.
+     */
+    private McpSchema.CallToolResult guarded(McpCallContext context, String tool,
+                                             Function<Consumer<List<UUID>>, McpSchema.CallToolResult> body) {
+        List<UUID> touchedChatIds = new ArrayList<>();
+        Consumer<List<UUID>> reportChatIds = ids -> {
+            touchedChatIds.clear();
+            touchedChatIds.addAll(ids);
+        };
         String rateKey = context.actor().tenantId() + ":" + context.actor().userId();
         if (!this.rateLimiter.tryAcquire(rateKey)) {
-            this.auditService.record(context.actor(), AuditAction.MCP_RATE_LIMITED, chatId,
-                    AuditService.DENIED, Map.of("tool", tool));
+            recordPerChat(context, AuditAction.MCP_RATE_LIMITED, touchedChatIds, AuditService.DENIED,
+                    Map.of("tool", tool));
             return this.responses.error(AccessErrorCode.RATE_LIMITED,
                     "Too many requests. Retry shortly.");
         }
         try {
-            McpSchema.CallToolResult result = body.get();
-            this.auditService.record(context.actor(), AuditAction.MCP_TOOL_CALL, chatId,
-                    AuditService.ALLOWED, Map.of("tool", tool, "provider", context.provider()));
+            McpSchema.CallToolResult result = body.apply(reportChatIds);
+            recordPerChat(context, AuditAction.MCP_TOOL_CALL, touchedChatIds, AuditService.ALLOWED,
+                    Map.of("tool", tool, "provider", context.provider()));
             return result;
         }
         catch (ChatAccessException ex) {
-            this.auditService.record(context.actor(), AuditAction.MCP_ACCESS_DENIED, chatId,
-                    AuditService.DENIED, Map.of("tool", tool, "code", ex.code().name()));
+            recordPerChat(context, AuditAction.MCP_ACCESS_DENIED, touchedChatIds, AuditService.DENIED,
+                    Map.of("tool", tool, "code", ex.code().name()));
             return this.responses.error(ex.code(), ex.getMessage());
         }
         catch (CursorException ex) {
-            this.auditService.record(context.actor(), AuditAction.MCP_ACCESS_DENIED, chatId,
-                    AuditService.DENIED, Map.of("tool", tool, "code", "INVALID_CURSOR"));
+            recordPerChat(context, AuditAction.MCP_ACCESS_DENIED, touchedChatIds, AuditService.DENIED,
+                    Map.of("tool", tool, "code", "INVALID_CURSOR"));
             return this.responses.error(AccessErrorCode.INVALID_ARGUMENT,
                     "The pagination cursor is not valid for this request. Start a new query.");
         }
@@ -338,6 +361,17 @@ public class McpTools {
             log.error("MCP tool {} failed", tool, ex);
             return this.responses.error(AccessErrorCode.INTERNAL_ERROR,
                     "The request could not be completed.");
+        }
+    }
+
+    private void recordPerChat(McpCallContext context, String action, List<UUID> chatIds, String outcome,
+                               Map<String, Object> detail) {
+        if (chatIds.isEmpty()) {
+            this.auditService.record(context.actor(), action, null, outcome, detail);
+            return;
+        }
+        for (UUID chatId : chatIds) {
+            this.auditService.record(context.actor(), action, chatId, outcome, detail);
         }
     }
 

@@ -13,8 +13,8 @@ import tools.jackson.databind.ObjectMapper;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Append-only audit trail for access metadata, consent changes, sync failures and
@@ -29,15 +29,36 @@ public class AuditService {
 
     private final JdbcClient jdbc;
     private final ObjectMapper objectMapper;
+    /**
+     * Security-audit finding F20: {@code record(AuthenticatedActor, ...)} and {@code system(...)}
+     * both used to call the {@code @Transactional(REQUIRES_NEW)} 7-arg {@code record(...)}
+     * overload directly on {@code this} -- a same-bean self-invocation that bypasses the Spring
+     * AOP proxy entirely, so the annotation was silently never honoured through either call
+     * path (only a direct external call to the 7-arg overload would have gone through the
+     * proxy). In practice every audit write in this codebase goes through one of those two
+     * paths, so REQUIRES_NEW -- the entire point of which is that an audit row must survive a
+     * surrounding business transaction that later rolls back -- was never actually applied.
+     * An imperative {@link TransactionTemplate}, exactly as {@link
+     * io.tgmcp.telegram.TelegramConnectionService} already uses for the identical reason
+     * (finding F13), does not depend on proxying and so cannot be defeated by an internal call.
+     */
+    private final TransactionTemplate requiresNewTransaction;
 
-    public AuditService(JdbcClient jdbc, ObjectMapper objectMapper) {
+    public AuditService(JdbcClient jdbc, ObjectMapper objectMapper, PlatformTransactionManager transactionManager) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
+        this.requiresNewTransaction = new TransactionTemplate(transactionManager);
+        this.requiresNewTransaction.setPropagationBehavior(TransactionTemplate.PROPAGATION_REQUIRES_NEW);
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(UUID tenantId, ActorType actorType, String actorId, String action,
                        UUID chatId, String outcome, Map<String, Object> detail) {
+        this.requiresNewTransaction.executeWithoutResult(status ->
+                insert(tenantId, actorType, actorId, action, chatId, outcome, detail));
+    }
+
+    private void insert(UUID tenantId, ActorType actorType, String actorId, String action,
+                        UUID chatId, String outcome, Map<String, Object> detail) {
         jdbc.sql("""
                         INSERT INTO audit_events (id, tenant_id, actor_type, actor_id, action, chat_id, outcome, detail)
                         VALUES (:id, :tenantId, :actorType, :actorId, :action, :chatId, :outcome, CAST(:detail AS jsonb))
