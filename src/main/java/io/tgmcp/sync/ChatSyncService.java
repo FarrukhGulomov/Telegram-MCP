@@ -140,6 +140,17 @@ public class ChatSyncService {
                         "Paused pending consent");
             }
 
+            // Security-audit finding F06: PAUSED.mayRetainContent()==true (so the gate above
+            // does not purge it), but "may keep what it already has" is not "may keep fetching
+            // more" -- a chat is commonly paused precisely because consent or membership is
+            // not currently trustworthy, and a manually triggered sync (the UI's "Sync now")
+            // reached this same method with no separate check of its own. Only an ACTIVE chat
+            // with verified-complete coverage (just confirmed above) may ingest new content;
+            // every other retainable-but-not-active state stops here.
+            if (activation.state() != ActivationState.ACTIVE) {
+                return SyncOutcome.skipped("Chat is " + activation.state() + "; not fetching new content");
+            }
+
             Instant windowStart = activation.effectiveFrom(now);
             Instant windowEnd = activation.approvedTo().isBefore(now) ? activation.approvedTo() : now;
             if (!windowEnd.isAfter(windowStart)) {

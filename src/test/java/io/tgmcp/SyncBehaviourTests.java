@@ -265,6 +265,32 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
                 .orElseThrow().state()).isEqualTo(ActivationState.PAUSED);
     }
 
+    /**
+     * Security-audit finding F06: PAUSED.mayRetainContent() is true (a pause keeps what a
+     * chat already has), which previously also let sync() keep fetching and storing *new*
+     * content for a PAUSED chat -- reachable through the UI's manual "Sync now" button with no
+     * separate check of its own -- even though the chat was paused specifically because
+     * consent coverage was no longer trustworthy. Only ACTIVE chats may ingest new content now.
+     */
+    @Test
+    void manuallySyncingAPausedChatDoesNotIngestNewContent() {
+        sync();
+        this.jdbcTemplate.update("UPDATE consent_records SET revoked_at = now() WHERE chat_id = ?",
+                ready().chat().id());
+        SyncOutcome pausingOutcome = sync();
+        assertThat(pausingOutcome.status()).isEqualTo(SyncOutcome.Status.PAUSED_CONSENT);
+        long storedWhilePausing = storedCount();
+
+        mockGateway().appendMessage(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.ALICE,
+                "Alice Nakamura (synthetic)", "Posted while the chat is paused for consent review.");
+        SyncOutcome manualSyncWhilePaused = sync();
+
+        assertThat(manualSyncWhilePaused.status()).isNotEqualTo(SyncOutcome.Status.SYNCED);
+        assertThat(manualSyncWhilePaused.messagesIngested()).isZero();
+        assertThat(storedCount()).as("no new content may be ingested while paused")
+                .isEqualTo(storedWhilePausing);
+    }
+
     // --- failure handling ------------------------------------------------------------------
 
     @Test
