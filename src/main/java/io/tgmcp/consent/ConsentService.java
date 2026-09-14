@@ -15,6 +15,7 @@ import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatParticipant;
 import io.tgmcp.chat.ChatParticipantRepository;
 import io.tgmcp.common.Ids;
+import io.tgmcp.message.MessageRepository;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.tenancy.AuthenticatedActor;
@@ -33,17 +34,20 @@ public class ConsentService {
 
     private final ConsentRepository consentRepository;
     private final ChatParticipantRepository participantRepository;
+    private final MessageRepository messageRepository;
     private final AuditService auditService;
     private final TelegramGateway gateway;
     private final Clock clock;
 
     public ConsentService(ConsentRepository consentRepository,
                           ChatParticipantRepository participantRepository,
+                          MessageRepository messageRepository,
                           AuditService auditService,
                           TelegramGateway gateway,
                           Clock clock) {
         this.consentRepository = consentRepository;
         this.participantRepository = participantRepository;
+        this.messageRepository = messageRepository;
         this.auditService = auditService;
         this.gateway = gateway;
         this.clock = clock;
@@ -127,8 +131,17 @@ public class ConsentService {
     @Transactional
     public void revokeParticipant(AuthenticatedActor actor, UUID chatId, long participantTgUserId, String reason) {
         int affected = this.consentRepository.revokeParticipant(actor.tenantId(), chatId, participantTgUserId, reason);
+        // Security-audit finding F16: revoking one participant's consent used to only pause
+        // the chat (which, since PAUSED.mayRetainContent()==true, keeps every message on
+        // disk) -- so a participant who withdrew consent had their past messages sit there
+        // for the full retention period regardless, contradicting the "revoking access
+        // deletes the stored copy" promise this application makes. Purge that participant's
+        // own messages here, in the same transaction as the revocation itself, the same way
+        // ChatSyncService.purgeMessagesFromUnconsentedDepartures does when they leave instead.
+        int deleted = this.messageRepository.deleteForSender(actor.tenantId(), chatId, participantTgUserId);
         this.auditService.record(actor, AuditAction.CONSENT_REVOKED, chatId, AuditService.ALLOWED,
-                Map.of("participantTgUserId", participantTgUserId, "recordsRevoked", affected));
+                Map.of("participantTgUserId", participantTgUserId, "recordsRevoked", affected,
+                        "messagesDeleted", deleted));
     }
 
     @Transactional

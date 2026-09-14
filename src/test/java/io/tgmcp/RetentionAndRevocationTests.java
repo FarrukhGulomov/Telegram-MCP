@@ -8,6 +8,7 @@ import io.tgmcp.chat.ActivationState;
 import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatActivationRepository;
 import io.tgmcp.chat.ChatActivationService;
+import io.tgmcp.consent.ConsentService;
 import io.tgmcp.mcp.McpCallContext;
 import io.tgmcp.mcp.McpTools;
 import io.tgmcp.message.MessageRepository;
@@ -17,6 +18,7 @@ import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
 import io.tgmcp.sync.ChatSyncService;
 import io.tgmcp.sync.RetentionService;
+import io.tgmcp.telegram.mock.SyntheticDataset;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,6 +52,9 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
 
     @Autowired
     private ChatActivationRepository activations;
+
+    @Autowired
+    private ConsentService consentService;
 
     /** Spied so that a revocation can be injected between the read and the response. */
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
@@ -106,6 +111,35 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
         assertThat(this.activations.find(chat.team().tenant().id(), chat.chat().id())
                 .orElseThrow().state()).isEqualTo(ActivationState.REVOKED);
         assertThat(this.messages.countForChat(chat.team().tenant().id(), chat.chat().id())).isZero();
+    }
+
+    @Test
+    void revokingOneParticipantsConsentPurgesOnlyTheirOwnMessagesImmediately() {
+        // Security-audit finding F16: revoking a single participant's consent used to only
+        // pause the chat -- and PAUSED.mayRetainContent() is true, so every message stayed on
+        // disk regardless, contradicting the "revoking access deletes the stored copy"
+        // promise. The purge must happen immediately, in the same call, not wait for that
+        // participant to also physically leave the chat before F05's departure-purge logic
+        // would ever notice.
+        Fixtures.ReadyChat chat = synced();
+        long danaMessagesBefore = this.jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM messages WHERE chat_id = ? AND sender_tg_user_id = ?",
+                Long.class, chat.chat().id(), SyntheticDataset.DANA);
+        assertThat(danaMessagesBefore).as("fixture sanity: Dana authored some seeded messages").isPositive();
+        long totalBefore = this.messages.countForChat(chat.team().tenant().id(), chat.chat().id());
+
+        this.consentService.revokeParticipant(chat.team().actor(), chat.chat().id(), SyntheticDataset.DANA,
+                "withdrew consent");
+
+        long danaMessagesAfter = this.jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM messages WHERE chat_id = ? AND sender_tg_user_id = ?",
+                Long.class, chat.chat().id(), SyntheticDataset.DANA);
+        assertThat(danaMessagesAfter)
+                .as("Dana's own messages must be gone the instant her consent is revoked, before any resync")
+                .isZero();
+        assertThat(this.messages.countForChat(chat.team().tenant().id(), chat.chat().id()))
+                .as("nobody else's messages are touched")
+                .isEqualTo(totalBefore - danaMessagesBefore);
     }
 
     /**

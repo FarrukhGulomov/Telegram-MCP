@@ -9,7 +9,9 @@ import java.util.UUID;
 
 import io.tgmcp.audit.AuditAction;
 import io.tgmcp.audit.AuditService;
+import io.tgmcp.chat.ActivationState;
 import io.tgmcp.chat.Chat;
+import io.tgmcp.chat.ChatActivationService;
 import io.tgmcp.chat.ChatRepository;
 import io.tgmcp.common.Ids;
 import io.tgmcp.tenancy.AuthenticatedActor;
@@ -39,6 +41,7 @@ public class TelegramConnectionService {
 
     private final TelegramConnectionRepository connectionRepository;
     private final ChatRepository chatRepository;
+    private final ChatActivationService activationService;
     private final TelegramGateway gateway;
     private final SessionCipher sessionCipher;
     private final AuditService auditService;
@@ -47,6 +50,7 @@ public class TelegramConnectionService {
 
     public TelegramConnectionService(TelegramConnectionRepository connectionRepository,
                                      ChatRepository chatRepository,
+                                     ChatActivationService activationService,
                                      TelegramGateway gateway,
                                      SessionCipher sessionCipher,
                                      AuditService auditService,
@@ -54,6 +58,7 @@ public class TelegramConnectionService {
                                      PlatformTransactionManager transactionManager) {
         this.connectionRepository = connectionRepository;
         this.chatRepository = chatRepository;
+        this.activationService = activationService;
         this.gateway = gateway;
         this.sessionCipher = sessionCipher;
         this.auditService = auditService;
@@ -138,8 +143,24 @@ public class TelegramConnectionService {
         find(actor).ifPresent(connection -> {
             this.gateway.disconnect(connection.ref());
             this.connectionRepository.clearSession(actor.tenantId(), connection.id());
+            // Security-audit finding F16: without a live connection there is no way to keep
+            // verifying this account's chat membership or consent freshness, so every chat it
+            // had activated must stop being MCP-readable the moment it disconnects -- not keep
+            // silently serving whatever was already stored, indefinitely, as if nothing had
+            // changed. Pausing (not revoking) is deliberate: reconnecting the same account
+            // should let an operator resume, not have to re-collect consent for a disconnect
+            // that was never a data-deletion event.
+            int pausedChats = 0;
+            for (Chat chat : this.chatRepository.findByConnection(actor.tenantId(), connection.id())) {
+                if (this.activationService.find(actor, chat.id())
+                        .map(activation -> activation.state() == ActivationState.ACTIVE)
+                        .orElse(false)) {
+                    this.activationService.pause(actor, chat.id(), "Telegram connection disconnected");
+                    pausedChats++;
+                }
+            }
             this.auditService.record(actor, AuditAction.TELEGRAM_DISCONNECTED, null, AuditService.ALLOWED,
-                    Map.of("adapter", connection.adapter().name()));
+                    Map.of("adapter", connection.adapter().name(), "chatsPaused", pausedChats));
         });
     }
 
