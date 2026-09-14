@@ -44,7 +44,7 @@
         <tr th:if="${view.lastErrorCode != null}"><th>Last error</th>
             <td class="err" th:text="${view.lastErrorCode}"></td></tr>
       </table>
-      <form th:action="@{'/chats/' + ${view.chat.id} + '/sync'}" method="post" class="inline"
+      <form th:action="@{'/chats/' + ${view.chat.id} + '/sync'}" method="post" data-guard-resubmit class="inline"
             th:if="${view.selected}">
         <button type="submit">Sync now</button>
       </form>
@@ -54,7 +54,7 @@
       <h2 th:text="${view.selected} ? 'Approval settings' : 'Select this chat'">Select this chat</h2>
       <form th:action="${view.selected}
                         ? @{'/chats/' + ${view.chat.id} + '/settings'}
-                        : @{'/chats/' + ${view.chat.id} + '/select'}" method="post">
+                        : @{'/chats/' + ${view.chat.id} + '/select'}" method="post" data-guard-resubmit>
         <label for="purpose">Purpose (participants consent to exactly this)</label>
         <input id="purpose" name="purpose" required maxlength="500"
                th:value="${view.activation != null} ? ${view.activation.purpose}
@@ -116,7 +116,7 @@
         <td th:text="${p.displayName}"></td>
         <td><code th:text="${p.tgUserId}"></code></td>
         <td>
-          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent'}" method="post" class="inline">
+          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent'}" method="post" data-guard-resubmit class="inline">
             <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
             <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
             <select name="method">
@@ -129,7 +129,7 @@
           </form>
         </td>
         <td>
-          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" method="post" class="inline">
+          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" method="post" data-guard-resubmit class="inline">
             <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
             <button type="submit" class="danger">Revoke</button>
           </form>
@@ -159,16 +159,16 @@
 
   <div class="card danger" th:if="${view.selected}">
     <h2>Access controls</h2>
-    <form th:action="@{'/chats/' + ${view.chat.id} + '/activate'}" method="post" class="inline">
+    <form th:action="@{'/chats/' + ${view.chat.id} + '/activate'}" method="post" data-guard-resubmit class="inline">
       <button type="submit">Activate</button>
     </form>
-    <form th:action="@{'/chats/' + ${view.chat.id} + '/pause'}" method="post" class="inline">
+    <form th:action="@{'/chats/' + ${view.chat.id} + '/pause'}" method="post" data-guard-resubmit class="inline">
       <button type="submit">Pause</button>
     </form>
-    <form th:action="@{'/chats/' + ${view.chat.id} + '/revoke'}" method="post" class="inline">
+    <form th:action="@{'/chats/' + ${view.chat.id} + '/revoke'}" method="post" data-guard-resubmit class="inline">
       <button type="submit" class="danger">Revoke consent and delete data</button>
     </form>
-    <form th:action="@{'/chats/' + ${view.chat.id} + '/delete-data'}" method="post" class="inline">
+    <form th:action="@{'/chats/' + ${view.chat.id} + '/delete-data'}" method="post" data-guard-resubmit class="inline">
       <button type="submit" class="danger">Delete stored data only</button>
     </form>
   </div>

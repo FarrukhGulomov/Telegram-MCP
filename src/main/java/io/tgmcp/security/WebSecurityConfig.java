@@ -92,7 +92,7 @@ public class WebSecurityConfig {
     @Order(3)
     public SecurityFilterChain managementUiFilterChain(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/login", "/css/**", "/actuator/health").permitAll()
+                        .requestMatchers("/login", "/css/**", "/js/**", "/actuator/health").permitAll()
                         .anyRequest().authenticated())
                 .formLogin(form -> form.loginPage("/login").defaultSuccessUrl("/", true).permitAll())
                 .logout(logout -> logout.logoutSuccessUrl("/login?loggedOut").permitAll())

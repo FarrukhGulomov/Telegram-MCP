@@ -19,7 +19,7 @@
   <div class="flash err" th:if="${param.error}">Sign-in failed. Check your email and password.</div>
   <div class="flash ok" th:if="${param.loggedOut}">Signed out.</div>
 
-  <form th:action="@{/login}" method="post">
+  <form th:action="@{/login}" method="post" data-guard-resubmit>
     <label for="username">Email</label>
     <input id="username" name="username" type="email" required autocomplete="username"
            th:value="${demoMode} ? ${demoEmail} : ''">
@@ -29,6 +29,7 @@
 
     <button type="submit">Sign in</button>
   </form>
+  <script src="/js/forms.js" defer></script>
 
   <p class="muted" th:if="${demoMode}">
     The demo password is printed in the server log at startup and defaults to

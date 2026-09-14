@@ -26,7 +26,7 @@
   <div class="grid">
     <div class="card">
       <h2>Start login</h2>
-      <form th:action="@{/connect/start}" method="post">
+      <form th:action="@{/connect/start}" method="post" data-guard-resubmit>
         <label for="method">Method</label>
         <select id="method" name="method">
           <option value="QR_CODE">QR code (recommended)</option>
@@ -40,7 +40,7 @@
 
     <div class="card">
       <h2>Login code</h2>
-      <form th:action="@{/connect/code}" method="post">
+      <form th:action="@{/connect/code}" method="post" data-guard-resubmit>
         <label for="code">Code from Telegram</label>
         <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required>
         <button type="submit">Submit code</button>
@@ -49,7 +49,7 @@
 
     <div class="card">
       <h2>Two-factor password</h2>
-      <form th:action="@{/connect/password}" method="post">
+      <form th:action="@{/connect/password}" method="post" data-guard-resubmit>
         <label for="password">Password</label>
         <input id="password" name="password" type="password" autocomplete="off" required>
         <button type="submit">Submit password</button>
@@ -64,7 +64,7 @@
       revoke the session inside Telegram. To do that, open Telegram →
       <em>Settings → Devices → Active sessions</em> and terminate this session.
     </p>
-    <form th:action="@{/connect/disconnect}" method="post">
+    <form th:action="@{/connect/disconnect}" method="post" data-guard-resubmit>
       <button type="submit" class="danger">Disconnect</button>
     </form>
   </div>

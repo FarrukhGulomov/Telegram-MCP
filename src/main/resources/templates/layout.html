@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title th:text="'Telegram Consent MCP — ' + ${title}">Telegram Consent MCP</title>
   <link rel="stylesheet" th:href="@{/css/app.css}">
+  <script src="/js/forms.js" defer></script>
 </head>
 <body>
 <header>
@@ -13,7 +14,7 @@
     <a th:href="@{/}">Chats</a>
     <a th:href="@{/connect}">Connection</a>
     <a th:href="@{/audit}">Audit</a>
-    <form th:action="@{/logout}" method="post" class="inline">
+    <form th:action="@{/logout}" method="post" data-guard-resubmit class="inline">
       <button type="submit" class="link">Sign out</button>
     </form>
   </nav>
