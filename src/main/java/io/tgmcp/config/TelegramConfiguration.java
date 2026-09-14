@@ -59,7 +59,7 @@ public class TelegramConfiguration {
                         + "until that pipeline is built (see docs/production-prerequisites.md). Treat "
                         + "this as a blocking gap for any deployment where edits/deletions matter.");
                 TdlibClient client = new NativeTdlibClient("tdjson", objectMapper, 30);
-                yield new TdlibTelegramGateway(client, config);
+                yield new TdlibTelegramGateway(client, config, properties.secrets().sessionEncryptionKey());
             }
         };
     }

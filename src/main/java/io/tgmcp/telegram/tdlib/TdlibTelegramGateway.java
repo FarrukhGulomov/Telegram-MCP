@@ -2,6 +2,7 @@ package io.tgmcp.telegram.tdlib;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -9,6 +10,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import io.tgmcp.common.KeyMaterial;
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.telegram.gateway.ConnectionRef;
 import io.tgmcp.telegram.gateway.LoginMethod;
@@ -75,14 +77,32 @@ public class TdlibTelegramGateway implements TelegramGateway {
      * after whatever request/response call originally triggered the login.
      */
     private volatile Consumer<LoginState> stateListener;
+    /**
+     * Base64-encoded (TDLib's JSON interface represents {@code bytes} fields this way) key for
+     * TDLib's own at-rest encryption of {@link AppProperties.Telegram#databaseDirectory()}.
+     * Security-audit finding F19: {@code setTdlibParameters} used to omit this field entirely,
+     * leaving the local session/chat-metadata database TDLib maintains on disk unencrypted.
+     * Derived from the same {@code tgmcp.secrets.session-encryption-key} this application
+     * already requires before authorizing real account access (see {@link
+     * io.tgmcp.config.ProductionSafetyValidator}), rather than asking for a fourth secret to
+     * configure -- {@link KeyMaterial#derive} keeps it cryptographically distinct from the AES
+     * key {@link io.tgmcp.telegram.session.SessionCipher} derives from the same root secret.
+     */
+    private final String databaseEncryptionKey;
 
-    public TdlibTelegramGateway(TdlibClient client, AppProperties.Telegram config) {
+    public TdlibTelegramGateway(TdlibClient client, AppProperties.Telegram config, String sessionEncryptionKey) {
         this.client = client;
         this.config = config;
+        this.databaseEncryptionKey = deriveDatabaseEncryptionKey(sessionEncryptionKey);
         // Security-audit finding F11: registered before start() so this listener cannot miss
         // the very first update TDLib sends (in practice, the initial updateAuthorizationState).
         this.client.onUpdate(this::handleUpdate);
         this.client.start();
+    }
+
+    static String deriveDatabaseEncryptionKey(String sessionEncryptionKey) {
+        byte[] derived = KeyMaterial.derive(sessionEncryptionKey, "session-encryption", "tdlib-database-encryption-key");
+        return Base64.getEncoder().encodeToString(derived);
     }
 
     @Override
@@ -168,6 +188,9 @@ public class TdlibTelegramGateway implements TelegramGateway {
         params.put("use_message_database", false);
         // Secret Chats are explicitly out of scope for this service.
         params.put("use_secret_chats", false);
+        // Security-audit finding F19: without this, TDLib stores the local session and
+        // chat-metadata database at database_directory completely unencrypted.
+        params.put("database_encryption_key", this.databaseEncryptionKey);
         params.put("api_id", Integer.parseInt(this.config.apiId()));
         params.put("api_hash", this.config.apiHash());
         params.put("system_language_code", "en");

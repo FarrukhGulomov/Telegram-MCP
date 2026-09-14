@@ -85,14 +85,6 @@ against the revision your clients negotiate.
 
 Also outstanding:
 
-- **RFC 8707 resource indicators are only half-implemented.** Access tokens carry this
-  server's canonical resource identifier as their audience, and the resource server enforces
-  it. The authorization server does not yet negotiate the `resource` request parameter per
-  request, so a client asking for a narrower or different resource is not honoured — it is
-  ignored. Spring Authorization Server 7.1 has no first-class support for this.
-- **The token signing key is ephemeral.** A new RSA key is generated at startup, so every
-  restart invalidates outstanding tokens. Production needs a persisted, rotatable key in a
-  KMS or HSM.
 - **Dynamic client registration is open.** The RFC 7591 endpoint accepts any registration.
   Production needs registration policy: allowed redirect URIs, allowed scopes, approval, and
   rate limiting.
@@ -100,11 +92,26 @@ Also outstanding:
   That is derived from validated authentication, but it is only as trustworthy as your
   client-registration policy. Tighten (3) before relying on (this).
 - **No HTTPS termination, no CSRF-safe reverse-proxy configuration, no secret manager
-  integration** is included.
+  integration** is included. The `tgmcp.secrets.*` keys (`session-encryption-key`,
+  `cursor-signing-key`, `oauth-rsa-private-key`) are read from plain environment variables;
+  production should source them from a real secret manager or KMS instead, and rotate them
+  the way that manager expects.
 - **Single-node assumptions**: the rate limiter is in-memory and the sync scheduler assumes
   one instance. Running more than one replica needs a shared limiter and either leader
-  election or per-chat locking.
-- **Backups.** See [retention-policy.md](retention-policy.md).
+  election or per-chat locking. A shared, persisted `oauth-rsa-private-key` (security-audit
+  finding F18) makes issued tokens portable across replicas; the rate limiter and sync
+  scheduler are not yet.
+- **Backups.** See [retention-policy.md](retention-policy.md). This now also covers the
+  TDLIB adapter's local database directory (security-audit finding F19): TDLib encrypts it
+  at rest with a key this application derives and passes at every startup, so a backup of
+  that directory is only restorable together with the `tgmcp.secrets.session-encryption-key`
+  that was active when it was written — losing that key permanently loses the directory's
+  contents, this application's own consent/message data in Postgres is unaffected.
+- **Volume permissions and host-level access to `tgmcp.telegram.database-directory`** are an
+  operational obligation this codebase cannot enforce: encrypting the directory's contents
+  protects a stolen copy of the files, not a process that can read them through TDLib itself
+  or through the filesystem while the key is in memory. Restrict who and what can reach that
+  volume the same as you would any other credential store.
 - **Participant notification.** Nothing here tells participants their chat is being
   processed. That is an operational obligation.
 
@@ -116,5 +123,14 @@ Also outstanding:
   supplying `api_id` and `api_hash`.
 - Missing keys produce a derived development key and a loud warning rather than a silent
   weak default.
+- The TDLIB adapter's local database directory is encrypted at rest with a key TDLib
+  itself manages, derived from `tgmcp.secrets.session-encryption-key` at every startup
+  (security-audit finding F19) rather than left unencrypted the way `setTdlibParameters`
+  does by default.
+- The OAuth access-token signing key is persisted and shared across replicas when
+  `tgmcp.secrets.oauth-rsa-private-key` is configured, and a request naming a `resource`
+  other than this server's own is rejected outright rather than silently ignored
+  (security-audit finding F18); `ProductionSafetyValidator` refuses to start with real
+  account access authorized until that key is set.
 - Sensitive chats stay `INACTIVE` until someone activates them deliberately; the synthetic
   dataset includes one such chat to make the point.

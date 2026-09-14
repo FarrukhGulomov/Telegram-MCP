@@ -55,4 +55,29 @@ class KeyMaterialTests {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("valid base64");
     }
+
+    @Test
+    void derivesTheSameThirtyTwoByteKeyForTheSameInputsAndADifferentOneForADifferentLabel() {
+        String secret = base64(32);
+
+        byte[] first = KeyMaterial.derive(secret, "session", "tdlib-database-encryption-key");
+        byte[] second = KeyMaterial.derive(secret, "session", "tdlib-database-encryption-key");
+        byte[] differentLabel = KeyMaterial.derive(secret, "session", "some-other-purpose");
+
+        assertThat(first).hasSize(32).isEqualTo(second).isNotEqualTo(differentLabel);
+    }
+
+    @Test
+    void derivesADifferentKeyForADifferentConfiguredSecret() {
+        byte[] secretA = new byte[32];
+        byte[] secretB = new byte[32];
+        secretB[0] = 1;
+
+        byte[] fromSecretA = KeyMaterial.derive(Base64.getEncoder().encodeToString(secretA), "session",
+                "tdlib-database-encryption-key");
+        byte[] fromSecretB = KeyMaterial.derive(Base64.getEncoder().encodeToString(secretB), "session",
+                "tdlib-database-encryption-key");
+
+        assertThat(fromSecretA).isNotEqualTo(fromSecretB);
+    }
 }

@@ -1,10 +1,12 @@
 package io.tgmcp.common;
 
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -53,6 +55,25 @@ public final class KeyMaterial {
 
     public static boolean isConfigured(String base64Key) {
         return base64Key != null && !base64Key.isBlank();
+    }
+
+    /**
+     * Derives a distinct 32-byte key from an already-configured secret, HMAC-keyed by it with
+     * {@code derivationLabel} as the message. Used to give a second consumer (security-audit
+     * finding F19: TDLib's own at-rest database encryption) its own key without asking for a
+     * second secret to configure and without ever reusing the same key bytes across two
+     * different cryptographic uses.
+     */
+    public static byte[] derive(String base64Key, String devLabel, String derivationLabel) {
+        SecretKey base = load(base64Key, "HmacSHA256", devLabel);
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(base);
+            return mac.doFinal(derivationLabel.getBytes(StandardCharsets.UTF_8));
+        }
+        catch (GeneralSecurityException ex) {
+            throw new IllegalStateException("Unable to derive key material for '" + derivationLabel + "'", ex);
+        }
     }
 
     private static byte[] developmentKeyBytes(String devLabel) {

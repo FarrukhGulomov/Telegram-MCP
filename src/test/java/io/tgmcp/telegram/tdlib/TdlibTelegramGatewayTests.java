@@ -41,7 +41,8 @@ class TdlibTelegramGatewayTests {
     private final ScriptedTdlibClient client = new ScriptedTdlibClient(this.mapper);
     private final AppProperties.Telegram config =
             new AppProperties.Telegram(TelegramAdapterKind.TDLIB, "12345", "hash", "./tdlib", true);
-    private final TdlibTelegramGateway gateway = new TdlibTelegramGateway(this.client, this.config);
+    private final TdlibTelegramGateway gateway =
+            new TdlibTelegramGateway(this.client, this.config, "dGVzdC1zZXNzaW9uLWVuY3J5cHRpb24ta2V5LTMyYnl0ZXM=");
 
     private final ConnectionRef ref = new ConnectionRef(UUID.randomUUID(), UUID.randomUUID());
 
@@ -133,6 +134,39 @@ class TdlibTelegramGatewayTests {
 
         assertThat(notifications).hasSize(1);
         assertThat(notifications.get(0).stage()).isEqualTo(LoginStage.DISCONNECTED);
+    }
+
+    @Test
+    void sendsADatabaseEncryptionKeyDerivedFromTheConfiguredSessionEncryptionKey() {
+        // Security-audit finding F19: without this field, TDLib stored the local session and
+        // chat-metadata database at database_directory completely unencrypted on disk.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateWaitTdlibParameters"}}""");
+
+        Map<String, Object> sentParams = this.client.lastParamsFor("setTdlibParameters");
+        assertThat(sentParams).isNotNull();
+        Object key = sentParams.get("database_encryption_key");
+        assertThat(key).as("must not be blank, null, or the raw configured secret verbatim").isNotNull();
+        assertThat((String) key).isNotBlank()
+                .isEqualTo(TdlibTelegramGateway
+                        .deriveDatabaseEncryptionKey("dGVzdC1zZXNzaW9uLWVuY3J5cHRpb24ta2V5LTMyYnl0ZXM="));
+    }
+
+    @Test
+    void derivingTheDatabaseEncryptionKeyIsDeterministicButDistinctPerConfiguredSecret() {
+        String secretA = "dGVzdC1zZXNzaW9uLWVuY3J5cHRpb24ta2V5LTMyYnl0ZXM=";
+        String secretB = "b3RoZXItc2Vzc2lvbi1lbmNyeXB0aW9uLWtleS0zMmJ5dGVz";
+
+        String derivedFromKeyA = TdlibTelegramGateway.deriveDatabaseEncryptionKey(secretA);
+        String derivedFromKeyAAgain = TdlibTelegramGateway.deriveDatabaseEncryptionKey(secretA);
+        String derivedFromKeyB = TdlibTelegramGateway.deriveDatabaseEncryptionKey(secretB);
+
+        assertThat(derivedFromKeyA).isEqualTo(derivedFromKeyAAgain).isNotEqualTo(derivedFromKeyB);
+        // Must never just be the configured secret handed straight to TDLib.
+        assertThat(derivedFromKeyA).isNotEqualTo(secretA);
     }
 
     @Test
@@ -394,6 +428,7 @@ class TdlibTelegramGatewayTests {
         private final ObjectMapper mapper;
         private final Deque<String> responses = new ArrayDeque<>();
         private final List<String> sentMethods = new ArrayList<>();
+        private final java.util.Map<String, Map<String, Object>> lastParamsByMethod = new java.util.HashMap<>();
         private Consumer<JsonNode> updateListener;
 
         private ScriptedTdlibClient(ObjectMapper mapper) {
@@ -414,9 +449,14 @@ class TdlibTelegramGatewayTests {
                     + ",\"message\":\"" + message + "\"}");
         }
 
+        Map<String, Object> lastParamsFor(String method) {
+            return this.lastParamsByMethod.get(method);
+        }
+
         @Override
         public JsonNode request(String method, Map<String, Object> params) {
             this.sentMethods.add(method);
+            this.lastParamsByMethod.put(method, params);
             String response = this.responses.pollFirst();
             if (response == null) {
                 throw new AssertionError("No scripted TDLib response for '" + method + "'");
