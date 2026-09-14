@@ -43,6 +43,9 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
     @Autowired
     private ChatActivationRepository activations;
 
+    @Autowired
+    private io.tgmcp.consent.ConsentService consentService;
+
     private Fixtures.ReadyChat chat;
 
     private Fixtures.ReadyChat ready() {
@@ -216,6 +219,37 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
         assertThat(outcome.detail()).contains("could not be verified");
         assertThat(this.activations.find(ready().team().tenant().id(), ready().chat().id())
                 .orElseThrow().state()).isEqualTo(ActivationState.PAUSED);
+    }
+
+    /**
+     * Security-audit finding F05: message storage is never gated on a per-sender consent
+     * check -- pullForward/backfill fetch and store whatever falls in the approved date
+     * window regardless of who sent it, so a participant's own messages, once stored, do not
+     * automatically disappear just because that participant's own consent stops being valid.
+     * Once someone with no valid consent for the chat's current context revision leaves, they
+     * can never be asked again, so their own messages must be purged the moment their
+     * departure is noticed -- not left to outlive the only chance anyone had to ask them.
+     */
+    @Test
+    void purgesAParticipantsOwnMessagesWhenTheyLeaveWithoutValidConsent() {
+        sync();
+        long danaMessagesBefore = this.jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM messages WHERE chat_id = ? AND sender_tg_user_id = ?",
+                Long.class, ready().chat().id(), SyntheticDataset.DANA);
+        assertThat(danaMessagesBefore).as("fixture sanity: Dana authored some seeded messages").isPositive();
+
+        this.consentService.revokeParticipant(ready().team().actor(), ready().chat().id(),
+                SyntheticDataset.DANA, "test: simulate consent no longer valid");
+        mockGateway().removeParticipant(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.DANA);
+        sync();
+
+        long danaMessagesAfter = this.jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM messages WHERE chat_id = ? AND sender_tg_user_id = ?",
+                Long.class, ready().chat().id(), SyntheticDataset.DANA);
+        assertThat(danaMessagesAfter).as("Dana's own messages must be purged once she leaves without consent")
+                .isZero();
+        // Nobody else's messages are touched by this.
+        assertThat(storedCount()).isEqualTo(30 - danaMessagesBefore);
     }
 
     @Test

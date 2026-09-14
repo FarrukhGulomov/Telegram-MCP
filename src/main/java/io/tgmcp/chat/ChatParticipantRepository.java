@@ -54,26 +54,30 @@ public class ChatParticipantRepository {
                 .update();
     }
 
-    public void markLeft(UUID tenantId, UUID chatId, List<Long> stillPresent) {
+    /** @return the tg_user_ids newly marked as left by this call (empty if nobody changed). */
+    public List<Long> markLeft(UUID tenantId, UUID chatId, List<Long> stillPresent) {
         if (stillPresent.isEmpty()) {
-            jdbc.sql("""
+            return jdbc.sql("""
                             UPDATE chat_participants SET left_at = now()
                              WHERE tenant_id = :tenantId AND chat_id = :chatId AND left_at IS NULL
+                            RETURNING tg_user_id
                             """)
                     .param("tenantId", tenantId)
                     .param("chatId", chatId)
-                    .update();
-            return;
+                    .query(Long.class)
+                    .list();
         }
-        jdbc.sql("""
+        return jdbc.sql("""
                         UPDATE chat_participants SET left_at = now()
                          WHERE tenant_id = :tenantId AND chat_id = :chatId AND left_at IS NULL
                            AND tg_user_id NOT IN (:present)
+                        RETURNING tg_user_id
                         """)
                 .param("tenantId", tenantId)
                 .param("chatId", chatId)
                 .param("present", stillPresent)
-                .update();
+                .query(Long.class)
+                .list();
     }
 
     /**

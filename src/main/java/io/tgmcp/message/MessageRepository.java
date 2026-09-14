@@ -263,6 +263,25 @@ public class MessageRepository {
                 .update();
     }
 
+    /**
+     * Purges one participant's own messages from one chat. Used when someone leaves without
+     * ever having valid consent on file for the chat's current processing context (security
+     * audit finding F05): message storage itself is never gated on a per-sender consent check,
+     * so a message sent while that person was still a member -- but before anyone was ever
+     * asked to consent, or under a context revision that has since changed -- could otherwise
+     * keep circulating after they are gone and can no longer be asked at all.
+     */
+    public int deleteForSender(UUID tenantId, UUID chatId, long senderTgUserId) {
+        return this.jdbc.sql("""
+                        DELETE FROM messages
+                         WHERE tenant_id = :tenantId AND chat_id = :chatId AND sender_tg_user_id = :senderTgUserId
+                        """)
+                .param("tenantId", tenantId)
+                .param("chatId", chatId)
+                .param("senderTgUserId", senderTgUserId)
+                .update();
+    }
+
     public long countForChat(UUID tenantId, UUID chatId) {
         return this.jdbc.sql("""
                         SELECT count(*) FROM messages

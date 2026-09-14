@@ -232,8 +232,9 @@ public class ChatSyncService {
             this.participantRepository.upsert(new ChatParticipant(Ids.newId(), chat.tenantId(), chat.id(),
                     participant.tgUserId(), participant.displayName(), participant.bot(), null, null));
         }
-        this.participantRepository.markLeft(chat.tenantId(), chat.id(),
+        List<Long> departed = this.participantRepository.markLeft(chat.tenantId(), chat.id(),
                 remote.stream().map(RemoteParticipant::tgUserId).toList());
+        purgeMessagesFromUnconsentedDepartures(activation, chat, departed);
 
         String fingerprint = this.participantRepository.membershipFingerprint(chat.tenantId(), chat.id());
         if (activation.membershipFingerprint() == null) {
@@ -249,6 +250,31 @@ public class ChatSyncService {
                     "Membership changed");
         }
         return null;
+    }
+
+    /**
+     * Security-audit finding F05: message storage is never gated on a per-sender consent
+     * check -- coverageFor only ever asks whether *currently active* participants are
+     * covered, so a person's own messages, once stored, keep circulating regardless of
+     * whether that person personally ever consented. Someone who leaves without a valid
+     * consent record for the chat's current context revision can no longer be asked at all,
+     * so their own messages are purged the moment their departure is noticed rather than
+     * being left to outlive the only chance anyone had to ask them.
+     */
+    private void purgeMessagesFromUnconsentedDepartures(ChatActivation activation, Chat chat, List<Long> departed) {
+        for (Long tgUserId : departed) {
+            if (this.consentService.hasValidConsent(chat.tenantId(), chat.id(), tgUserId,
+                    activation.contextRevision())) {
+                continue;
+            }
+            int deleted = this.messageRepository.deleteForSender(chat.tenantId(), chat.id(), tgUserId);
+            if (deleted > 0) {
+                this.auditService.system(chat.tenantId(), AuditAction.DATA_DELETED, chat.id(),
+                        AuditService.ALLOWED,
+                        Map.of("reason", "participant left without valid consent for the current context",
+                                "participantTgUserId", tgUserId, "messagesDeleted", deleted));
+            }
+        }
     }
 
     private void pause(ChatActivation activation, String reason) {

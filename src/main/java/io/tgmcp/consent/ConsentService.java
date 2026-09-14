@@ -142,6 +142,14 @@ public class ConsentService {
         return this.consentRepository.findForChat(tenantId, chatId);
     }
 
+    /** Whether this one participant currently has valid consent for this exact context revision. */
+    public boolean hasValidConsent(UUID tenantId, UUID chatId, long participantTgUserId, String contextRevision) {
+        Instant now = this.clock.instant();
+        return this.consentRepository.findForChat(tenantId, chatId).stream()
+                .filter(r -> r.participantTgUserId() == participantTgUserId)
+                .anyMatch(r -> r.covers(contextRevision, now));
+    }
+
     /**
      * Security-audit finding F02: an authenticated operator could previously record consent
      * "on behalf of" any participant via {@code SELF_SERVICE_LINK} with no proof that the
