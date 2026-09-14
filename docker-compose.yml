@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tgmcp
+      POSTGRES_USER: tgmcp
+      POSTGRES_PASSWORD: ${TGMCP_DB_PASSWORD:-tgmcp}
+    ports:
+      - "${TGMCP_DB_PORT:-5432}:5432"
+    volumes:
+      - tgmcp-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tgmcp -d tgmcp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TGMCP_DB_URL: jdbc:postgresql://db:5432/tgmcp
+      TGMCP_DB_USER: tgmcp
+      TGMCP_DB_PASSWORD: ${TGMCP_DB_PASSWORD:-tgmcp}
+      # Default is the fully synthetic adapter: no Telegram account is contacted.
+      TGMCP_TELEGRAM_ADAPTER: ${TGMCP_TELEGRAM_ADAPTER:-MOCK}
+      TGMCP_SEED_DEMO: ${TGMCP_SEED_DEMO:-true}
+      TGMCP_DEMO_EMAIL: ${TGMCP_DEMO_EMAIL:-owner@demo.invalid}
+      TGMCP_DEMO_PASSWORD: ${TGMCP_DEMO_PASSWORD:-demo-password}
+      TGMCP_OAUTH_ISSUER: ${TGMCP_OAUTH_ISSUER:-http://localhost:8080}
+      TGMCP_PUBLIC_BASE_URL: ${TGMCP_PUBLIC_BASE_URL:-http://localhost:8080}
+      TGMCP_MCP_RESOURCE: ${TGMCP_MCP_RESOURCE:-http://localhost:8080/mcp}
+      # Keys live outside the database. Without them the app derives an insecure
+      # development key and logs a warning.
+      TGMCP_SESSION_ENCRYPTION_KEY: ${TGMCP_SESSION_ENCRYPTION_KEY:-}
+      TGMCP_CURSOR_SIGNING_KEY: ${TGMCP_CURSOR_SIGNING_KEY:-}
+      TGMCP_COOKIE_SECURE: ${TGMCP_COOKIE_SECURE:-false}
+    ports:
+      - "${TGMCP_PORT:-8080}:8080"
+
+volumes:
+  tgmcp-db:

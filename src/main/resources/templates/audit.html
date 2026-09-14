@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page('Audit', ~{::section})}">
+<body>
+<section>
+  <h1>Audit events</h1>
+  <p class="muted">
+    Access metadata, consent changes, sync failures and revocations. Message text is never
+    recorded here.
+  </p>
+  <table>
+    <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Chat</th><th>Outcome</th><th>Detail</th></tr></thead>
+    <tbody>
+    <tr th:each="e : ${events}">
+      <td th:text="${e.occurredAt}"></td>
+      <td th:text="${e.actorType} + ' · ' + (${e.actorId} ?: '—')"></td>
+      <td th:text="${e.action}"></td>
+      <td th:text="${e.chatId} ?: '—'"></td>
+      <td th:text="${e.outcome}"
+          th:classappend="${e.outcome} == 'DENIED' ? 'warn' : (${e.outcome} == 'ERROR' ? 'err' : 'ok')"></td>
+      <td><code th:text="${e.detail}"></code></td>
+    </tr>
+    <tr th:if="${#lists.isEmpty(events)}"><td colspan="6" class="muted">No events yet.</td></tr>
+    </tbody>
+  </table>
+</section>
+</body>
+</html>

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page('Chat', ~{::section})}">
+<body>
+<section>
+  <h1 th:text="${view.chat.title}">Chat</h1>
+  <p class="muted">
+    <span th:text="${view.chat.chatType}"></span> ·
+    <span th:text="${view.participantCount}"></span> participant(s) ·
+    state <span class="pill" th:text="${view.stateLabel}">INACTIVE</span>
+  </p>
+
+  <div class="card" th:if="${view.selected}">
+    <h2>What gets shared, and with whom</h2>
+    <p>
+      When an MCP client calls a tool, the message text it retrieves is sent to that client's
+      provider — currently
+      <strong th:text="${#strings.listJoin(view.providers, ' and ')}">…</strong> — and is processed
+      under that provider's terms, not this application's.
+    </p>
+    <p class="warn">
+      Data already disclosed to a provider cannot necessarily be recalled. Revoking access here
+      stops future disclosure and deletes the local copy; it does not undo a disclosure that has
+      already happened.
+    </p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Coverage and sync health</h2>
+      <table class="kv">
+        <tr><th>Sync state</th><td th:text="${view.syncState}">NEVER_STARTED</td></tr>
+        <tr><th>Last successful update</th>
+            <td th:text="${view.lastSuccessAt} ?: 'never'">never</td></tr>
+        <tr><th>History</th>
+            <td>
+              <span class="warn" th:if="${view.partialHistory}">Partial — backfill has not finished.
+                Do not treat an absent message as evidence it was never sent.</span>
+              <span class="ok" th:unless="${view.partialHistory}">Backfill complete for the approved window.</span>
+            </td></tr>
+        <tr><th>Stored messages</th><td th:text="${view.stored.storedMessageCount}">0</td></tr>
+        <tr><th>Stored range</th>
+            <td><span th:text="${view.stored.earliestStored} ?: '—'"></span> …
+                <span th:text="${view.stored.latestStored} ?: '—'"></span></td></tr>
+        <tr th:if="${view.lastErrorCode != null}"><th>Last error</th>
+            <td class="err" th:text="${view.lastErrorCode}"></td></tr>
+      </table>
+      <form th:action="@{'/chats/' + ${view.chat.id} + '/sync'}" method="post" class="inline"
+            th:if="${view.selected}">
+        <button type="submit">Sync now</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2 th:text="${view.selected} ? 'Approval settings' : 'Select this chat'">Select this chat</h2>
+      <form th:action="${view.selected}
+                        ? @{'/chats/' + ${view.chat.id} + '/settings'}
+                        : @{'/chats/' + ${view.chat.id} + '/select'}" method="post">
+        <label for="purpose">Purpose (participants consent to exactly this)</label>
+        <input id="purpose" name="purpose" required maxlength="500"
+               th:value="${view.activation != null} ? ${view.activation.purpose}
+                         : 'Answer questions about team decisions using this chat as evidence'">
+
+        <fieldset>
+          <legend>Provider scope</legend>
+          <label th:each="p : ${allProviders}" class="checkbox">
+            <input type="checkbox" name="providers" th:value="${p}"
+                   th:checked="${view.activation != null and view.activation.coversProvider(p)}">
+            <span th:text="${p}">PROVIDER</span>
+          </label>
+        </fieldset>
+
+        <label for="approvedFrom">Approved from</label>
+        <input id="approvedFrom" name="approvedFrom" type="date" required
+               th:value="${view.activation != null}
+                         ? ${#temporals.format(view.activation.approvedFrom, 'yyyy-MM-dd')} : ${defaultFrom}">
+
+        <label for="approvedTo">Approved to</label>
+        <input id="approvedTo" name="approvedTo" type="date" required
+               th:value="${view.activation != null}
+                         ? ${#temporals.format(view.activation.approvedTo, 'yyyy-MM-dd')} : ${defaultTo}">
+
+        <label for="retentionDays">Retention (days)</label>
+        <input id="retentionDays" name="retentionDays" type="number" min="1" max="3650" required
+               th:value="${view.activation != null} ? ${view.activation.retentionDays} : 90">
+
+        <p class="muted">
+          Changing the purpose, provider scope or approved range invalidates existing consent:
+          the chat returns to AWAITING_CONSENT and its stored messages are deleted.
+        </p>
+        <button type="submit" th:text="${view.selected} ? 'Save settings' : 'Select chat'">Select chat</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card" th:if="${view.selected}">
+    <h2>Participant consent</h2>
+    <p class="muted">
+      Consent must be recorded per participant, for this purpose, this provider scope and consent
+      version <code th:text="${consentVersion}"></code>. An administrator cannot consent on someone
+      else's behalf: recording an out-of-band consent requires naming the evidence.
+    </p>
+
+    <div class="flash err" th:if="${view.coverage != null and !view.consentComplete}">
+      <strong>Consent coverage is incomplete.</strong> MCP access stays blocked.
+      <ul>
+        <li th:each="g : ${view.coverage.gaps}">
+          <span th:text="${g.displayName}"></span> — <span th:text="${g.reason}"></span>
+        </li>
+      </ul>
+    </div>
+
+    <table>
+      <thead><tr><th>Participant</th><th>Telegram id</th><th>Record consent</th><th></th></tr></thead>
+      <tbody>
+      <tr th:each="p : ${participants}">
+        <td th:text="${p.displayName}"></td>
+        <td><code th:text="${p.tgUserId}"></code></td>
+        <td>
+          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent'}" method="post" class="inline">
+            <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
+            <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
+            <select name="method">
+              <option value="SELF_SERVICE_LINK">Participant consented themselves</option>
+              <option value="SIGNED_ATTESTATION">Recorded from evidence</option>
+              <option th:if="${demoMode}" value="DEMO_SYNTHETIC">Synthetic demo consent</option>
+            </select>
+            <input name="evidenceRef" placeholder="Evidence reference" maxlength="300">
+            <button type="submit">Record</button>
+          </form>
+        </td>
+        <td>
+          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" method="post" class="inline">
+            <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
+            <button type="submit" class="danger">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      </tbody>
+    </table>
+
+    <h3>Recorded consents</h3>
+    <table>
+      <thead><tr><th>Participant</th><th>Version</th><th>Providers</th><th>Method</th>
+        <th>Granted</th><th>Expires</th><th>Revoked</th></tr></thead>
+      <tbody>
+      <tr th:each="c : ${consents}">
+        <td th:text="${c.participantDisplayName}"></td>
+        <td th:text="${c.consentVersion}"></td>
+        <td th:text="${c.providerScope}"></td>
+        <td th:text="${c.method}"></td>
+        <td th:text="${c.grantedAt}"></td>
+        <td th:text="${c.expiresAt} ?: '—'"></td>
+        <td th:text="${c.revokedAt} ?: '—'"></td>
+      </tr>
+      <tr th:if="${#lists.isEmpty(consents)}"><td colspan="7" class="muted">No consent recorded yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card danger" th:if="${view.selected}">
+    <h2>Access controls</h2>
+    <form th:action="@{'/chats/' + ${view.chat.id} + '/activate'}" method="post" class="inline">
+      <button type="submit">Activate</button>
+    </form>
+    <form th:action="@{'/chats/' + ${view.chat.id} + '/pause'}" method="post" class="inline">
+      <button type="submit">Pause</button>
+    </form>
+    <form th:action="@{'/chats/' + ${view.chat.id} + '/revoke'}" method="post" class="inline">
+      <button type="submit" class="danger">Revoke consent and delete data</button>
+    </form>
+    <form th:action="@{'/chats/' + ${view.chat.id} + '/delete-data'}" method="post" class="inline">
+      <button type="submit" class="danger">Delete stored data only</button>
+    </form>
+  </div>
+</section>
+</body>
+</html>

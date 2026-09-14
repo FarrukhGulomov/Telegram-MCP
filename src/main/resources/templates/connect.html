@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page('Connection', ~{::section})}">
+<body>
+<section>
+  <h1>Telegram connection</h1>
+
+  <p class="banner demo" th:if="${demoMode}">
+    <strong>Demo mode</strong> (adapter <span th:text="${adapter}">MOCK</span>). Any code and any
+    password are accepted; nothing leaves this process.
+  </p>
+
+  <div class="card">
+    <h2>Status</h2>
+    <p>Stage: <span class="pill" th:text="${state.stage}">DISCONNECTED</span></p>
+    <p th:if="${state.message}" th:text="${state.message}" class="muted"></p>
+    <p th:if="${state.tgUsername}">Signed in as <code th:text="${state.tgUsername}"></code></p>
+
+    <div th:if="${state.qrLoginLink}" class="qr">
+      <p>Open this link from a Telegram app that is already signed in:</p>
+      <code th:text="${state.qrLoginLink}"></code>
+      <p class="muted">This QR token is shown only on this protected page. It is never logged and
+         is not reachable from any MCP tool.</p>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Start login</h2>
+      <form th:action="@{/connect/start}" method="post">
+        <label for="method">Method</label>
+        <select id="method" name="method">
+          <option value="QR_CODE">QR code (recommended)</option>
+          <option value="PHONE_NUMBER">Phone number</option>
+        </select>
+        <label for="phoneNumber">Phone number (only for the phone method)</label>
+        <input id="phoneNumber" name="phoneNumber" type="tel" autocomplete="off">
+        <button type="submit">Start</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Login code</h2>
+      <form th:action="@{/connect/code}" method="post">
+        <label for="code">Code from Telegram</label>
+        <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required>
+        <button type="submit">Submit code</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Two-factor password</h2>
+      <form th:action="@{/connect/password}" method="post">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="off" required>
+        <button type="submit">Submit password</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card danger">
+    <h2>Disconnect</h2>
+    <p>
+      Removing the connection here destroys the local session material. It does not by itself
+      revoke the session inside Telegram. To do that, open Telegram →
+      <em>Settings → Devices → Active sessions</em> and terminate this session.
+    </p>
+    <form th:action="@{/connect/disconnect}" method="post">
+      <button type="submit" class="danger">Disconnect</button>
+    </form>
+  </div>
+</section>
+</body>
+</html>

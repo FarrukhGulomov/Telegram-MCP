@@ -1,0 +1,43 @@
+spring:
+  datasource:
+    url: ${TGMCP_TEST_DB_URL:jdbc:postgresql://localhost:5432/tgmcp_test}
+    username: ${TGMCP_TEST_DB_USER:tgmcp}
+    password: ${TGMCP_TEST_DB_PASSWORD:tgmcp}
+  flyway:
+    enabled: true
+    clean-disabled: false
+
+server:
+  port: 0
+
+logging:
+  level:
+    root: WARN
+    io.tgmcp: INFO
+    org.springframework.boot.autoconfigure: ERROR
+
+tgmcp:
+  telegram:
+    adapter: MOCK
+  demo:
+    # Tests build their own fixtures; the demo seeder would only get in the way.
+    seed-synthetic-data: false
+  sync:
+    # Sync is driven explicitly from tests so that assertions never race a timer.
+    scheduled: false
+    page-size: 10
+    max-pages-per-run: 20
+    initial-backoff: PT5S
+    max-backoff: PT1M
+    max-consecutive-failures: 3
+  secrets:
+    # Fixed test keys so that a cursor minted in one assertion verifies in the next.
+    session-encryption-key: /Wjt+kmZlBiINB/7s1f3pYYU7g5MOp8dCy91vRHBB10=
+    cursor-signing-key: 8vEG46MjjWduNxNzDzMGNfR8s8cPE0RbWFGeLliwERA=
+  mcp:
+    resource-identifier: http://localhost:8080/mcp
+    max-page-size: 100
+    default-page-size: 25
+    rate-limit-requests-per-minute: 1000
+  oauth:
+    issuer: http://localhost:8080

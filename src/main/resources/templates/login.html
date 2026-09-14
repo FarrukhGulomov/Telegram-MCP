@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in — Telegram Consent MCP</title>
+  <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body class="centered">
+<main class="card">
+  <h1>Telegram Consent MCP</h1>
+
+  <p class="banner demo" th:if="${demoMode}">
+    <strong>Demo mode.</strong> The Telegram adapter is
+    <span th:text="${adapter}">MOCK</span>: every chat, person and message is synthetic and no
+    Telegram account is contacted.
+  </p>
+
+  <div class="flash err" th:if="${param.error}">Sign-in failed. Check your email and password.</div>
+  <div class="flash ok" th:if="${param.loggedOut}">Signed out.</div>
+
+  <form th:action="@{/login}" method="post">
+    <label for="username">Email</label>
+    <input id="username" name="username" type="email" required autocomplete="username"
+           th:value="${demoMode} ? ${demoEmail} : ''">
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required autocomplete="current-password">
+
+    <button type="submit">Sign in</button>
+  </form>
+
+  <p class="muted" th:if="${demoMode}">
+    The demo password is printed in the server log at startup and defaults to
+    <code>demo-password</code>.
+  </p>
+</main>
+</body>
+</html>

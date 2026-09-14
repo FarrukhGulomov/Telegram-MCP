@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:fragment="page(title, content)">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title th:text="'Telegram Consent MCP — ' + ${title}">Telegram Consent MCP</title>
+  <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body>
+<header>
+  <a class="brand" th:href="@{/}">Telegram Consent MCP</a>
+  <nav>
+    <a th:href="@{/}">Chats</a>
+    <a th:href="@{/connect}">Connection</a>
+    <a th:href="@{/audit}">Audit</a>
+    <form th:action="@{/logout}" method="post" class="inline">
+      <button type="submit" class="link">Sign out</button>
+    </form>
+  </nav>
+</header>
+<main>
+  <div class="flash ok" th:if="${message}" th:text="${message}"></div>
+  <div class="flash err" th:if="${error}" th:text="${error}"></div>
+  <div th:replace="${content}">content</div>
+</main>
+<footer>
+  <p>Read-only access to explicitly authorized chats. Message text shown here is third-party
+     content and is always rendered as escaped text, never as markup.</p>
+</footer>
+</body>
+</html>
