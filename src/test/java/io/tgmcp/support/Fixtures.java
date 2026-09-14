@@ -71,10 +71,20 @@ public class Fixtures {
      * operator starts from.
      */
     public Team signInReadyTeam(String slug, String email, String encodedPassword) {
+        return signInReadyTeam(slug, email, encodedPassword, "OWNER");
+    }
+
+    /**
+     * As {@link #signInReadyTeam(String, String, String)}, but with an explicit
+     * OWNER/ADMIN/MEMBER role -- used for security-audit finding F17's role-based
+     * authorization tests, since nothing in the app's own seeding or signup path currently
+     * creates anything but an OWNER.
+     */
+    public Team signInReadyTeam(String slug, String email, String encodedPassword, String role) {
         UUID tenantId = Ids.newId();
         this.tenants.insert(new Tenant(tenantId, slug, slug + " team", true, null));
         AppUser user = new AppUser(Ids.newId(), tenantId, email, encodedPassword,
-                slug + " owner", "OWNER", true);
+                slug + " " + role.toLowerCase(java.util.Locale.ROOT), role, true);
         this.users.insert(user);
         AuthenticatedActor actor = new AuthenticatedActor(tenantId, user.id(), user.email(),
                 ActorType.UI_USER, java.util.Set.of("ui:manage"), null);

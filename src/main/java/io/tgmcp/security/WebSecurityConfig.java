@@ -93,6 +93,17 @@ public class WebSecurityConfig {
     public SecurityFilterChain managementUiFilterChain(HttpSecurity http) throws Exception {
         http.authorizeHttpRequests(requests -> requests
                         .requestMatchers("/login", "/css/**", "/js/**", "/actuator/health").permitAll()
+                        // Security-audit finding F17: AppUser carries an OWNER/ADMIN/MEMBER
+                        // role, and DatabaseUserDetailsService already turns it into a granted
+                        // ROLE_* authority -- but nothing here ever checked it, so any signed-in
+                        // user of a tenant, regardless of role, could pause, revoke, delete data
+                        // for, or reconfigure any chat in that tenant, or drive its Telegram
+                        // connection. Every state-changing management action lives behind a POST
+                        // under /chats/** or /connect/**; viewing (every GET) stays open to any
+                        // signed-in tenant member, matching the app's existing same-tenant read
+                        // model elsewhere.
+                        .requestMatchers(org.springframework.http.HttpMethod.POST, "/chats/**", "/connect/**")
+                        .hasAnyRole("OWNER", "ADMIN")
                         .anyRequest().authenticated())
                 .formLogin(form -> form.loginPage("/login").defaultSuccessUrl("/", true).permitAll())
                 .logout(logout -> logout.logoutSuccessUrl("/login?loggedOut").permitAll())
