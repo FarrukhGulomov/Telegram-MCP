@@ -308,21 +308,32 @@ public class ChatSyncService {
                 AuditService.DENIED, Map.of("reason", reason));
     }
 
-    /** Incremental catch-up: everything newer than the newest id we already hold. */
+    /**
+     * Incremental catch-up: everything newer than the newest id we already hold.
+     *
+     * <p>Security-audit finding F12: a page with zero matched messages no longer means "done" --
+     * a source whose native pagination only walks backward (TDLib) can return an empty filtered
+     * page while there is still older, in-window content further back (a backlog of messages
+     * newer than the approved window sits "in the way"). Only {@code hasMore() == false} means
+     * done; an empty page with {@code hasMore() == true} instead advances the resume cursor and
+     * keeps going, so a large newer-than-window backlog can no longer strand catch-up above the
+     * messages it actually needs.
+     */
     private int pullForward(UUID tenantId, Chat chat, ConnectionRef ref, SyncCheckpoint checkpoint,
                             Instant windowStart, Instant windowEnd, long epoch) {
         int ingested = 0;
-        Long cursor = checkpoint.newestSyncedMessageId();
+        Long afterId = checkpoint.newestSyncedMessageId();
+        Long resumeFrom = null;
         for (int page = 0; page < this.properties.sync().maxPagesPerRun(); page++) {
-            MessageWindow window = MessageWindow.forward(windowStart, windowEnd, cursor,
+            MessageWindow window = MessageWindow.forward(windowStart, windowEnd, afterId, resumeFrom,
                     this.properties.sync().pageSize());
             RemoteMessagePage remotePage = this.gateway.fetchMessages(ref, chat.tgChatId(), window);
-            if (remotePage.messages().isEmpty()) {
-                break;
+            if (!remotePage.messages().isEmpty()) {
+                requireNotFenced(tenantId, chat.id(), epoch);
+                ingested += store(tenantId, chat, remotePage.messages());
+                afterId = remotePage.messages().get(remotePage.messages().size() - 1).messageId();
             }
-            requireNotFenced(tenantId, chat.id(), epoch);
-            ingested += store(tenantId, chat, remotePage.messages());
-            cursor = remotePage.messages().get(remotePage.messages().size() - 1).messageId();
+            resumeFrom = remotePage.resumeCursor();
             if (!remotePage.hasMore()) {
                 break;
             }
@@ -344,13 +355,18 @@ public class ChatSyncService {
             MessageWindow window = MessageWindow.backward(windowStart, windowEnd, cursor,
                     this.properties.sync().pageSize());
             RemoteMessagePage remotePage = this.gateway.fetchMessages(ref, chat.tgChatId(), window);
-            if (remotePage.messages().isEmpty()) {
-                complete = true;
-                break;
+            if (!remotePage.messages().isEmpty()) {
+                requireNotFenced(tenantId, chat.id(), epoch);
+                ingested += store(tenantId, chat, remotePage.messages());
+                cursor = remotePage.messages().get(0).messageId();
             }
-            requireNotFenced(tenantId, chat.id(), epoch);
-            ingested += store(tenantId, chat, remotePage.messages());
-            cursor = remotePage.messages().get(0).messageId();
+            if (remotePage.resumeCursor() != null) {
+                // The gateway's own raw traversal position is at or before the oldest matched
+                // id, so it always resumes at least as far back as deriving from messages()
+                // alone would -- see the pullForward javadoc above for why messages() can be
+                // empty here at all.
+                cursor = remotePage.resumeCursor();
+            }
             if (!remotePage.hasMore()) {
                 complete = true;
                 break;

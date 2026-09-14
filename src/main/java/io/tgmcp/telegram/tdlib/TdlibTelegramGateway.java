@@ -38,6 +38,16 @@ import tools.jackson.databind.JsonNode;
 public class TdlibTelegramGateway implements TelegramGateway {
 
     private static final int MAX_HISTORY_BATCH = 100;
+    /**
+     * Safety cap on how many raw {@code getChatHistory} pages one fetchMessages() call will
+     * walk through looking for window-eligible content. Security-audit finding F12: without an
+     * internal loop at all, a single call only ever looked at the single newest raw page, so a
+     * chat with more history "in the way" (newer-than-window noise ahead of catch-up's target,
+     * or an all-outside-window page during backfill) could never reach it. This cap exists only
+     * to bound the work one call may do; hitting it returns hasMore=true with a resume point
+     * (see RemoteMessagePage#resumeCursor) rather than silently giving up.
+     */
+    static final int MAX_HISTORY_RAW_PAGES_PER_CALL = 20;
     private static final int MEMBER_PAGE_SIZE = 200;
     /**
      * Safety cap on how many members one listParticipants() call will ever page through.
@@ -236,29 +246,69 @@ public class TdlibTelegramGateway implements TelegramGateway {
     @Override
     public RemoteMessagePage fetchMessages(ConnectionRef ref, long tgChatId, MessageWindow window) {
         int limit = Math.min(window.limit(), MAX_HISTORY_BATCH);
-        // getChatHistory walks backwards from from_message_id; 0 means "from the newest".
-        long fromMessageId = window.beforeMessageId() == null ? 0L : window.beforeMessageId();
-        JsonNode response = this.client.request("getChatHistory", Map.of(
-                "chat_id", tgChatId,
-                "from_message_id", fromMessageId,
-                "offset", 0,
-                "limit", limit,
-                "only_local", false));
+        // getChatHistory only ever walks backwards from from_message_id (0 means "from the
+        // newest"), so reaching a specific afterMessageId boundary -- or the start of the
+        // approved window -- can take several raw pages. This loop is that traversal; see the
+        // class-level MAX_HISTORY_RAW_PAGES_PER_CALL javadoc for why it is capped rather than
+        // unbounded (security-audit finding F12).
+        long cursor = window.beforeMessageId() == null ? 0L : window.beforeMessageId();
+        List<RemoteMessage> matched = new ArrayList<>();
+        boolean reachedBoundary = false;
+        boolean sourceExhausted = false;
 
-        List<RemoteMessage> messages = new ArrayList<>();
-        for (JsonNode message : response.path("messages")) {
-            RemoteMessage mapped = toRemoteMessage(message);
-            if (mapped.sentAt().isBefore(window.from()) || mapped.sentAt().isAfter(window.to())) {
-                continue;
+        for (int page = 0; page < MAX_HISTORY_RAW_PAGES_PER_CALL; page++) {
+            JsonNode response = this.client.request("getChatHistory", Map.of(
+                    "chat_id", tgChatId,
+                    "from_message_id", cursor,
+                    "offset", 0,
+                    "limit", limit,
+                    "only_local", false));
+            JsonNode rawMessages = response.path("messages");
+            int rawCount = rawMessages.size();
+            if (rawCount == 0) {
+                sourceExhausted = true;
+                break;
             }
-            if (window.afterMessageId() != null && mapped.messageId() <= window.afterMessageId()) {
-                continue;
+
+            long oldestIdThisPage = Long.MAX_VALUE;
+            for (JsonNode rawMessage : rawMessages) {
+                RemoteMessage mapped = toRemoteMessage(rawMessage);
+                oldestIdThisPage = Math.min(oldestIdThisPage, mapped.messageId());
+                if (window.afterMessageId() != null && mapped.messageId() <= window.afterMessageId()) {
+                    // Everything at or below the incremental catch-up target has now been
+                    // reached; nothing further back can be new.
+                    reachedBoundary = true;
+                    continue;
+                }
+                if (mapped.sentAt().isBefore(window.from())) {
+                    // Walked past the earliest date this window will ever accept (the approved
+                    // range or retention floor); nothing further back can match either.
+                    reachedBoundary = true;
+                    continue;
+                }
+                if (!mapped.sentAt().isAfter(window.to())) {
+                    matched.add(mapped);
+                }
+                // Newer than window.to(): not a match, but not a stopping condition either --
+                // this is exactly the "backlog accumulated past the approved window" case F12
+                // describes, and older, in-window messages may still be further back.
             }
-            messages.add(mapped);
+            cursor = oldestIdThisPage;
+            if (reachedBoundary) {
+                break;
+            }
+            if (rawCount < limit) {
+                sourceExhausted = true;
+                break;
+            }
+            if (matched.size() >= limit) {
+                break;
+            }
         }
-        messages.sort(java.util.Comparator.comparingLong(RemoteMessage::messageId));
-        boolean hasMore = response.path("messages").size() >= limit;
-        return new RemoteMessagePage(List.copyOf(messages), hasMore);
+
+        matched.sort(java.util.Comparator.comparingLong(RemoteMessage::messageId));
+        boolean hasMore = !reachedBoundary && !sourceExhausted;
+        return new RemoteMessagePage(List.copyOf(matched), hasMore, hasMore ? cursor : null);
     }
 
     RemoteMessage toRemoteMessage(JsonNode message) {

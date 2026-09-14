@@ -154,6 +154,87 @@ class TdlibTelegramGatewayTests {
     }
 
     @Test
+    void walksMultipleRawPagesWithinOneCallToReachMessagesPastANewerThanWindowBacklog() {
+        // Security-audit finding F12 regression: 14 "noise" messages newer than window.to()
+        // sit ahead of 3 in-window messages, which sit ahead of messages older than
+        // window.from(). The old implementation only ever inspected the single newest raw
+        // page (ids 100-96, all noise) and gave up there, silently losing the in-window
+        // messages entirely -- exactly "yangi xabarlar to'planib, eski cursor sakrab o'tib
+        // ketishi" from the audit.
+        this.client.enqueue(historyPage(new long[] {100, 99, 98, 97, 96}, 3000L));
+        this.client.enqueue(historyPage(new long[] {95, 94, 93, 92, 91}, 3000L));
+        this.client.enqueue(historyPage(new long[] {90, 89, 88, 87, 86},
+                new long[] {3000L, 3000L, 1500L, 1500L, 1500L}));
+        this.client.enqueue(historyPage(new long[] {85, 84, 83, 82, 81}, 500L));
+
+        RemoteMessagePage page = this.gateway.fetchMessages(this.ref, -100123L,
+                MessageWindow.forward(Instant.ofEpochSecond(1000L), Instant.ofEpochSecond(2000L), null, 5));
+
+        assertThat(page.messages()).extracting(RemoteMessage::messageId).containsExactly(86L, 87L, 88L);
+        assertThat(page.hasMore())
+                .as("traversal reached messages older than window.from(): genuinely done")
+                .isFalse();
+        assertThat(page.resumeCursor()).isNull();
+    }
+
+    @Test
+    void aResumeCursorLetsASecondCallContinueExactlyWhereTheInternalPageCapStopped() {
+        // Forces MAX_HISTORY_RAW_PAGES_PER_CALL worth of pure noise (never reaching the
+        // in-window content, never reaching a boundary) so the first call must stop on the
+        // cap alone and hand back a resume point rather than silently reporting "nothing here".
+        int pageSize = 5;
+        long id = 1000L;
+        for (int page = 0; page < TdlibTelegramGateway.MAX_HISTORY_RAW_PAGES_PER_CALL; page++) {
+            long[] ids = new long[pageSize];
+            for (int i = 0; i < pageSize; i++) {
+                ids[i] = id--;
+            }
+            this.client.enqueue(historyPage(ids, 3000L));
+        }
+
+        RemoteMessagePage firstCall = this.gateway.fetchMessages(this.ref, -100123L,
+                MessageWindow.forward(Instant.ofEpochSecond(1000L), Instant.ofEpochSecond(2000L), null, pageSize));
+
+        assertThat(firstCall.messages()).isEmpty();
+        assertThat(firstCall.hasMore())
+                .as("the page cap was hit before reaching the in-window content or a real boundary")
+                .isTrue();
+        assertThat(firstCall.resumeCursor()).isNotNull();
+
+        long resumeFrom = firstCall.resumeCursor();
+        long[] nextIds = {resumeFrom - 3, resumeFrom - 2, resumeFrom - 1};
+        this.client.enqueue(historyPage(nextIds, 1500L));
+
+        RemoteMessagePage secondCall = this.gateway.fetchMessages(this.ref, -100123L,
+                MessageWindow.forward(Instant.ofEpochSecond(1000L), Instant.ofEpochSecond(2000L), null,
+                        resumeFrom, pageSize));
+
+        assertThat(secondCall.messages()).extracting(RemoteMessage::messageId)
+                .containsExactly(nextIds[0], nextIds[1], nextIds[2]);
+        assertThat(secondCall.hasMore()).isFalse();
+    }
+
+    private String historyPage(long[] ids, long uniformDateEpochSeconds) {
+        long[] dates = new long[ids.length];
+        java.util.Arrays.fill(dates, uniformDateEpochSeconds);
+        return historyPage(ids, dates);
+    }
+
+    private String historyPage(long[] ids, long[] dateEpochSeconds) {
+        StringBuilder messages = new StringBuilder();
+        for (int i = 0; i < ids.length; i++) {
+            if (i > 0) {
+                messages.append(',');
+            }
+            messages.append("{\"id\":").append(ids[i])
+                    .append(",\"date\":").append(dateEpochSeconds[i])
+                    .append(",\"content\":{\"@type\":\"messageText\",\"text\":{\"text\":\"m")
+                    .append(ids[i]).append("\"}}}");
+        }
+        return "{\"@type\":\"messages\",\"messages\":[" + messages + "]}";
+    }
+
+    @Test
     void returnsOnlyRealUsersAsParticipantsAndFlagsBots() {
         this.client.enqueue("""
                 {"@type":"chat","id":-100123,"title":"Eng",

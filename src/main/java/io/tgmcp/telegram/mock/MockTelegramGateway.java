@@ -199,7 +199,7 @@ public class MockTelegramGateway implements TelegramGateway {
             selected = new ArrayList<>(all);
             hasMore = false;
         }
-        return new RemoteMessagePage(List.copyOf(selected), hasMore);
+        return new RemoteMessagePage(List.copyOf(selected), hasMore, null);
     }
 
     @Override

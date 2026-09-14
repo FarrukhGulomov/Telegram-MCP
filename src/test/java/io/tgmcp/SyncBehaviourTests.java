@@ -13,6 +13,8 @@ import io.tgmcp.sync.ChatSyncService;
 import io.tgmcp.sync.SyncCheckpoint;
 import io.tgmcp.sync.SyncCheckpointRepository;
 import io.tgmcp.sync.SyncOutcome;
+import io.tgmcp.telegram.gateway.RemoteMessage;
+import io.tgmcp.telegram.gateway.RemoteMessagePage;
 import io.tgmcp.telegram.gateway.RemoteParticipant;
 import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramFloodWaitException;
@@ -450,6 +452,36 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
         assertThat(storedCount())
                 .as("a stale run must not resume just because the state reads ACTIVE again")
                 .isEqualTo(afterFirstSync);
+    }
+
+    // --- real-adapter-style pagination (F12) ---------------------------------------------
+
+    @Test
+    void pullForwardKeepsGoingPastAnEmptyPageThatStillReportsMoreContentFurtherBack() {
+        // Security-audit finding F12: a source whose native pagination only walks backward
+        // (the real TDLib adapter) can legitimately return zero matched messages on a page
+        // while still reporting hasMore=true -- a backlog of messages newer than the approved
+        // window can sit "in the way" of older, in-window content. ChatSyncService must keep
+        // going (using the gateway's own resume cursor) rather than treating an empty page as
+        // "nothing more to fetch", which is exactly what the old code did.
+        RemoteMessage reachedAfterTheBacklog = new RemoteMessage(999L, SyntheticDataset.ALICE,
+                "Alice Nakamura (synthetic)", this.clock.instant().minus(Duration.ofDays(1)), null, false,
+                "finally past the backlog", null);
+
+        org.mockito.Mockito.doReturn(new RemoteMessagePage(List.of(), true, 500L))
+                .doReturn(new RemoteMessagePage(List.of(reachedAfterTheBacklog), false, null))
+                .when(this.gateway).fetchMessages(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
+
+        SyncOutcome outcome = sync();
+
+        assertThat(outcome.status()).isEqualTo(SyncOutcome.Status.SYNCED);
+        assertThat(outcome.messagesIngested()).isPositive();
+        assertThat(this.messages.history(ready().team().tenant().id(), ready().chat().id(),
+                        this.clock.instant().minus(Duration.ofDays(2)), this.clock.instant(), null, 10)
+                .messages())
+                .extracting(StoredMessage::tgMessageId)
+                .contains(999L);
     }
 
     private StoredMessage firstStored() {
