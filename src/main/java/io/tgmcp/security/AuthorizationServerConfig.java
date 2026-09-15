@@ -17,8 +17,11 @@ import java.util.UUID;
 import javax.sql.DataSource;
 
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 
 import com.nimbusds.jose.jwk.JWKSet;
@@ -99,6 +102,7 @@ public class AuthorizationServerConfig {
         OAuth2ClientRegistrationAuthenticationToken authentication = context.getAuthentication();
         java.util.List<String> scopes = authentication.getClientRegistration().getScopes();
         if (scopes != null && scopes.stream().anyMatch(scope -> scope.startsWith(McpScopes.PROVIDER_PREFIX))) {
+            log.warn("Rejecting self-registered client declaring a provider:* scope: {}", scopes);
             throw new OAuth2AuthenticationException(new OAuth2Error("invalid_client_metadata",
                     "Dynamic client registration cannot claim a provider identity (scopes starting with '"
                             + McpScopes.PROVIDER_PREFIX + "'); that identity is reserved to clients "
@@ -247,6 +251,61 @@ public class AuthorizationServerConfig {
         }
     }
 
+    /**
+     * Temporary diagnostic: after correcting the connector URL to include {@code /mcp} (so the
+     * client properly discovers this server via RFC 9728 protected-resource metadata instead of
+     * probing the bare origin), Dynamic Client Registration itself started failing with a bare
+     * 400, logged nowhere. The most likely explanation: {@code .well-known/oauth-protected-
+     * resource} advertises {@code provider:anthropic_claude} as a supported scope for this
+     * resource (see {@code WebSecurityConfig}) -- which a spec-following client has every reason
+     * to request for itself once it reads that document -- while {@link
+     * #rejectSelfRegisteredProviderScope} categorically refuses any self-registered client that
+     * asks for a {@code provider:*} scope (finding F09). If that is what is happening, Claude's
+     * own registration request would show it declaring exactly that scope. Logs the raw JSON
+     * body of the registration request -- not just whatever Spring's client metadata parsing
+     * makes of it -- before anything downstream reads it, then replays those exact bytes so
+     * registration proceeds completely unaffected by having been observed.
+     */
+    private static final class RawOAuth2RegisterRequestLogger extends OncePerRequestFilter {
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+                throws ServletException, IOException {
+            if (!"/oauth2/register".equals(request.getRequestURI()) || !"POST".equalsIgnoreCase(request.getMethod())) {
+                chain.doFilter(request, response);
+                return;
+            }
+            byte[] body = org.springframework.util.StreamUtils.copyToByteArray(request.getInputStream());
+            log.info("Raw POST /oauth2/register body: {}", new String(body, StandardCharsets.UTF_8));
+            chain.doFilter(new HttpServletRequestWrapper(request) {
+                @Override
+                public ServletInputStream getInputStream() {
+                    return new ServletInputStream() {
+                        private final java.io.ByteArrayInputStream replay = new java.io.ByteArrayInputStream(body);
+
+                        @Override
+                        public boolean isFinished() {
+                            return replay.available() == 0;
+                        }
+
+                        @Override
+                        public boolean isReady() {
+                            return true;
+                        }
+
+                        @Override
+                        public void setReadListener(ReadListener readListener) {
+                        }
+
+                        @Override
+                        public int read() {
+                            return replay.read();
+                        }
+                    };
+                }
+            }, response);
+        }
+    }
+
     @Bean
     @Order(1)
     public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http, AppProperties properties,
@@ -258,6 +317,7 @@ public class AuthorizationServerConfig {
 
         http.securityMatcher(endpoints)
                 .addFilterBefore(new RawOAuth2AuthorizeRequestLogger(), SecurityContextHolderFilter.class)
+                .addFilterBefore(new RawOAuth2RegisterRequestLogger(), SecurityContextHolderFilter.class)
                 .with(configurer, server -> server
                         // RFC 7591: remote MCP clients (Claude, ChatGPT) register themselves with
                         // no prior credential. Two defaults fight that:
