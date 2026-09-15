@@ -152,26 +152,62 @@ public class AuthorizationServerConfig {
      * entirely: only the specific case of "no scope in the request" is touched, by substituting
      * the registered client's own scope (exactly what it declared at Dynamic Client
      * Registration time) so there is something real to render and consent to.
+     *
+     * <p>The second case this handles, confirmed from a real ChatGPT connection attempt: the
+     * connector requests every scope this server's discovery metadata advertises at all --
+     * {@code openid mcp:read provider:anthropic_claude provider:openai_chatgpt} -- rather than
+     * only the one {@code provider:*} scope it is actually entitled to, because a generic
+     * connector has no way to know in advance which one that is. Spring's own validator treats
+     * "requested scope is not a subset of the registered client's scope" as a hard
+     * {@code invalid_scope} rejection, which would make this connector (and any other equally
+     * generic one) permanently unable to connect. Rather than reject, this restricts the
+     * request to the intersection with what the client actually holds -- silently dropping
+     * {@code provider:anthropic_claude} for a client that only has {@code
+     * provider:openai_chatgpt} -- so the consent page, and the token that comes out of it, can
+     * never carry a provider scope the client was not granted (finding F09 is enforced by what
+     * the client is registered for, not by what it asked for).
      */
-    private static AuthenticationConverter defaultMissingScopeToRegisteredClientScope(
+    private static AuthenticationConverter reconcileRequestedScopeWithRegisteredClientScope(
             RegisteredClientRepository registeredClientRepository) {
         AuthenticationConverter delegate = new OAuth2AuthorizationCodeRequestAuthenticationConverter();
         return request -> {
             Authentication authentication = delegate.convert(request);
-            if (!(authentication instanceof OAuth2AuthorizationCodeRequestAuthenticationToken token)
-                    || (token.getScopes() != null && !token.getScopes().isEmpty())) {
+            if (!(authentication instanceof OAuth2AuthorizationCodeRequestAuthenticationToken token)) {
                 return authentication;
             }
             RegisteredClient registeredClient = registeredClientRepository.findByClientId(token.getClientId());
             if (registeredClient == null || registeredClient.getScopes().isEmpty()) {
                 return authentication;
             }
-            log.info("Authorize request from client {} carried no scope; defaulting to its registered scope {}",
-                    token.getClientId(), registeredClient.getScopes());
-            return new OAuth2AuthorizationCodeRequestAuthenticationToken(token.getAuthorizationUri(),
-                    token.getClientId(), (Authentication) token.getPrincipal(), token.getRedirectUri(),
-                    token.getState(), registeredClient.getScopes(), token.getAdditionalParameters());
+            java.util.Set<String> requested = token.getScopes();
+            if (requested == null || requested.isEmpty()) {
+                log.info("Authorize request from client {} carried no scope; defaulting to its registered scope {}",
+                        token.getClientId(), registeredClient.getScopes());
+                return withScopes(token, registeredClient.getScopes());
+            }
+            if (registeredClient.getScopes().containsAll(requested)) {
+                return authentication;
+            }
+            java.util.Set<String> allowed = new java.util.LinkedHashSet<>(requested);
+            allowed.retainAll(registeredClient.getScopes());
+            if (allowed.isEmpty()) {
+                log.info("Authorize request from client {} requested {}, none of which it is registered for; "
+                                + "defaulting to its registered scope {}",
+                        token.getClientId(), requested, registeredClient.getScopes());
+                return withScopes(token, registeredClient.getScopes());
+            }
+            log.info("Authorize request from client {} requested {} but is only registered for {}; restricting "
+                            + "the granted scope to {}",
+                    token.getClientId(), requested, registeredClient.getScopes(), allowed);
+            return withScopes(token, allowed);
         };
+    }
+
+    private static OAuth2AuthorizationCodeRequestAuthenticationToken withScopes(
+            OAuth2AuthorizationCodeRequestAuthenticationToken token, java.util.Set<String> scopes) {
+        return new OAuth2AuthorizationCodeRequestAuthenticationToken(token.getAuthorizationUri(),
+                token.getClientId(), (Authentication) token.getPrincipal(), token.getRedirectUri(),
+                token.getState(), scopes, token.getAdditionalParameters());
     }
 
     /**
@@ -368,7 +404,7 @@ public class AuthorizationServerConfig {
                         .authorizationEndpoint(authorization -> authorization
                                 .authorizationRequestConverters(converters -> converters.replaceAll(converter ->
                                         converter instanceof OAuth2AuthorizationCodeRequestAuthenticationConverter
-                                                ? defaultMissingScopeToRegisteredClientScope(registeredClientRepository)
+                                                ? reconcileRequestedScopeWithRegisteredClientScope(registeredClientRepository)
                                                 : converter))
                                 .authenticationProviders(providers -> providers.forEach(provider -> {
                                     if (provider instanceof OAuth2AuthorizationCodeRequestAuthenticationProvider p) {
@@ -401,7 +437,7 @@ public class AuthorizationServerConfig {
 
     @Bean
     public RegisteredClientRepository registeredClientRepository(JdbcTemplate jdbcTemplate) {
-        return new JdbcRegisteredClientRepository(jdbcTemplate);
+        return new TrustedProviderAugmentingClientRepository(new JdbcRegisteredClientRepository(jdbcTemplate));
     }
 
     @Bean

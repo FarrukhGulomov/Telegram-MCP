@@ -77,6 +77,7 @@ public class TrustedMcpClientSeeder implements ApplicationRunner {
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
                 .scope(McpScopes.READ)
+                .scope("openid")
                 .scope(providerScope)
                 .clientSettings(ClientSettings.builder()
                         .requireProofKey(true)
@@ -88,6 +89,6 @@ public class TrustedMcpClientSeeder implements ApplicationRunner {
                         .build());
         redirectUris.forEach(builder::redirectUri);
         this.clients.save(builder.build());
-        log.info("Registered trusted MCP client '{}' with scopes [{} {}]", clientId, McpScopes.READ, providerScope);
+        log.info("Registered trusted MCP client '{}' with scopes [{} openid {}]", clientId, McpScopes.READ, providerScope);
     }
 }
