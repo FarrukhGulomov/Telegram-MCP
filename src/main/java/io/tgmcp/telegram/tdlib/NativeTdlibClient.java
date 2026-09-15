@@ -82,6 +82,16 @@ public class NativeTdlibClient implements TdlibClient {
         this.library = library;
         this.objectMapper = objectMapper;
         this.requestTimeoutSeconds = requestTimeoutSeconds;
+        // Real-account testing found TDLib's default verbosity (5) floods the process's stdout
+        // with FileManager/ReactionManager internals -- enough, under Railway, to hit its log
+        // ingestion rate limit and start silently DROPPING messages ("Railway rate limit
+        // reached ... Messages dropped: 380"), which could just as easily swallow a genuine
+        // error as this noise, and cannot be told apart from one after the fact. td_execute
+        // (not td_send) is TDLib's documented synchronous path for setLogVerbosityLevel: it
+        // needs no client id and is set before creating one. Level 1 keeps fatal errors and
+        // errors, dropping the info/debug chatter this codebase's own error handling never
+        // relied on reading from stdout in the first place.
+        library.td_execute("{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":1}");
         this.clientId = library.td_create_client_id();
         this.receiveThread = new Thread(this::receiveLoop, "tdlib-receive");
         this.receiveThread.setDaemon(true);
