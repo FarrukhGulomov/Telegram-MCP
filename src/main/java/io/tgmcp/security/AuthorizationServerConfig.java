@@ -1,5 +1,8 @@
 package io.tgmcp.security;
 
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -12,6 +15,9 @@ import java.util.Base64;
 import java.util.UUID;
 
 import javax.sql.DataSource;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
@@ -33,6 +39,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
@@ -58,6 +65,7 @@ import org.springframework.security.oauth2.server.authorization.token.OAuth2Toke
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.util.StringUtils;
 
 /**
  * A standards-compliant OAuth 2.1 authorization server, provided by Spring Authorization
@@ -114,6 +122,49 @@ public class AuthorizationServerConfig {
                             "This authorization server does not serve the requested resource.", null),
                     authentication);
         }
+    }
+
+    /**
+     * Temporary diagnostic: a real MCP client's authorize attempt was failing with no
+     * indication of why -- the default behaviour here is a silent redirect back to the
+     * client carrying an {@code error} query parameter, with nothing logged server-side, so
+     * every rejection (mismatched redirect_uri, PKCE, scope, the resource-parameter check
+     * above, or anything else the library's own default validator rejects) looked identical
+     * to reading Railway's HTTP access log: a bare 302 with no way to tell which case, or
+     * even that it was an error redirect rather than a successful one. Logs the exact
+     * OAuth2Error before reproducing the same redirect-with-error behaviour the library's own
+     * (not independently reusable) default handler would have performed.
+     */
+    private static void logAndRedirectAuthorizationError(HttpServletRequest request, HttpServletResponse response,
+                                                          AuthenticationException exception) throws IOException {
+        if (!(exception instanceof OAuth2AuthorizationCodeRequestAuthenticationException ex)) {
+            log.warn("OAuth2 authorize request rejected: {}", exception.toString());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "OAuth2 authorization request failed");
+            return;
+        }
+        OAuth2Error error = ex.getError();
+        OAuth2AuthorizationCodeRequestAuthenticationToken authRequest = ex.getAuthorizationCodeRequestAuthentication();
+        log.warn("OAuth2 authorize request rejected: error={} description={} clientId={} redirectUri={}",
+                error.getErrorCode(), error.getDescription(),
+                authRequest == null ? null : authRequest.getClientId(),
+                authRequest == null ? null : authRequest.getRedirectUri());
+        String redirectUri = authRequest == null ? null : authRequest.getRedirectUri();
+        if (redirectUri == null) {
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "OAuth2 authorization request failed: "
+                    + error.getErrorCode());
+            return;
+        }
+        StringBuilder location = new StringBuilder(redirectUri)
+                .append(redirectUri.contains("?") ? '&' : '?')
+                .append("error=").append(URLEncoder.encode(error.getErrorCode(), StandardCharsets.UTF_8));
+        if (StringUtils.hasText(error.getDescription())) {
+            location.append("&error_description=")
+                    .append(URLEncoder.encode(error.getDescription(), StandardCharsets.UTF_8));
+        }
+        if (StringUtils.hasText(authRequest.getState())) {
+            location.append("&state=").append(URLEncoder.encode(authRequest.getState(), StandardCharsets.UTF_8));
+        }
+        response.sendRedirect(location.toString());
     }
 
     @Bean
@@ -176,7 +227,8 @@ public class AuthorizationServerConfig {
                                                         .andThen(context -> rejectMismatchedResourceParameter(
                                                                 context, expectedResource)));
                                     }
-                                })))
+                                }))
+                                .errorResponseHandler(AuthorizationServerConfig::logAndRedirectAuthorizationError))
                         .oidc(Customizer.withDefaults()))
                 .authorizeHttpRequests(requests -> requests
                         // Open (anonymous) dynamic client registration: a new MCP client has no
