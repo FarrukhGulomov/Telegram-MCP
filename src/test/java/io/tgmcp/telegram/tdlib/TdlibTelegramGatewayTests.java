@@ -392,12 +392,32 @@ class TdlibTelegramGatewayTests {
                 + "\",\"last_name\":\"\",\"type\":{\"@type\":\"userTypeRegular\"}}";
     }
 
+    /**
+     * Real-account testing found a private (1-on-1) chat could never collect consent: its
+     * counterpart was treated as "no member list available" just like a basic group, leaving
+     * the participant table permanently empty with no row to ever record their consent
+     * against. A private chat's counterpart needs no separate members call -- it is named
+     * directly in the chat's own {@code type}.
+     */
+    @Test
+    void returnsThePrivateChatCounterpartAsItsOnlyParticipant() {
+        this.client.enqueue("""
+                {"@type":"chat","id":5,"title":"DM","type":{"@type":"chatTypePrivate","user_id":42}}""");
+        this.client.enqueue("""
+                {"@type":"user","id":42,"first_name":"Farrukh","last_name":"Gulomov",
+                 "type":{"@type":"userTypeRegular"}}""");
+
+        assertThat(this.gateway.listParticipants(this.ref, 5L))
+                .containsExactly(new RemoteParticipant(42L, "Farrukh Gulomov", false));
+    }
+
     @Test
     void returnsNoParticipantsForChatTypesThatDoNotExposeAMemberList() {
         this.client.enqueue("""
-                {"@type":"chat","id":5,"title":"DM","type":{"@type":"chatTypePrivate","user_id":5}}""");
+                {"@type":"chat","id":9,"title":"Small group",
+                 "type":{"@type":"chatTypeBasicGroup","basic_group_id":9}}""");
 
-        assertThat(this.gateway.listParticipants(this.ref, 5L)).isEmpty();
+        assertThat(this.gateway.listParticipants(this.ref, 9L)).isEmpty();
     }
 
     @Test

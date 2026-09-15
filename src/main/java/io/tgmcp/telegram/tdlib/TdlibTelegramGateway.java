@@ -274,8 +274,22 @@ public class TdlibTelegramGateway implements TelegramGateway {
     public List<RemoteParticipant> listParticipants(ConnectionRef ref, long tgChatId) {
         JsonNode chat = this.client.request("getChat", Map.of("chat_id", tgChatId));
         JsonNode type = chat.path("type");
-        if (!"chatTypeSupergroup".equals(type.path("@type").asString(""))) {
-            // Basic groups and private chats do not expose a member list through this call.
+        String chatType = type.path("@type").asString("");
+
+        if ("chatTypePrivate".equals(chatType)) {
+            // A private chat's only counterpart is named directly in the chat's own `type` --
+            // there is no separate members call for it the way getSupergroupMembers is for a
+            // supergroup. Real-account testing found this case entirely unhandled: treating it
+            // like a type with no member list at all left the participant table permanently
+            // empty for any 1-on-1 chat, so there was never a row to record that person's
+            // consent against, and the chat could never leave AWAITING_CONSENT.
+            List<RemoteParticipant> result = new ArrayList<>();
+            addParticipant(result, type.path("user_id").asLong());
+            return List.copyOf(result);
+        }
+        if (!"chatTypeSupergroup".equals(chatType)) {
+            // Basic groups still do not expose a member list through this call (they need
+            // getBasicGroupFullInfo, not wired here yet -- see docs/production-prerequisites.md).
             return List.of();
         }
         long supergroupId = type.path("supergroup_id").asLong();
@@ -291,7 +305,10 @@ public class TdlibTelegramGateway implements TelegramGateway {
             int pageSize = 0;
             for (JsonNode member : members.path("members")) {
                 pageSize++;
-                addParticipant(result, member);
+                JsonNode senderId = member.path("member_id");
+                if ("messageSenderUser".equals(senderId.path("@type").asString(""))) {
+                    addParticipant(result, senderId.path("user_id").asLong());
+                }
             }
             if (pageSize < MEMBER_PAGE_SIZE) {
                 break;
@@ -301,12 +318,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
         return List.copyOf(result);
     }
 
-    private void addParticipant(List<RemoteParticipant> result, JsonNode member) {
-        JsonNode senderId = member.path("member_id");
-        if (!"messageSenderUser".equals(senderId.path("@type").asString(""))) {
-            return;
-        }
-        long userId = senderId.path("user_id").asLong();
+    private void addParticipant(List<RemoteParticipant> result, long userId) {
         JsonNode user = this.client.request("getUser", Map.of("user_id", userId));
         String name = (user.path("first_name").asString("") + " " + user.path("last_name").asString("")).trim();
         boolean bot = "userTypeBot".equals(user.path("type").path("@type").asString(""));
