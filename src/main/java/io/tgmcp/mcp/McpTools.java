@@ -20,6 +20,7 @@ import io.tgmcp.audit.AuditAction;
 import io.tgmcp.audit.AuditService;
 import io.tgmcp.chat.Chat;
 import io.tgmcp.config.AppProperties;
+import io.tgmcp.consent.ConsentService;
 import io.tgmcp.message.ChatCoverage;
 import io.tgmcp.message.MessagePageKey;
 import io.tgmcp.message.MessageRepository;
@@ -48,6 +49,7 @@ public class McpTools {
 
     private final ChatAccessService accessService;
     private final MessageRepository messageRepository;
+    private final ConsentService consentService;
     private final CursorCodec cursorCodec;
     private final RateLimiter rateLimiter;
     private final AuditService auditService;
@@ -57,6 +59,7 @@ public class McpTools {
 
     public McpTools(ChatAccessService accessService,
                     MessageRepository messageRepository,
+                    ConsentService consentService,
                     CursorCodec cursorCodec,
                     RateLimiter rateLimiter,
                     AuditService auditService,
@@ -65,6 +68,7 @@ public class McpTools {
                     Clock clock) {
         this.accessService = accessService;
         this.messageRepository = messageRepository;
+        this.consentService = consentService;
         this.cursorCodec = cursorCodec;
         this.rateLimiter = rateLimiter;
         this.auditService = auditService;
@@ -150,6 +154,24 @@ public class McpTools {
             // Authorization is re-checked after the read and before anything is emitted.
             this.accessService.reverify(context.actor(), chatIds, context.provider());
 
+            // Security-audit finding SEC-03: a chat's *coverage* being complete only ever
+            // describes its currently active participants -- it says nothing about whether one
+            // particular stored row's own sender is eligible to be surfaced (a departed sender,
+            // one never captured in chat_participants, or one whose consent has since expired).
+            // Re-checked here, per message, as a backstop beyond the write-time gate in
+            // ChatSyncService#store. Filtering rebuilds the slice (rather than dropping items
+            // after the fact) so that capToByteBudget's cursor math -- which indexes into
+            // slice.messages() -- stays aligned with the eligible messages actually rendered;
+            // hasMore/nextKey are carried over unchanged since they describe the underlying
+            // query, not how many of this page's rows survived the eligibility check.
+            slice = new MessageSlice(slice.messages().stream()
+                    .filter(message -> {
+                        AuthorizedChat owner = authorized.get(message.chatId());
+                        return owner != null && this.consentService.authorEligible(context.actor().tenantId(),
+                                message.chatId(), message.senderTgUserId(), owner.activation().contextRevision());
+                    })
+                    .toList(), slice.hasMore(), slice.nextKey());
+
             List<Map<String, Object>> items = new ArrayList<>();
             for (StoredMessage message : slice.messages()) {
                 AuthorizedChat owner = authorized.get(message.chatId());
@@ -217,6 +239,15 @@ public class McpTools {
                     windowStart, windowEnd, after, limit);
             this.accessService.reverify(context.actor(), List.of(chatId), context.provider());
 
+            // Security-audit finding SEC-03: see the identical comment in searchMessages --
+            // rebuilding the slice keeps capToByteBudget's index-based cursor math aligned with
+            // the eligible messages actually rendered.
+            String contextRevision = allowed.activation().contextRevision();
+            slice = new MessageSlice(slice.messages().stream()
+                    .filter(message -> this.consentService.authorEligible(context.actor().tenantId(), chatId,
+                            message.senderTgUserId(), contextRevision))
+                    .toList(), slice.hasMore(), slice.nextKey());
+
             List<Map<String, Object>> items = slice.messages().stream()
                     .map(message -> messageItem(message, allowed.chat()))
                     .toList();
@@ -257,16 +288,28 @@ public class McpTools {
             Instant windowStart = allowed.windowStart(now);
             Instant windowEnd = allowed.windowEnd(now);
 
+            String contextRevision = allowed.activation().contextRevision();
             StoredMessage pivot = this.messageRepository.find(context.actor().tenantId(), chatId, messageId)
                     // A message that is absent, deleted, or outside the approved window is
                     // reported the same way, so the caller learns nothing from the difference.
+                    // Security-audit finding SEC-03: a message whose sender is no longer
+                    // eligible (departed without consent, never known, or lapsed) is denied
+                    // identically -- its presence or absence is not distinguishable either.
                     .filter(m -> !m.sentAt().isBefore(windowStart) && !m.sentAt().isAfter(windowEnd))
+                    .filter(m -> this.consentService.authorEligible(context.actor().tenantId(), chatId,
+                            m.senderTgUserId(), contextRevision))
                     .orElseThrow(ChatAccessException::denied);
 
             List<StoredMessage> preceding = this.messageRepository.before(context.actor().tenantId(), chatId,
-                    pivot.sentAt(), pivot.tgMessageId(), windowStart, before);
+                    pivot.sentAt(), pivot.tgMessageId(), windowStart, before).stream()
+                    .filter(m -> this.consentService.authorEligible(context.actor().tenantId(), chatId,
+                            m.senderTgUserId(), contextRevision))
+                    .toList();
             List<StoredMessage> following = this.messageRepository.after(context.actor().tenantId(), chatId,
-                    pivot.sentAt(), pivot.tgMessageId(), windowEnd, after);
+                    pivot.sentAt(), pivot.tgMessageId(), windowEnd, after).stream()
+                    .filter(m -> this.consentService.authorEligible(context.actor().tenantId(), chatId,
+                            m.senderTgUserId(), contextRevision))
+                    .toList();
 
             this.accessService.reverify(context.actor(), List.of(chatId), context.provider());
 

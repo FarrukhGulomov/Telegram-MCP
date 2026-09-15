@@ -164,6 +164,36 @@ public class ConsentService {
     }
 
     /**
+     * Security-audit finding SEC-03: {@link #coverageFor} only ever asks whether the chat's
+     * *currently active* participants are covered -- it says nothing about who actually sent
+     * one particular message. A departed sender, a sender never captured in {@code
+     * chat_participants} at all (someone who left before this application ever synced
+     * membership), and an active sender whose own consent record has since expired are all
+     * invisible to that check. This is the single place both message ingestion ({@code
+     * ChatSyncService#store}) and message retrieval ({@code McpTools}) ask "is it acceptable
+     * for this exact message's author to be represented here at all", so the two enforcement
+     * points cannot quietly drift apart.
+     *
+     * <p>A sender with no individual identity ({@code senderTgUserId == null} -- a channel
+     * post or an anonymous group admin) carries no personal data to consent over, so it is
+     * treated the same way a known bot already is: eligible without a consent record of its
+     * own. Forwarded messages and quoted third-party content embedded in another sender's own
+     * text are a distinct, unresolved privacy concern that a sender-only check cannot solve.
+     */
+    public boolean authorEligible(UUID tenantId, UUID chatId, Long senderTgUserId, String contextRevision) {
+        if (senderTgUserId == null) {
+            return true;
+        }
+        boolean knownBot = this.participantRepository.find(tenantId, chatId, senderTgUserId)
+                .map(ChatParticipant::bot)
+                .orElse(false);
+        if (knownBot) {
+            return true;
+        }
+        return hasValidConsent(tenantId, chatId, senderTgUserId, contextRevision);
+    }
+
+    /**
      * Security-audit finding F02: an authenticated operator could previously record consent
      * "on behalf of" any participant via {@code SELF_SERVICE_LINK} with no proof that the
      * participant themselves ever saw or approved anything -- the method name promised a

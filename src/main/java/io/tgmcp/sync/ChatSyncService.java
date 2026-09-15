@@ -160,9 +160,12 @@ public class ChatSyncService {
 
             int ingested = 0;
             try {
-                ingested += pullForward(tenantId, chat, ref, checkpoint, windowStart, windowEnd, activation.epoch());
-                ingested += backfill(tenantId, chat, ref, windowStart, windowEnd, activation.epoch());
-                int revisions = applyRevisions(tenantId, chat, ref, checkpoint, now, activation.epoch());
+                ingested += pullForward(tenantId, chat, ref, checkpoint, windowStart, windowEnd, activation.epoch(),
+                        activation.contextRevision());
+                ingested += backfill(tenantId, chat, ref, windowStart, windowEnd, activation.epoch(),
+                        activation.contextRevision());
+                int revisions = applyRevisions(tenantId, chat, ref, checkpoint, now, activation.epoch(),
+                        activation.contextRevision());
 
                 SyncCheckpoint refreshed = this.checkpointRepository.findOrCreate(tenantId, chatId);
                 this.checkpointRepository.recordSuccess(tenantId, chatId,
@@ -265,9 +268,9 @@ public class ChatSyncService {
             this.participantRepository.upsert(new ChatParticipant(Ids.newId(), chat.tenantId(), chat.id(),
                     participant.tgUserId(), participant.displayName(), participant.bot(), null, null));
         }
-        List<Long> departed = this.participantRepository.markLeft(chat.tenantId(), chat.id(),
+        this.participantRepository.markLeft(chat.tenantId(), chat.id(),
                 remote.stream().map(RemoteParticipant::tgUserId).toList());
-        purgeMessagesFromUnconsentedDepartures(activation, chat, departed);
+        purgeMessagesFromUnconsentedAuthors(activation, chat);
 
         String fingerprint = this.participantRepository.membershipFingerprint(chat.tenantId(), chat.id());
         if (activation.membershipFingerprint() == null) {
@@ -286,26 +289,34 @@ public class ChatSyncService {
     }
 
     /**
-     * Security-audit finding F05: message storage is never gated on a per-sender consent
-     * check -- coverageFor only ever asks whether *currently active* participants are
-     * covered, so a person's own messages, once stored, keep circulating regardless of
-     * whether that person personally ever consented. Someone who leaves without a valid
-     * consent record for the chat's current context revision can no longer be asked at all,
-     * so their own messages are purged the moment their departure is noticed rather than
-     * being left to outlive the only chance anyone had to ask them.
+     * Security-audit finding F05 (departures) broadened by SEC-03: message storage is never
+     * gated on a per-sender consent check at the point of ingestion alone -- once a message
+     * with a given sender is stored, it does not automatically disappear just because that
+     * sender's own consent later stops being valid. F05 only re-checked a participant at the
+     * instant {@code markLeft} reported them as newly departed, so a still-active member whose
+     * consent record simply expired, or a departed member whose consent record expires only
+     * *after* they left, could keep their stored messages indefinitely. Every known
+     * participant -- active or departed -- is reconciled against current consent on every
+     * successful membership refresh instead, so a lapse is never missed for lack of a
+     * departure event to hang it on.
      */
-    private void purgeMessagesFromUnconsentedDepartures(ChatActivation activation, Chat chat, List<Long> departed) {
-        for (Long tgUserId : departed) {
-            if (this.consentService.hasValidConsent(chat.tenantId(), chat.id(), tgUserId,
+    private void purgeMessagesFromUnconsentedAuthors(ChatActivation activation, Chat chat) {
+        for (ChatParticipant participant : this.participantRepository.findAll(chat.tenantId(), chat.id())) {
+            if (participant.bot()) {
+                continue;
+            }
+            if (this.consentService.hasValidConsent(chat.tenantId(), chat.id(), participant.tgUserId(),
                     activation.contextRevision())) {
                 continue;
             }
-            int deleted = this.messageRepository.deleteForSender(chat.tenantId(), chat.id(), tgUserId);
+            int deleted = this.messageRepository.deleteForSender(chat.tenantId(), chat.id(),
+                    participant.tgUserId());
             if (deleted > 0) {
                 this.auditService.system(chat.tenantId(), AuditAction.DATA_DELETED, chat.id(),
                         AuditService.ALLOWED,
-                        Map.of("reason", "participant left without valid consent for the current context",
-                                "participantTgUserId", tgUserId, "messagesDeleted", deleted));
+                        Map.of("reason", "participant has no valid consent for the current context",
+                                "participantTgUserId", participant.tgUserId(), "messagesDeleted", deleted,
+                                "stillActive", participant.active()));
             }
         }
     }
@@ -329,7 +340,7 @@ public class ChatSyncService {
      * messages it actually needs.
      */
     private int pullForward(UUID tenantId, Chat chat, ConnectionRef ref, SyncCheckpoint checkpoint,
-                            Instant windowStart, Instant windowEnd, long epoch) {
+                            Instant windowStart, Instant windowEnd, long epoch, String contextRevision) {
         int ingested = 0;
         Long afterId = checkpoint.newestSyncedMessageId();
         Long resumeFrom = null;
@@ -339,7 +350,7 @@ public class ChatSyncService {
             RemoteMessagePage remotePage = this.gateway.fetchMessages(ref, chat.tgChatId(), window);
             if (!remotePage.messages().isEmpty()) {
                 requireNotFenced(tenantId, chat.id(), epoch);
-                ingested += store(tenantId, chat, remotePage.messages());
+                ingested += store(tenantId, chat, remotePage.messages(), contextRevision);
                 afterId = remotePage.messages().get(remotePage.messages().size() - 1).messageId();
             }
             resumeFrom = remotePage.resumeCursor();
@@ -352,7 +363,7 @@ public class ChatSyncService {
 
     /** Bounded backwards backfill, stopping at the approved/retention floor. */
     private int backfill(UUID tenantId, Chat chat, ConnectionRef ref, Instant windowStart, Instant windowEnd,
-                         long epoch) {
+                         long epoch, String contextRevision) {
         SyncCheckpoint checkpoint = this.checkpointRepository.findOrCreate(tenantId, chat.id());
         if (checkpoint.backfillComplete()) {
             return 0;
@@ -366,7 +377,7 @@ public class ChatSyncService {
             RemoteMessagePage remotePage = this.gateway.fetchMessages(ref, chat.tgChatId(), window);
             if (!remotePage.messages().isEmpty()) {
                 requireNotFenced(tenantId, chat.id(), epoch);
-                ingested += store(tenantId, chat, remotePage.messages());
+                ingested += store(tenantId, chat, remotePage.messages(), contextRevision);
                 cursor = remotePage.messages().get(0).messageId();
             }
             if (remotePage.resumeCursor() != null) {
@@ -391,7 +402,7 @@ public class ChatSyncService {
 
     /** Applies upstream edits and deletions to rows we already hold. */
     private int applyRevisions(UUID tenantId, Chat chat, ConnectionRef ref, SyncCheckpoint checkpoint,
-                               Instant now, long epoch) {
+                               Instant now, long epoch, String contextRevision) {
         Instant since = checkpoint.lastSuccessAt() == null
                 ? now.minus(Duration.ofDays(1)) : checkpoint.lastSuccessAt();
         List<RemoteMessage> revisions = this.gateway.fetchRevisions(ref, chat.tgChatId(), since,
@@ -403,7 +414,7 @@ public class ChatSyncService {
                 applied += this.messageRepository.markDeleted(tenantId, chat.id(), revision.messageId(), now);
             }
             else {
-                store(tenantId, chat, List.of(revision));
+                store(tenantId, chat, List.of(revision), contextRevision);
                 applied++;
             }
         }
@@ -430,10 +441,20 @@ public class ChatSyncService {
         }
     }
 
-    private int store(UUID tenantId, Chat chat, List<RemoteMessage> messages) {
+    /**
+     * Security-audit finding SEC-03: message storage used to be gated on nothing but the
+     * approved date window -- whoever sent a message, storing it was purely a function of
+     * when it was sent. A message whose sender has no valid consent for the chat's current
+     * processing context -- including a sender this application has never seen in {@code
+     * chat_participants} at all, e.g. someone who left before onboarding ever ran -- is
+     * quarantined here instead of being written: rejected rather than automatically accepted,
+     * as the audit's own remediation text requires for an unknown author.
+     */
+    private int store(UUID tenantId, Chat chat, List<RemoteMessage> messages, String contextRevision) {
         RemoteChat descriptor = new RemoteChat(chat.tgChatId(), chat.title(), chat.chatType(),
                 chat.username(), chat.memberCount());
         int stored = 0;
+        int quarantined = 0;
         Long newest = null;
         Long oldest = null;
         Instant earliest = null;
@@ -443,6 +464,11 @@ public class ChatSyncService {
             if (message.deleted()) {
                 this.messageRepository.markDeleted(tenantId, chat.id(), message.messageId(),
                         this.clock.instant());
+                continue;
+            }
+            if (!this.consentService.authorEligible(tenantId, chat.id(), message.senderTgUserId(),
+                    contextRevision)) {
+                quarantined++;
                 continue;
             }
             String link = this.gateway.messageLink(descriptor, message.messageId()).orElse(null);
@@ -460,6 +486,11 @@ public class ChatSyncService {
             this.checkpointRepository.recordSuccess(tenantId, chat.id(), newest, oldest, earliest, latest,
                     this.checkpointRepository.findOrCreate(tenantId, chat.id()).backfillComplete(),
                     this.clock.instant());
+        }
+        if (quarantined > 0) {
+            this.auditService.system(tenantId, AuditAction.MESSAGE_QUARANTINED, chat.id(), AuditService.DENIED,
+                    Map.of("messagesSkipped", quarantined,
+                            "reason", "sender has no valid consent for the current context"));
         }
         return stored;
     }

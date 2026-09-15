@@ -4,6 +4,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import io.tgmcp.common.Hashing;
@@ -28,6 +29,36 @@ public class ChatParticipantRepository {
         return jdbc.sql("SELECT " + COLUMNS + """
                          FROM chat_participants
                         WHERE tenant_id = :tenantId AND chat_id = :chatId AND left_at IS NULL
+                        ORDER BY display_name
+                        """)
+                .param("tenantId", tenantId)
+                .param("chatId", chatId)
+                .query(this::map)
+                .list();
+    }
+
+    /** One participant regardless of whether they are currently active or have left. */
+    public Optional<ChatParticipant> find(UUID tenantId, UUID chatId, long tgUserId) {
+        return jdbc.sql("SELECT " + COLUMNS + """
+                         FROM chat_participants
+                        WHERE tenant_id = :tenantId AND chat_id = :chatId AND tg_user_id = :tgUserId
+                        """)
+                .param("tenantId", tenantId)
+                .param("chatId", chatId)
+                .param("tgUserId", tgUserId)
+                .query(this::map)
+                .optional();
+    }
+
+    /**
+     * Every participant ever seen in this chat, active or departed. Security-audit finding
+     * SEC-03: consent can lapse (expire or be revoked) without the participant ever leaving,
+     * so reconciling only against newly-detected departures is not enough to catch it.
+     */
+    public List<ChatParticipant> findAll(UUID tenantId, UUID chatId) {
+        return jdbc.sql("SELECT " + COLUMNS + """
+                         FROM chat_participants
+                        WHERE tenant_id = :tenantId AND chat_id = :chatId
                         ORDER BY display_name
                         """)
                 .param("tenantId", tenantId)

@@ -20,6 +20,7 @@ public final class AuditAction {
     public static final String SYNC_HALTED = "SYNC_HALTED";
     public static final String RETENTION_PURGE = "RETENTION_PURGE";
     public static final String DATA_DELETED = "DATA_DELETED";
+    public static final String MESSAGE_QUARANTINED = "MESSAGE_QUARANTINED";
     public static final String MCP_TOOL_CALL = "MCP_TOOL_CALL";
     public static final String MCP_ACCESS_DENIED = "MCP_ACCESS_DENIED";
     public static final String MCP_RATE_LIMITED = "MCP_RATE_LIMITED";
