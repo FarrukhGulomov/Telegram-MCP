@@ -107,11 +107,9 @@
 
   <div class="card" th:if="${view.selected}">
     <h2 th:text="#{chat.consentStep.title}">Step 2 — Get everyone's consent</h2>
-    <p class="muted" th:text="#{chat.consentStep.hint(${consentVersion})}">
-      Every person listed below must consent before this chat can be activated. Consent is
-      recorded per participant, for this exact purpose, provider scope and consent version
-      <code th:text="${consentVersion}"></code>. An administrator cannot consent on someone
-      else's behalf: recording an out-of-band consent requires naming the evidence.
+    <p class="muted" th:text="#{chat.consentStep.hint}">
+      Every person listed below must agree before this chat can be turned on. Ask them, then
+      press the button next to their name.
     </p>
 
     <div class="flash err" th:if="${view.coverage != null and !view.consentComplete}">
@@ -136,12 +134,12 @@
           <form th:action="@{'/chats/' + ${view.chat.id} + '/consent'}" method="post" data-guard-resubmit class="inline">
             <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
             <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
-            <select name="method">
-              <option value="SIGNED_ATTESTATION" th:text="#{chat.consentMethod.evidence}">Recorded from evidence</option>
-              <option th:if="${demoMode}" value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
+            <input type="hidden" th:unless="${demoMode}" name="method" value="OPERATOR_CONFIRMED">
+            <select th:if="${demoMode}" name="method">
+              <option value="OPERATOR_CONFIRMED" th:text="#{chat.consentMethod.operatorConfirmed}">Confirmed by operator</option>
+              <option value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
             </select>
-            <input name="evidenceRef" th:placeholder="#{chat.evidenceRef.placeholder}" maxlength="300">
-            <button type="submit" th:text="#{chat.record.button}">Record</button>
+            <button type="submit" th:text="#{chat.record.button}">They agreed</button>
           </form>
         </td>
         <td>

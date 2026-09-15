@@ -173,6 +173,11 @@ public class ConsentService {
      * until a real identity-bound flow exists. {@code DEMO_SYNTHETIC} is rejected the moment a
      * real Telegram account is in play (any adapter other than the synthetic mock), so it can
      * never substitute for genuine consent once real people's data is involved.
+     *
+     * <p>{@code OPERATOR_CONFIRMED} deliberately imposes no evidence requirement (see its
+     * javadoc): unlike {@code SELF_SERVICE_LINK} it is not rejected, because it never claims
+     * the participant proved anything themselves -- it is still, honestly, the operator's own
+     * unverified record.
      */
     private void validateMethod(ConsentMethod method, String evidenceRef) {
         if (method == ConsentMethod.SELF_SERVICE_LINK) {
