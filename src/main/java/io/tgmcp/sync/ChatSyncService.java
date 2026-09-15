@@ -254,8 +254,18 @@ public class ChatSyncService {
     /**
      * Refreshes the participant list and forces renewed review when the membership changed:
      * the set of people whose consent is required is no longer the set that consented.
+     *
+     * <p>A broadcast channel's "membership" is its subscriber list, which is not who this app
+     * asks consent from (see {@link io.tgmcp.consent.ConsentCoverage#channelBroadcast}) and
+     * routinely churns for reasons that have nothing to do with consent -- tracking it here
+     * would either pause a channel on every subscriber count change or (once Telegram allows
+     * seeing the list at all) require an unbounded consent list from people who never posted
+     * anything. Skipped entirely for that chat type.
      */
     private SyncOutcome refreshMembership(ChatActivation activation, Chat chat, ConnectionRef ref) {
+        if ("CHANNEL".equals(chat.chatType())) {
+            return null;
+        }
         List<RemoteParticipant> remote = this.gateway.listParticipants(ref, chat.tgChatId());
         if (remote.isEmpty()) {
             // Security-audit finding F04: a chat that has never had a verified membership

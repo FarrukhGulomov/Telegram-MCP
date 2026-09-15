@@ -11,9 +11,11 @@ import java.util.UUID;
 
 import io.tgmcp.audit.AuditAction;
 import io.tgmcp.audit.AuditService;
+import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatParticipant;
 import io.tgmcp.chat.ChatParticipantRepository;
+import io.tgmcp.chat.ChatRepository;
 import io.tgmcp.common.Ids;
 import io.tgmcp.message.MessageRepository;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
@@ -34,6 +36,7 @@ public class ConsentService {
 
     private final ConsentRepository consentRepository;
     private final ChatParticipantRepository participantRepository;
+    private final ChatRepository chatRepository;
     private final MessageRepository messageRepository;
     private final AuditService auditService;
     private final TelegramGateway gateway;
@@ -41,12 +44,14 @@ public class ConsentService {
 
     public ConsentService(ConsentRepository consentRepository,
                           ChatParticipantRepository participantRepository,
+                          ChatRepository chatRepository,
                           MessageRepository messageRepository,
                           AuditService auditService,
                           TelegramGateway gateway,
                           Clock clock) {
         this.consentRepository = consentRepository;
         this.participantRepository = participantRepository;
+        this.chatRepository = chatRepository;
         this.messageRepository = messageRepository;
         this.auditService = auditService;
         this.gateway = gateway;
@@ -59,6 +64,18 @@ public class ConsentService {
 
     public ConsentCoverage coverageFor(UUID tenantId, UUID chatId, String contextRevision) {
         Instant now = this.clock.instant();
+        // Security-audit finding (real-account testing): a broadcast channel has no
+        // participants whose personal correspondence is being disclosed -- its content is
+        // authored by the channel itself for a public audience, the same way a blog needs no
+        // reader consent. Requiring per-participant consent from passive subscribers who never
+        // authored anything made every channel permanently unactivatable. This check only ever
+        // trusts Telegram's own is_channel flag (Chat.chatType, set once from the real API
+        // response and never operator-editable), so an operator cannot relabel an ordinary
+        // group to escape consent the way they legitimately could not before.
+        Optional<Chat> chat = this.chatRepository.find(tenantId, chatId);
+        if (chat.isPresent() && "CHANNEL".equals(chat.get().chatType())) {
+            return ConsentCoverage.channelBroadcast();
+        }
         List<ChatParticipant> required = this.participantRepository.findActive(tenantId, chatId).stream()
                 .filter(p -> !p.bot())
                 .toList();
