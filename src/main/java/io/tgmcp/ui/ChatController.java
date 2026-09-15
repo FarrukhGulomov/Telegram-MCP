@@ -7,6 +7,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
+import io.tgmcp.chat.ActivationState;
 import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivationService;
 import io.tgmcp.chat.ChatParticipantRepository;
@@ -66,6 +67,16 @@ public class ChatController {
         AuthenticatedActor actor = this.currentActor.require();
         Chat chat = this.chatRepository.find(actor.tenantId(), chatId)
                 .orElseThrow(() -> new IllegalArgumentException("error.noSuchChat"));
+
+        // importParticipants() otherwise only ever runs once, from select() at the moment a
+        // chat is first proposed. A chat left sitting in AWAITING_CONSENT (or one proposed
+        // before a participant-discovery fix landed) had no way back to a current snapshot
+        // short of re-submitting Step 1 from scratch -- ChatSyncService.sync() refuses to run
+        // at all before the chat is ACTIVE, which consent coverage can never let it reach on a
+        // stale snapshot. Refreshing here means simply reopening the page is enough.
+        this.activationService.find(actor, chatId)
+                .filter(activation -> activation.state() == ActivationState.AWAITING_CONSENT)
+                .ifPresent(activation -> this.activationService.importParticipants(actor, chat));
 
         model.addAttribute("view", this.chatViewFactory.of(actor, chat));
         model.addAttribute("participants", this.participantRepository.findActive(actor.tenantId(), chatId));
