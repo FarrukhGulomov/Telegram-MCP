@@ -182,6 +182,29 @@ class TdlibTelegramGatewayTests {
                 .isEqualTo("PRIVATE");
     }
 
+    /**
+     * Real-account testing found the "refresh chat list" button crashing every single time
+     * with a raw, uncaught 404 from loadChats. TDLib answers 404 ("Not Found") from loadChats
+     * to mean the chat list is already fully loaded -- documented behaviour, not a failure --
+     * but TdlibErrors.translate() has no specific mapping for code 404, so it falls through to
+     * TelegramTransientException, not TelegramPermissionException, which is what
+     * listAvailableChats() was catching. getChats/getChat must still run and return whatever is
+     * already loaded rather than letting that exception propagate.
+     */
+    @Test
+    void treatsLoadChatsAnsweringNotFoundAsTheChatListAlreadyBeingFullyLoaded() {
+        this.client.enqueueError(404, "Not Found");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[-100123]}""");
+        this.client.enqueue("""
+                {"@type":"chat","id":-100123,"title":"Eng",
+                 "type":{"@type":"chatTypeSupergroup","supergroup_id":9,"is_channel":false}}""");
+
+        List<RemoteChat> chats = this.gateway.listAvailableChats(this.ref);
+
+        assertThat(chats).extracting(RemoteChat::tgChatId).containsExactly(-100123L);
+    }
+
     @Test
     void mapsATextMessageIncludingTheEditTimestamp() {
         RemoteMessage message = this.gateway.toRemoteMessage(json("""

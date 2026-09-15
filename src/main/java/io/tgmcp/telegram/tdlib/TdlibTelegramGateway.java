@@ -25,6 +25,7 @@ import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.gateway.TelegramPermissionException;
+import io.tgmcp.telegram.gateway.TelegramTransientException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -252,8 +253,15 @@ public class TdlibTelegramGateway implements TelegramGateway {
         try {
             this.client.request("loadChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
         }
-        catch (TelegramPermissionException ignored) {
-            // TDLib answers 404 when the list is already fully loaded; that is not a failure.
+        catch (TelegramTransientException ignored) {
+            // TDLib answers 404 ("Not Found") when the chat list is already fully loaded --
+            // documented TDLib behaviour, not a failure. TdlibErrors.translate() has no
+            // specific mapping for code 404 (it is neither a flood wait, an auth failure, a
+            // permission failure, nor a malformed request), so it falls through to
+            // TelegramTransientException -- not TelegramPermissionException, which this catch
+            // clause caught until real-account testing hit exactly this path and found the
+            // "refresh chat list" button crashing every single time with that 404 propagating
+            // straight out to the generic error page, uncaught.
         }
         JsonNode chats = this.client.request("getChats",
                 Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
