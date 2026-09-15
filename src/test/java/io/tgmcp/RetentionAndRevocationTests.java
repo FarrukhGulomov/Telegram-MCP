@@ -1,6 +1,7 @@
 package io.tgmcp;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
 import io.modelcontextprotocol.spec.McpSchema;
@@ -234,6 +235,57 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
         assertThat(result.isError()).isTrue();
         assertThat(errorCode(result)).isEqualTo("ACCESS_DENIED");
         assertThat(structured(result)).doesNotContainKey("items");
+    }
+
+    /**
+     * Security-audit finding SEC-05: a plain re-check of "is this chat currently allowed" is
+     * vulnerable to an ABA cycle -- a chat can be revoked, re-proposed, re-consented and
+     * reactivated again in the time it takes one slow request to finish, and the fresh
+     * state-and-coverage check at the end of that request would find everything satisfied
+     * again even though the buffered result set was fetched under an authorization instance
+     * that no longer exists. Binding reverify() to the exact epoch and context revision
+     * captured at query start catches this the same way ChatSyncService#requireNotFenced
+     * already does for the write path (F07) -- and the chat is genuinely usable again
+     * immediately afterwards, proving this isn't a general breakage.
+     */
+    @Test
+    void deniesTheResponseAfterARevokeReproposeReconsentReactivateCycleEvenThoughAccessLooksFineAgain() {
+        Fixtures.ReadyChat chat = synced();
+        List<String> providers = java.util.Arrays.asList(chat.activation().providerScope().split(","));
+
+        org.mockito.Mockito.doAnswer(invocation -> {
+            MessageSlice slice = (MessageSlice) invocation.callRealMethod();
+            assertThat(slice.messages()).as("rows really were read before the ABA cycle").isNotEmpty();
+
+            this.activationService.revoke(chat.team().actor(), chat.chat().id(), "aba test: revoke");
+            ChatActivation reproposed = this.activationService.propose(chat.team().actor(), chat.chat().id(),
+                    chat.activation().purpose(), providers, chat.activation().approvedFrom(),
+                    chat.activation().approvedTo(), chat.activation().retentionDays());
+            this.fixtures.consentAll(chat.team(), chat.chat(), reproposed, this.clock.instant(),
+                    this.clock.instant().plus(Duration.ofDays(300)));
+            this.activationService.activate(chat.team().actor(), chat.chat().id());
+            // propose() resets the sync checkpoint, so a fresh independent read afterwards
+            // needs its own successful sync -- otherwise it fails on SYNC_PENDING, which would
+            // have nothing to do with the epoch/contextRevision check this test is about.
+            this.syncService.sync(chat.team().tenant().id(), chat.chat().id());
+            return slice;
+        }).doCallRealMethod() // only the first search() call triggers the ABA cycle
+                .when(this.messages).search(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt());
+
+        McpSchema.CallToolResult result = search(chat, "backpressure");
+
+        assertThat(result.isError()).as("the buffered response must not survive an ABA cycle").isTrue();
+        assertThat(errorCode(result)).isEqualTo("ACCESS_DENIED");
+        assertThat(structured(result)).doesNotContainKey("items");
+
+        assertThat(this.activations.find(chat.team().tenant().id(), chat.chat().id())
+                .orElseThrow().state()).as("the chat is genuinely ACTIVE again after the cycle")
+                .isEqualTo(ActivationState.ACTIVE);
+        assertThat(search(chat, "backpressure").isError())
+                .as("a fresh, independent request against the now-current authorization succeeds")
+                .isFalse();
     }
 
     /**

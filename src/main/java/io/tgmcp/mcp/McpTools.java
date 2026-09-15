@@ -151,8 +151,9 @@ public class McpTools {
             MessageSlice slice = this.messageRepository.search(context.actor().tenantId(), windowsByChat, query,
                     after, limit);
 
-            // Authorization is re-checked after the read and before anything is emitted.
-            this.accessService.reverify(context.actor(), chatIds, context.provider());
+            // Authorization is re-checked after the read and before anything is emitted, and
+            // bound to the exact authorization snapshot ("authorized") taken above (SEC-05).
+            this.accessService.reverify(context.actor(), authorized.values(), context.provider());
 
             // Security-audit finding SEC-03: a chat's *coverage* being complete only ever
             // describes its currently active participants -- it says nothing about whether one
@@ -237,7 +238,8 @@ public class McpTools {
 
             MessageSlice slice = this.messageRepository.history(context.actor().tenantId(), chatId,
                     windowStart, windowEnd, after, limit);
-            this.accessService.reverify(context.actor(), List.of(chatId), context.provider());
+            // Bound to the exact authorization snapshot ("allowed") taken above (SEC-05).
+            this.accessService.reverify(context.actor(), List.of(allowed), context.provider());
 
             // Security-audit finding SEC-03: see the identical comment in searchMessages --
             // rebuilding the slice keeps capToByteBudget's index-based cursor math aligned with
@@ -311,7 +313,8 @@ public class McpTools {
                             m.senderTgUserId(), contextRevision))
                     .toList();
 
-            this.accessService.reverify(context.actor(), List.of(chatId), context.provider());
+            // Bound to the exact authorization snapshot ("allowed") taken above (SEC-05).
+            this.accessService.reverify(context.actor(), List.of(allowed), context.provider());
 
             List<Map<String, Object>> items = new ArrayList<>();
             preceding.forEach(m -> items.add(messageItem(m, allowed.chat())));

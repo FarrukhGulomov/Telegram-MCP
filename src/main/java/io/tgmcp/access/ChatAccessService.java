@@ -142,12 +142,29 @@ public class ChatAccessService {
     }
 
     /**
-     * Re-runs the authorization check immediately before a response is emitted. Called
-     * after the data has been read so that a revocation landing mid-request still wins.
+     * Re-runs the authorization check immediately before a response is emitted, and confirms
+     * the chat's fencing epoch and processing-context revision are still exactly what they
+     * were when the caller first authorized it at the start of the request.
+     *
+     * <p>Security-audit finding SEC-05: a plain re-check of "is this currently allowed" is
+     * vulnerable to an ABA cycle -- revoke, re-propose, reconsent and reactivate can all
+     * complete within the lifetime of one slow request, leaving a fresh state-and-coverage
+     * check fully satisfied even though the response being built was buffered under an
+     * authorization instance that no longer exists. Comparing epoch and contextRevision
+     * against the snapshot taken at query start catches that the same way {@code
+     * ChatSyncService#requireNotFenced} already does for the write path (security audit
+     * finding F07): either value changing means the chat's authorization was torn down and
+     * rebuilt while this request was in flight, which must reject the buffered response even
+     * though the chat is, again, currently readable.
      */
-    public void reverify(AuthenticatedActor actor, Collection<UUID> chatIds, String provider) {
-        for (UUID chatId : chatIds) {
-            authorize(actor, chatId, provider, false);
+    public void reverify(AuthenticatedActor actor, Collection<AuthorizedChat> originallyAuthorized,
+                         String provider) {
+        for (AuthorizedChat original : originallyAuthorized) {
+            AuthorizedChat fresh = authorize(actor, original.chat().id(), provider, false);
+            if (fresh.activation().epoch() != original.activation().epoch()
+                    || !fresh.activation().contextRevision().equals(original.activation().contextRevision())) {
+                throw ChatAccessException.denied();
+            }
         }
     }
 
