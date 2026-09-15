@@ -16,6 +16,7 @@ import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.MessageWindow;
 import io.tgmcp.telegram.gateway.RemoteChat;
+import io.tgmcp.telegram.gateway.RemoteMembership;
 import io.tgmcp.telegram.gateway.RemoteMessage;
 import io.tgmcp.telegram.gateway.RemoteMessagePage;
 import io.tgmcp.telegram.gateway.RemoteParticipant;
@@ -355,9 +356,10 @@ class TdlibTelegramGatewayTests {
                 {"@type":"user","id":2,"first_name":"Helper","last_name":"",
                  "type":{"@type":"userTypeBot"}}""");
 
-        List<RemoteParticipant> participants = this.gateway.listParticipants(this.ref, -100123L);
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, -100123L);
 
-        assertThat(participants).containsExactly(
+        assertThat(membership.complete()).isTrue();
+        assertThat(membership.participants()).containsExactly(
                 new RemoteParticipant(1L, "Ada Lovelace", false),
                 new RemoteParticipant(2L, "Helper", true));
     }
@@ -381,12 +383,49 @@ class TdlibTelegramGatewayTests {
             this.client.enqueue(regularUser(id));
         }
 
-        List<RemoteParticipant> participants = this.gateway.listParticipants(this.ref, -100999L);
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, -100999L);
 
+        assertThat(membership.complete()).isTrue();
+        List<RemoteParticipant> participants = membership.participants();
         assertThat(participants).hasSize(205);
         assertThat(participants).extracting(RemoteParticipant::tgUserId)
                 .containsExactlyInAnyOrderElementsOf(
                         java.util.stream.LongStream.rangeClosed(1, 205).boxed().toList());
+    }
+
+    /**
+     * Security-audit finding SEC-02: reaching the safety cap must report the result as
+     * incomplete, not silently truncate it, so callers never treat "as far as we were willing
+     * to page through" as "confirmed, this is everyone" -- a distinction {@code
+     * pagesThroughSupergroupsLargerThanOneMemberPage} above does not exercise, since 205
+     * members never comes close to MAX_MEMBERS.
+     */
+    @Test
+    void reportsIncompleteWhenTheMemberSafetyCapIsReachedRatherThanTheSourceRunningOut() {
+        this.client.enqueue("""
+                {"@type":"chat","id":-100888,"title":"Huge",
+                 "type":{"@type":"chatTypeSupergroup","supergroup_id":88,"is_channel":false}}""");
+        // Each page is a full 200-member page (MEMBER_PAGE_SIZE), so the loop keeps asking for
+        // more pages until MAX_MEMBERS itself stops it, never seeing a short, source-exhausted
+        // page that would tell it it reached the real end.
+        int pageSize = 200;
+        int pages = TdlibTelegramGateway.MAX_MEMBERS / pageSize;
+        long nextId = 1;
+        for (int page = 0; page < pages; page++) {
+            this.client.enqueue(membersPage(nextId, pageSize));
+            for (int i = 0; i < pageSize; i++) {
+                this.client.enqueue(regularUser(nextId + i));
+            }
+            nextId += pageSize;
+        }
+
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, -100888L);
+
+        assertThat(membership.complete())
+                .as("hitting the safety cap must never be reported the same as the source genuinely "
+                        + "running out of members")
+                .isFalse();
+        assertThat(membership.participants()).hasSize(TdlibTelegramGateway.MAX_MEMBERS);
     }
 
     private String membersPage(long startId, int count) {
@@ -411,7 +450,11 @@ class TdlibTelegramGatewayTests {
         this.client.enqueue("""
                 {"@type":"chat","id":5,"title":"DM","type":{"@type":"chatTypePrivate","user_id":5}}""");
 
-        assertThat(this.gateway.listParticipants(this.ref, 5L)).isEmpty();
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, 5L);
+        assertThat(membership.participants()).isEmpty();
+        assertThat(membership.complete())
+                .as("confirmed empty is not the same as unverifiable, and must not be reported as such")
+                .isTrue();
     }
 
     @Test

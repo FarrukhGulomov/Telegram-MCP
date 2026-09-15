@@ -28,6 +28,7 @@ import io.tgmcp.telegram.TelegramConnectionRepository;
 import io.tgmcp.telegram.gateway.ConnectionRef;
 import io.tgmcp.telegram.gateway.MessageWindow;
 import io.tgmcp.telegram.gateway.RemoteChat;
+import io.tgmcp.telegram.gateway.RemoteMembership;
 import io.tgmcp.telegram.gateway.RemoteMessage;
 import io.tgmcp.telegram.gateway.RemoteMessagePage;
 import io.tgmcp.telegram.gateway.RemoteParticipant;
@@ -233,20 +234,28 @@ public class ChatSyncService {
      * the set of people whose consent is required is no longer the set that consented.
      */
     private SyncOutcome refreshMembership(ChatActivation activation, Chat chat, ConnectionRef ref) {
-        List<RemoteParticipant> remote = this.gateway.listParticipants(ref, chat.tgChatId());
-        if (remote.isEmpty()) {
-            // Security-audit finding F04: a chat that has never had a verified membership
+        RemoteMembership membership = this.gateway.listParticipants(ref, chat.tgChatId());
+        List<RemoteParticipant> remote = membership.participants();
+        if (remote.isEmpty() || !membership.complete()) {
+            // Security-audit finding F04 (empty case) and SEC-02 (incomplete case, e.g. a
+            // capped supergroup enumeration): a chat that has never had a verified membership
             // (membershipFingerprint == null) simply cannot reach ACTIVE at all -- coverageFor
-            // treats zero required participants as "unknown", never "complete" -- so an empty
-            // result here is expected and harmless. But once a chat *has* had a real,
-            // non-empty membership, a sudden empty response (a transient API glitch, a lost
-            // permission, or a >200-member page boundary issue) used to be silently treated as
-            // "nothing changed" -- letting a chat keep reading under a membership list that can
-            // no longer be verified. That must pause for review instead of going unnoticed.
+            // treats zero required participants as "unknown", never "complete" -- so returning
+            // early here without upserting or marking anyone departed is expected and harmless
+            // for that case. But once a chat *has* had a real, verified membership, an empty or
+            // incomplete response (a transient API glitch, a lost permission, a >5000-member
+            // safety cap) must never be treated as "nothing changed": upserting only the
+            // partial set understates who needs to consent, and markLeft against that same
+            // partial set would wrongly report real, still-present members as having departed.
+            // Pause for review instead of silently narrowing coverage.
             if (activation.membershipFingerprint() != null) {
-                pause(activation, "Membership list came back empty; consent coverage cannot be verified");
+                String reason = remote.isEmpty()
+                        ? "Membership list came back empty; consent coverage cannot be verified"
+                        : "Membership enumeration was incomplete; consent coverage cannot be verified";
+                pause(activation, reason);
                 this.auditService.system(chat.tenantId(), AuditAction.MEMBERSHIP_CHANGED, chat.id(),
-                        AuditService.DENIED, Map.of("action", "paused: empty membership response"));
+                        AuditService.DENIED, Map.of("action",
+                                "paused: " + (remote.isEmpty() ? "empty" : "incomplete") + " membership response"));
                 return new SyncOutcome(SyncOutcome.Status.PAUSED_MEMBERSHIP_CHANGED, 0, 0,
                         "Membership could not be verified");
             }

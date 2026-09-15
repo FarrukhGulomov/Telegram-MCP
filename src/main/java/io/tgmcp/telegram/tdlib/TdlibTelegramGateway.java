@@ -18,6 +18,7 @@ import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.MessageWindow;
 import io.tgmcp.telegram.gateway.RemoteChat;
+import io.tgmcp.telegram.gateway.RemoteMembership;
 import io.tgmcp.telegram.gateway.RemoteMessage;
 import io.tgmcp.telegram.gateway.RemoteMessagePage;
 import io.tgmcp.telegram.gateway.RemoteParticipant;
@@ -62,7 +63,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
      * supergroup larger than that silently reported only its first 200 members -- understating
      * who is actually in the chat and who therefore needs to consent.
      */
-    private static final int MAX_MEMBERS = 5000;
+    static final int MAX_MEMBERS = 5000;
 
     private final TdlibClient client;
     private final AppProperties.Telegram config;
@@ -319,17 +320,23 @@ public class TdlibTelegramGateway implements TelegramGateway {
     }
 
     @Override
-    public List<RemoteParticipant> listParticipants(ConnectionRef ref, long tgChatId) {
+    public RemoteMembership listParticipants(ConnectionRef ref, long tgChatId) {
         requireCurrentOwner(ref);
         JsonNode chat = this.client.request("getChat", Map.of("chat_id", tgChatId));
         JsonNode type = chat.path("type");
         if (!"chatTypeSupergroup".equals(type.path("@type").asString(""))) {
-            // Basic groups and private chats do not expose a member list through this call.
-            return List.of();
+            // Basic groups and private chats do not expose a member list through this call --
+            // confirmed empty, not unverifiable, so this is complete as far as this method can
+            // ever observe for these chat types.
+            return RemoteMembership.complete(List.of());
         }
         long supergroupId = type.path("supergroup_id").asLong();
 
-        List<RemoteParticipant> result = new ArrayList<>();
+        // Security-audit finding SEC-02: keyed by tgUserId, not a plain list, so a member
+        // TDLib's offset-based pagination happens to return on two different pages (membership
+        // can change mid-enumeration) is counted once rather than reported as departed and
+        // rejoined, or double-counted against MAX_MEMBERS.
+        Map<Long, RemoteParticipant> result = new LinkedHashMap<>();
         int offset = 0;
         while (result.size() < MAX_MEMBERS) {
             JsonNode members = this.client.request("getSupergroupMembers", Map.of(
@@ -343,14 +350,21 @@ public class TdlibTelegramGateway implements TelegramGateway {
                 addParticipant(result, member);
             }
             if (pageSize < MEMBER_PAGE_SIZE) {
-                break;
+                // The source itself ran out of members before the safety cap did: genuinely
+                // everyone TDLib knows about is now in `result`.
+                return RemoteMembership.complete(List.copyOf(result.values()));
             }
             offset += MEMBER_PAGE_SIZE;
         }
-        return List.copyOf(result);
+        // Security-audit finding SEC-02: the loop above exited because MAX_MEMBERS was reached,
+        // not because the source ran out of members -- there may be more we never asked for.
+        // Reporting this the same as a fully enumerated chat would let consent coverage look
+        // satisfied for only the members returned while others remain unconsulted, and would
+        // have markLeft() wrongly report everyone beyond the cap as having departed.
+        return RemoteMembership.incomplete(List.copyOf(result.values()));
     }
 
-    private void addParticipant(List<RemoteParticipant> result, JsonNode member) {
+    private void addParticipant(Map<Long, RemoteParticipant> result, JsonNode member) {
         JsonNode senderId = member.path("member_id");
         if (!"messageSenderUser".equals(senderId.path("@type").asString(""))) {
             return;
@@ -359,7 +373,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
         JsonNode user = this.client.request("getUser", Map.of("user_id", userId));
         String name = (user.path("first_name").asString("") + " " + user.path("last_name").asString("")).trim();
         boolean bot = "userTypeBot".equals(user.path("type").path("@type").asString(""));
-        result.add(new RemoteParticipant(userId, name.isEmpty() ? String.valueOf(userId) : name, bot));
+        result.put(userId, new RemoteParticipant(userId, name.isEmpty() ? String.valueOf(userId) : name, bot));
     }
 
     @Override

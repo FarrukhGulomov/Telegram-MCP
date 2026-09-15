@@ -54,7 +54,14 @@ public interface TelegramGateway {
     /** Chats visible to the connected account. Nothing is synced until a chat is activated. */
     List<RemoteChat> listAvailableChats(ConnectionRef ref);
 
-    List<RemoteParticipant> listParticipants(ConnectionRef ref, long tgChatId);
+    /**
+     * Security-audit finding SEC-02: {@link RemoteMembership#complete()} must be {@code false}
+     * whenever an implementation cannot vouch that every current member is present in {@link
+     * RemoteMembership#participants()} -- reaching a pagination safety cap, or any other reason
+     * the source would not let enumeration finish. Callers must never treat an incomplete
+     * result as authoritative for consent coverage or for deciding who has left.
+     */
+    RemoteMembership listParticipants(ConnectionRef ref, long tgChatId);
 
     /** Bounded read. Implementations must honour {@link MessageWindow#limit()}. */
     RemoteMessagePage fetchMessages(ConnectionRef ref, long tgChatId, MessageWindow window);

@@ -18,6 +18,7 @@ import io.tgmcp.security.McpScopes;
 import io.tgmcp.sync.SyncCheckpointRepository;
 import io.tgmcp.telegram.TelegramConnection;
 import io.tgmcp.telegram.TelegramConnectionRepository;
+import io.tgmcp.telegram.gateway.RemoteMembership;
 import io.tgmcp.telegram.gateway.RemoteParticipant;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.tenancy.AuthenticatedActor;
@@ -228,14 +229,24 @@ public class ChatActivationService {
         if (connection.isEmpty() || !connection.get().ready()) {
             return this.participantRepository.findActive(actor.tenantId(), chat.id());
         }
-        List<RemoteParticipant> remote = this.gateway.listParticipants(connection.get().ref(),
+        RemoteMembership membership = this.gateway.listParticipants(connection.get().ref(),
                 chat.tgChatId());
-        for (RemoteParticipant participant : remote) {
-            this.participantRepository.upsert(new ChatParticipant(Ids.newId(), actor.tenantId(), chat.id(),
-                    participant.tgUserId(), participant.displayName(), participant.bot(), null, null));
+        // Security-audit finding SEC-02: an incomplete result (a pagination safety cap, or any
+        // other reason the source could not confirm every member was seen) must never be
+        // upserted as if it were the whole membership -- that would silently narrow who needs
+        // to consent to only the subset returned -- and markLeft() against that same partial
+        // set would wrongly report real, still-present members as having departed. Leaving the
+        // stored roster untouched keeps ConsentCoverage exactly as uncertain as it already was
+        // (empty/unknown blocks activation on its own) rather than making it look more complete
+        // than it is.
+        if (membership.complete()) {
+            for (RemoteParticipant participant : membership.participants()) {
+                this.participantRepository.upsert(new ChatParticipant(Ids.newId(), actor.tenantId(), chat.id(),
+                        participant.tgUserId(), participant.displayName(), participant.bot(), null, null));
+            }
+            this.participantRepository.markLeft(actor.tenantId(), chat.id(),
+                    membership.participants().stream().map(RemoteParticipant::tgUserId).toList());
         }
-        this.participantRepository.markLeft(actor.tenantId(), chat.id(),
-                remote.stream().map(RemoteParticipant::tgUserId).toList());
         return this.participantRepository.findActive(actor.tenantId(), chat.id());
     }
 

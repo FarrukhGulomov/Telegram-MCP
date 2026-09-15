@@ -19,6 +19,7 @@ import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.MessageWindow;
 import io.tgmcp.telegram.gateway.RemoteChat;
+import io.tgmcp.telegram.gateway.RemoteMembership;
 import io.tgmcp.telegram.gateway.RemoteMessage;
 import io.tgmcp.telegram.gateway.RemoteMessagePage;
 import io.tgmcp.telegram.gateway.RemoteParticipant;
@@ -168,9 +169,11 @@ public class MockTelegramGateway implements TelegramGateway {
     }
 
     @Override
-    public List<RemoteParticipant> listParticipants(ConnectionRef ref, long tgChatId) {
+    public RemoteMembership listParticipants(ConnectionRef ref, long tgChatId) {
         guard();
-        return List.copyOf(requireChat(tgChatId).participants());
+        // The synthetic dataset never exceeds any real-world pagination cap, so it is always
+        // the whole membership.
+        return RemoteMembership.complete(requireChat(tgChatId).participants());
     }
 
     @Override
