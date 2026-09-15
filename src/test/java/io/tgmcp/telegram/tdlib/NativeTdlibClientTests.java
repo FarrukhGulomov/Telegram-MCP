@@ -6,6 +6,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -192,12 +193,51 @@ class NativeTdlibClientTests {
         }
     }
 
+    @Test
+    void aClosedAuthorizationStateGetsAFreshClientIdForTheNextRequest() throws InterruptedException {
+        // Real-account testing found that TDLib answers logOut with authorizationStateClosed,
+        // which permanently ends that client id's actor -- not "logged out, ready to log back
+        // in". Before this fix, every request after a disconnect failed forever with the same
+        // immediate error, since nothing ever created a new client id to replace the dead one.
+        FakeTdJsonLibrary fake = new FakeTdJsonLibrary();
+        fake.autoRespondOk();
+        NativeTdlibClient client = new NativeTdlibClient(fake, new ObjectMapper(), REQUEST_TIMEOUT_SECONDS);
+
+        CountDownLatch closedHandled = new CountDownLatch(1);
+        client.onUpdate(update -> {
+            if ("authorizationStateClosed".equals(update.path("authorization_state").path("@type").asString(""))) {
+                closedHandled.countDown();
+            }
+        });
+        client.start();
+
+        try {
+            client.request("getChats", Map.of());
+            assertThat(fake.sentClientIds()).containsExactly(1);
+
+            fake.push("{\"@type\":\"updateAuthorizationState\","
+                    + "\"authorization_state\":{\"@type\":\"authorizationStateClosed\"}}");
+            assertThat(closedHandled.await(REQUEST_TIMEOUT_SECONDS + 2, TimeUnit.SECONDS)).isTrue();
+
+            client.request("setAuthenticationPhoneNumber", Map.of());
+            assertThat(fake.sentClientIds())
+                    .as("a request after authorizationStateClosed must target a freshly created "
+                            + "client, not the now-permanently-dead one")
+                    .containsExactly(1, 2);
+        }
+        finally {
+            client.close();
+        }
+    }
+
     /** Minimal fake of the native TDLib JSON interface, backed by an in-memory queue. */
     private static final class FakeTdJsonLibrary implements TdJsonLibrary {
 
         private final ObjectMapper mapper = new ObjectMapper();
         private final BlockingQueue<String> incoming = new LinkedBlockingQueue<>();
         private final CopyOnWriteArrayList<String> sentMethods = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<Integer> sentClientIds = new CopyOnWriteArrayList<>();
+        private final AtomicInteger nextClientId = new AtomicInteger();
         private volatile Function<JsonNode, String> autoResponder;
 
         void push(String json) {
@@ -206,6 +246,10 @@ class NativeTdlibClientTests {
 
         java.util.List<String> sentMethods() {
             return this.sentMethods;
+        }
+
+        java.util.List<Integer> sentClientIds() {
+            return this.sentClientIds;
         }
 
         void autoRespondOk() {
@@ -218,11 +262,12 @@ class NativeTdlibClientTests {
 
         @Override
         public int td_create_client_id() {
-            return 1;
+            return this.nextClientId.incrementAndGet();
         }
 
         @Override
         public void td_send(int clientId, String request) {
+            this.sentClientIds.add(clientId);
             JsonNode node = this.mapper.readTree(request);
             this.sentMethods.add(node.path("@type").asString(""));
             Function<JsonNode, String> responder = this.autoResponder;
