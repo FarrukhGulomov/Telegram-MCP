@@ -16,6 +16,8 @@ import java.util.UUID;
 
 import javax.sql.DataSource;
 
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -64,8 +66,10 @@ import org.springframework.security.oauth2.server.authorization.token.JwtEncodin
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.util.StringUtils;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
  * A standards-compliant OAuth 2.1 authorization server, provided by Spring Authorization
@@ -167,6 +171,40 @@ public class AuthorizationServerConfig {
         response.sendRedirect(location.toString());
     }
 
+    /**
+     * Temporary diagnostic: {@link #logAndRedirectAuthorizationError} showed a real client's
+     * consent submission being rejected as {@code access_denied} with an empty approved-scope
+     * set, on every attempt, regardless of what the user did on the consent page -- but that
+     * only reports Spring's own parsed interpretation of the request, after the fact. Spring's
+     * default consent page (see {@code DefaultConsentPage}) renders one {@code <input
+     * name="scope" value="...">} checkbox per scope in the authorize request; if that request
+     * carried no (or a mismatched) {@code scope} parameter, there is nothing to render a
+     * checkbox for, nothing the user could ever check, and the submitted form is
+     * indistinguishable from an explicit denial -- which would explain a 100%-repeatable
+     * failure that survives "check the checkbox". This filter logs the exact bytes a real
+     * client sent for {@code /oauth2/authorize} -- the raw query string on GET, the raw form
+     * parameters on POST -- before anything in Spring's authorization/consent machinery gets a
+     * chance to interpret them, so that hypothesis can be confirmed or ruled out directly.
+     */
+    private static final class RawOAuth2AuthorizeRequestLogger extends OncePerRequestFilter {
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+                throws ServletException, IOException {
+            if ("/oauth2/authorize".equals(request.getRequestURI())) {
+                if ("GET".equalsIgnoreCase(request.getMethod())) {
+                    log.info("Raw GET /oauth2/authorize query string: {}", request.getQueryString());
+                }
+                else if ("POST".equalsIgnoreCase(request.getMethod())) {
+                    java.util.Map<String, String> params = new java.util.LinkedHashMap<>();
+                    request.getParameterMap().forEach((key, values) -> params.put(key,
+                            java.util.Arrays.toString(values)));
+                    log.info("Raw POST /oauth2/authorize form parameters: {}", params);
+                }
+            }
+            chain.doFilter(request, response);
+        }
+    }
+
     @Bean
     @Order(1)
     public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http, AppProperties properties)
@@ -176,6 +214,7 @@ public class AuthorizationServerConfig {
         String expectedResource = AudienceValidator.normalise(properties.mcp().resourceIdentifier());
 
         http.securityMatcher(endpoints)
+                .addFilterBefore(new RawOAuth2AuthorizeRequestLogger(), SecurityContextHolderFilter.class)
                 .with(configurer, server -> server
                         // RFC 7591: remote MCP clients (Claude, ChatGPT) register themselves with
                         // no prior credential. Two defaults fight that:
