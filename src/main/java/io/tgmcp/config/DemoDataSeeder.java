@@ -36,6 +36,14 @@ public class DemoDataSeeder implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DemoDataSeeder.class);
 
+    /**
+     * Security-audit finding SEC-11: fixed identifiers for the demo MCP clients this class
+     * seeds, referenced by {@link ProductionSafetyValidator} to detect their presence
+     * independent of whatever the currently configured demo email/slug happen to be.
+     */
+    public static final String CLAUDE_DEMO_CLIENT_ID = "claude-demo";
+    public static final String CHATGPT_DEMO_CLIENT_ID = "chatgpt-demo";
+
     private final TenantRepository tenants;
     private final AppUserRepository users;
     private final RegisteredClientRepository clients;
@@ -67,7 +75,11 @@ public class DemoDataSeeder implements ApplicationRunner {
         if (this.users.findByEmail(demo.ownerEmail()).isEmpty()) {
             this.users.insert(new AppUser(Ids.newId(), tenantId, demo.ownerEmail(),
                     this.passwordEncoder.encode(demo.ownerPassword()), "Demo Owner", "OWNER", true));
-            log.info("Created demo user {} (password: {})", demo.ownerEmail(), demo.ownerPassword());
+            // Security-audit finding SEC-11: the password itself must never reach the log,
+            // even a synthetic demo one -- log readers should not be handed a reusable
+            // credential. The value is whatever tgmcp.demo.owner-password is configured to.
+            log.info("Created demo user {}; its password is whatever tgmcp.demo.owner-password "
+                    + "is configured to (never logged).", demo.ownerEmail());
         }
 
         // A second tenant, so that cross-tenant isolation is observable in the running app and
@@ -80,11 +92,11 @@ public class DemoDataSeeder implements ApplicationRunner {
             return this.tenants.findBySlug("other").orElseThrow();
         });
 
-        registerMcpClient("claude-demo", "Claude (demo registration)",
+        registerMcpClient(CLAUDE_DEMO_CLIENT_ID, "Claude (demo registration)",
                 McpScopes.SCOPE_ANTHROPIC_CLAUDE,
                 List.of("https://claude.ai/api/mcp/auth_callback",
                         "http://localhost:8080/oauth2/callback"));
-        registerMcpClient("chatgpt-demo", "ChatGPT (demo registration)",
+        registerMcpClient(CHATGPT_DEMO_CLIENT_ID, "ChatGPT (demo registration)",
                 McpScopes.SCOPE_OPENAI_CHATGPT,
                 List.of("https://chatgpt.com/connector_platform_oauth_redirect",
                         "http://localhost:8080/oauth2/callback"));

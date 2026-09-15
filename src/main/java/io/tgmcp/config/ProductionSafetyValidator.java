@@ -4,10 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 import io.tgmcp.common.KeyMaterial;
+import io.tgmcp.tenancy.Tenant;
+import io.tgmcp.tenancy.TenantRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.stereotype.Component;
 
 /**
@@ -31,6 +34,8 @@ public class ProductionSafetyValidator {
     private static final Logger log = LoggerFactory.getLogger(ProductionSafetyValidator.class);
 
     public ProductionSafetyValidator(AppProperties properties,
+                                     TenantRepository tenants,
+                                     RegisteredClientRepository clients,
                                      @Value("${tgmcp.oauth.issuer:http://localhost:8080}") String issuer,
                                      @Value("${tgmcp.oauth.public-base-url:http://localhost:8080}") String publicBaseUrl,
                                      @Value("${server.servlet.session.cookie.secure:false}") boolean cookieSecure) {
@@ -88,6 +93,30 @@ public class ProductionSafetyValidator {
                     + "will not be reflected here (see docs/production-prerequisites.md). Set "
                     + "tgmcp.telegram.acknowledge-missing-edit-deletion-pipeline=true only once you have "
                     + "confirmed this gap is acceptable for every chat you plan to activate.");
+        }
+        // Security-audit finding SEC-11: disabling tgmcp.demo.seed-synthetic-data stops new
+        // demo records from being created, but does not delete ones a previous run already
+        // inserted -- a database reused (or promoted) for real-account processing can still
+        // carry a demo owner whose password may have reached old logs, a second demo tenant,
+        // and demo MCP clients that were never reviewed for real use. Checked directly against
+        // durable, deterministic markers (the tenants.demo_mode column, and the two fixed demo
+        // client ids) rather than the currently configured demo email/slug, which could have
+        // changed since seeding ran.
+        List<Tenant> demoTenants = tenants.findAllDemo();
+        if (!demoTenants.isEmpty()) {
+            problems.add("Demo-seeded tenant(s) are still present while real-account access is "
+                    + "authorized: " + demoTenants.stream().map(Tenant::slug).toList() + ". Disabling "
+                    + "tgmcp.demo.seed-synthetic-data does not delete records a previous run already "
+                    + "created; remove them, or use a database that never had seeding enabled.");
+        }
+        List<String> demoClientIds = List.of(DemoDataSeeder.CLAUDE_DEMO_CLIENT_ID,
+                DemoDataSeeder.CHATGPT_DEMO_CLIENT_ID).stream()
+                .filter(clientId -> clients.findByClientId(clientId) != null)
+                .toList();
+        if (!demoClientIds.isEmpty()) {
+            problems.add("Demo-registered MCP client(s) are still present while real-account access is "
+                    + "authorized: " + demoClientIds + ". Remove them before relying on registered-client "
+                    + "identity for real provider traffic.");
         }
 
         if (!problems.isEmpty()) {
