@@ -271,6 +271,37 @@ class McpProtocolTests extends AbstractIntegrationTest {
         }
     }
 
+    /**
+     * Security-audit finding SEC-09: an access token's claims describe the user as of the
+     * moment it was issued, and stay valid for the token's whole lifetime after that.
+     * McpActorResolver must re-check the account fresh from the database on every call, the
+     * same way CurrentActor does for the management UI's session-based path, or an account
+     * disabled after a token was minted would keep working through every MCP call until the
+     * token itself expired.
+     */
+    @Test
+    void deniesEveryToolOnceTheAccountHasBeenDisabledSinceTheTokenWasIssued() {
+        Fixtures.ReadyChat chat = readyChat();
+        String token = tokenFor(chat);
+
+        try (McpTestClient client = connect(token)) {
+            assertThat(client.call(McpToolNames.LIST_ALLOWED_CHATS, Map.of()).isError())
+                    .as("the token is still valid and the account is still enabled").isFalse();
+        }
+
+        this.jdbcTemplate.update("UPDATE app_users SET enabled = false WHERE id = ?",
+                chat.team().user().id());
+
+        try (McpTestClient client = connect(token)) {
+            McpSchema.CallToolResult result = client.call(McpToolNames.LIST_ALLOWED_CHATS, Map.of());
+
+            assertThat(result.isError())
+                    .as("the same still-unexpired token must stop working the instant the "
+                            + "account behind it is disabled").isTrue();
+            assertThat(errorCode(result)).isEqualTo("ACCESS_DENIED");
+        }
+    }
+
     // --- helpers ------------------------------------------------------------------------
 
     @SuppressWarnings("unchecked")

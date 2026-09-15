@@ -87,7 +87,7 @@ public class ChatController {
                          @RequestParam String approvedTo,
                          @RequestParam int retentionDays,
                          RedirectAttributes redirectAttributes) {
-        AuthenticatedActor actor = this.currentActor.require();
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
         try {
             this.activationService.propose(actor, chatId, purpose, providersOrEmpty(providers),
                     startOfDay(approvedFrom), endOfDay(approvedTo), retentionDays);
@@ -107,7 +107,7 @@ public class ChatController {
                            @RequestParam String approvedTo,
                            @RequestParam int retentionDays,
                            RedirectAttributes redirectAttributes) {
-        AuthenticatedActor actor = this.currentActor.require();
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
         try {
             this.activationService.updateSettings(actor, chatId, purpose, providersOrEmpty(providers),
                     startOfDay(approvedFrom), endOfDay(approvedTo), retentionDays);
@@ -126,7 +126,7 @@ public class ChatController {
                           @RequestParam ConsentMethod method,
                           @RequestParam(required = false) String evidenceRef,
                           RedirectAttributes redirectAttributes) {
-        AuthenticatedActor actor = this.currentActor.require();
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
         var activation = this.activationService.find(actor, chatId)
                 .orElseThrow(() -> new IllegalArgumentException("validation.selectChatFirst"));
         try {
@@ -147,7 +147,7 @@ public class ChatController {
     public String revokeConsent(@PathVariable UUID chatId,
                                 @RequestParam long participantTgUserId,
                                 RedirectAttributes redirectAttributes) {
-        AuthenticatedActor actor = this.currentActor.require();
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
         this.consentService.revokeParticipant(actor, chatId, participantTgUserId, "Revoked from management UI");
         this.activationService.pause(actor, chatId, "A participant withdrew consent");
         redirectAttributes.addFlashAttribute("message",
@@ -157,7 +157,7 @@ public class ChatController {
 
     @PostMapping("/chats/{chatId}/activate")
     public String activate(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
-        AuthenticatedActor actor = this.currentActor.require();
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
         try {
             this.activationService.activate(actor, chatId);
             redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.activate.success"));
@@ -172,21 +172,21 @@ public class ChatController {
 
     @PostMapping("/chats/{chatId}/pause")
     public String pause(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
-        this.activationService.pause(this.currentActor.require(), chatId, "Paused by operator");
+        this.activationService.pause(this.currentActor.requireAdmin(), chatId, "Paused by operator");
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.pause.success"));
         return "redirect:/chats/" + chatId;
     }
 
     @PostMapping("/chats/{chatId}/revoke")
     public String revoke(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
-        this.activationService.revoke(this.currentActor.require(), chatId, "Revoked by operator");
+        this.activationService.revoke(this.currentActor.requireAdmin(), chatId, "Revoked by operator");
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.revoke.success"));
         return "redirect:/chats/" + chatId;
     }
 
     @PostMapping("/chats/{chatId}/delete-data")
     public String deleteData(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
-        int deleted = this.activationService.deleteStoredData(this.currentActor.require(), chatId);
+        int deleted = this.activationService.deleteStoredData(this.currentActor.requireAdmin(), chatId);
         redirectAttributes.addFlashAttribute("message",
                 Messages.text(this.messages, "chat.deleteData.success", deleted));
         return "redirect:/chats/" + chatId;
@@ -195,7 +195,7 @@ public class ChatController {
     /** Manual sync trigger, useful for demos and for verifying a fix without waiting for the timer. */
     @PostMapping("/chats/{chatId}/sync")
     public String sync(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
-        AuthenticatedActor actor = this.currentActor.require();
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
         SyncOutcome outcome = this.syncService.sync(actor.tenantId(), chatId);
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.sync.result",
                 outcome.status(), outcome.messagesIngested(), outcome.revisionsApplied(), outcome.detail()));

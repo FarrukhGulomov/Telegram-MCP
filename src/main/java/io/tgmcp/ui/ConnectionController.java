@@ -60,28 +60,28 @@ public class ConnectionController {
     public String start(@RequestParam("method") LoginMethod method,
                         @RequestParam(name = "phoneNumber", required = false) String phoneNumber,
                         RedirectAttributes redirectAttributes) {
-        LoginState state = this.connectionService.beginLogin(this.currentActor.require(), method, phoneNumber);
+        LoginState state = this.connectionService.beginLogin(this.currentActor.requireAdmin(), method, phoneNumber);
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
     @PostMapping("/connect/code")
     public String code(@RequestParam("code") String code, RedirectAttributes redirectAttributes) {
-        LoginState state = this.connectionService.submitCode(this.currentActor.require(), code);
+        LoginState state = this.connectionService.submitCode(this.currentActor.requireAdmin(), code);
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
     @PostMapping("/connect/password")
     public String password(@RequestParam("password") String password, RedirectAttributes redirectAttributes) {
-        LoginState state = this.connectionService.submitPassword(this.currentActor.require(), password);
+        LoginState state = this.connectionService.submitPassword(this.currentActor.requireAdmin(), password);
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
     @PostMapping("/connect/discover")
     public String discover(RedirectAttributes redirectAttributes) {
-        int count = this.connectionService.discoverChats(this.currentActor.require()).size();
+        int count = this.connectionService.discoverChats(this.currentActor.requireAdmin()).size();
         redirectAttributes.addFlashAttribute("message",
                 Messages.text(this.messages, "connect.discover.success", count));
         return "redirect:/";
@@ -89,7 +89,7 @@ public class ConnectionController {
 
     @PostMapping("/connect/disconnect")
     public String disconnect(RedirectAttributes redirectAttributes) {
-        this.connectionService.disconnect(this.currentActor.require());
+        this.connectionService.disconnect(this.currentActor.requireAdmin());
         redirectAttributes.addFlashAttribute("message",
                 Messages.text(this.messages, "connect.disconnect.success"));
         return "redirect:/connect";

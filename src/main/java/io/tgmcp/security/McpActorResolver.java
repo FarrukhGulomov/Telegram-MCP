@@ -5,6 +5,8 @@ import java.util.Set;
 import java.util.UUID;
 
 import io.tgmcp.tenancy.ActorType;
+import io.tgmcp.tenancy.AppUser;
+import io.tgmcp.tenancy.AppUserRepository;
 import io.tgmcp.tenancy.AuthenticatedActor;
 
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -22,11 +24,31 @@ public class McpActorResolver {
     public static final String CLAIM_TENANT = "tenant_id";
     public static final String CLAIM_USER = "user_id";
 
+    private final AppUserRepository users;
+
+    public McpActorResolver(AppUserRepository users) {
+        this.users = users;
+    }
+
     public AuthenticatedActor resolve(Jwt jwt) {
         UUID tenantId = uuidClaim(jwt, CLAIM_TENANT);
         UUID userId = uuidClaim(jwt, CLAIM_USER);
         if (tenantId == null || userId == null) {
             throw new IllegalStateException("Access token is missing tenant/user binding");
+        }
+        // Security-audit finding SEC-09: a bearer token's claims describe the user as of the
+        // moment it was issued, and can stay valid for its whole lifetime after that. Without
+        // this, an account disabled -- or moved to a different tenant -- after a token was
+        // minted would keep working through every MCP call until the token itself expired.
+        // Re-checked fresh from the database on every call, exactly like CurrentActor does for
+        // the management UI's session-based path.
+        AppUser user = this.users.findById(userId)
+                .orElseThrow(() -> new IllegalStateException("Access token names an account that no longer exists"));
+        if (!user.enabled()) {
+            throw new IllegalStateException("Access token names a disabled account");
+        }
+        if (!user.tenantId().equals(tenantId)) {
+            throw new IllegalStateException("Access token's tenant binding no longer matches the account");
         }
         return new AuthenticatedActor(tenantId, userId, jwt.getSubject(), ActorType.MCP_CLIENT,
                 scopes(jwt), jwt.getClaimAsString("client_id"));

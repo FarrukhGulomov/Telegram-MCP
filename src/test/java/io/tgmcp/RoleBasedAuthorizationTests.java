@@ -15,6 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -91,5 +92,55 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
                         .param("method", "QR_CODE"))
                 .andExpect(status().is3xxRedirection());
+    }
+
+    /**
+     * Security-audit finding SEC-09: WebSecurityConfig's {@code hasAnyRole("OWNER", "ADMIN")}
+     * check (F17) is only ever evaluated against the authorities baked into the session's
+     * {@code Authentication} at sign-in time. Demoting this user afterwards leaves the
+     * session itself still satisfying that check -- only {@code CurrentActor.requireAdmin()},
+     * re-reading the role fresh from the database on every request, can catch it.
+     */
+    @Test
+    void aDemotedOwnersExistingSessionCanNoLongerPerformManagementActions() throws Exception {
+        String password = "owner-pw-demoted";
+        Fixtures.Team team = this.fixtures.signInReadyTeam("sec09-demoted", "demoted@sec09.invalid",
+                this.passwordEncoder.encode(password), "OWNER");
+        MockHttpSession session = signIn("demoted@sec09.invalid", password);
+
+        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
+                        .param("method", "QR_CODE"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/connect"));
+
+        this.jdbcTemplate.update("UPDATE app_users SET role = 'MEMBER' WHERE id = ?", team.user().id());
+
+        // The session's own stale ROLE_OWNER authority still passes Spring Security's own
+        // check, so only the fresh application-level check in requireAdmin() can reject this.
+        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
+                        .param("method", "QR_CODE"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/"));
+    }
+
+    /**
+     * Security-audit finding SEC-09: disabling a user must stop their already-signed-in
+     * session immediately, not merely block their next sign-in attempt.
+     */
+    @Test
+    void aDisabledUsersExistingSessionCanNoLongerDoAnything() throws Exception {
+        String password = "owner-pw-disabled";
+        Fixtures.Team team = this.fixtures.signInReadyTeam("sec09-disabled", "disabled@sec09.invalid",
+                this.passwordEncoder.encode(password), "OWNER");
+        MockHttpSession session = signIn("disabled@sec09.invalid", password);
+
+        this.mockMvc.perform(get("/connect").session(session)).andExpect(status().isOk());
+
+        this.jdbcTemplate.update("UPDATE app_users SET enabled = false WHERE id = ?", team.user().id());
+
+        // A disabled account's existing session must stop working immediately.
+        this.mockMvc.perform(get("/connect").session(session))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/"));
     }
 }
