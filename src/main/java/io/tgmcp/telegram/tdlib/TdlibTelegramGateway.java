@@ -122,6 +122,13 @@ public class TdlibTelegramGateway implements TelegramGateway {
             return;
         }
         JsonNode state = update.path("authorization_state");
+        // Real-account testing found that quieting TDLib's own very noisy native logging
+        // (necessary -- see NativeTdlibClient -- since it was flooding Railway's log pipe past
+        // its rate limit) also silently removed the only visibility into which stage a login
+        // attempt actually reached. This one line, at the application's own log level rather
+        // than TDLib's, replaces it: one line per real transition, never per-file/per-reaction
+        // engine noise.
+        log.info("TDLib authorization state changed to {}", state.path("@type").asString("unknown"));
         LoginState mapped = mapAuthorizationState(state);
         // Security-audit finding F13: authorizationStateReady on its own carries no account
         // identity. Fetching it here -- rather than leaving tgUserId/tgUsername null until
