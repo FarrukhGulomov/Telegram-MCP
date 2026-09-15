@@ -41,6 +41,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
@@ -60,11 +61,14 @@ import org.springframework.security.oauth2.server.authorization.OAuth2Authorizat
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.settings.AuthorizationServerSettings;
 import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
+import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationCodeRequestAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.AuthenticationConverter;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.util.matcher.RequestMatcher;
@@ -126,6 +130,44 @@ public class AuthorizationServerConfig {
                             "This authorization server does not serve the requested resource.", null),
                     authentication);
         }
+    }
+
+    /**
+     * Root cause of the Claude.ai connector's "Authorization ... failed", confirmed by the raw
+     * request logging added below: Claude's {@code GET /oauth2/authorize} carries no
+     * {@code scope} parameter at all. RFC 6749 6.3.3 treats an omitted scope as "whatever the
+     * authorization server chooses to default it to", but Spring Authorization Server applies
+     * no such default -- {@code OAuth2AuthorizationCodeRequestAuthenticationProvider} uses the
+     * request's scopes verbatim, so "no scope requested" becomes "zero scopes to authorize".
+     * The (unmodified) default consent page renders exactly one checkbox per scope in that set,
+     * so zero requested scopes means zero checkboxes: nothing the user could ever check, and a
+     * submission with no {@code scope} value present is indistinguishable from an explicit
+     * denial to {@code OAuth2AuthorizationConsentAuthenticationProvider}, which treats an empty
+     * approved-scope set as denial -- a 100%-repeatable failure no matter what the user does on
+     * the page. Wraps the library's own converter rather than replacing request handling
+     * entirely: only the specific case of "no scope in the request" is touched, by substituting
+     * the registered client's own scope (exactly what it declared at Dynamic Client
+     * Registration time) so there is something real to render and consent to.
+     */
+    private static AuthenticationConverter defaultMissingScopeToRegisteredClientScope(
+            RegisteredClientRepository registeredClientRepository) {
+        AuthenticationConverter delegate = new OAuth2AuthorizationCodeRequestAuthenticationConverter();
+        return request -> {
+            Authentication authentication = delegate.convert(request);
+            if (!(authentication instanceof OAuth2AuthorizationCodeRequestAuthenticationToken token)
+                    || (token.getScopes() != null && !token.getScopes().isEmpty())) {
+                return authentication;
+            }
+            RegisteredClient registeredClient = registeredClientRepository.findByClientId(token.getClientId());
+            if (registeredClient == null || registeredClient.getScopes().isEmpty()) {
+                return authentication;
+            }
+            log.info("Authorize request from client {} carried no scope; defaulting to its registered scope {}",
+                    token.getClientId(), registeredClient.getScopes());
+            return new OAuth2AuthorizationCodeRequestAuthenticationToken(token.getAuthorizationUri(),
+                    token.getClientId(), (Authentication) token.getPrincipal(), token.getRedirectUri(),
+                    token.getState(), registeredClient.getScopes(), token.getAdditionalParameters());
+        };
     }
 
     /**
@@ -207,7 +249,8 @@ public class AuthorizationServerConfig {
 
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http, AppProperties properties)
+    public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http, AppProperties properties,
+                                                               RegisteredClientRepository registeredClientRepository)
             throws Exception {
         OAuth2AuthorizationServerConfigurer configurer = new OAuth2AuthorizationServerConfigurer();
         RequestMatcher endpoints = configurer.getEndpointsMatcher();
@@ -259,6 +302,10 @@ public class AuthorizationServerConfig {
                         // prompt) -- the no-arg validator instance already composes all of
                         // those internally.
                         .authorizationEndpoint(authorization -> authorization
+                                .authorizationRequestConverters(converters -> converters.replaceAll(converter ->
+                                        converter instanceof OAuth2AuthorizationCodeRequestAuthenticationConverter
+                                                ? defaultMissingScopeToRegisteredClientScope(registeredClientRepository)
+                                                : converter))
                                 .authenticationProviders(providers -> providers.forEach(provider -> {
                                     if (provider instanceof OAuth2AuthorizationCodeRequestAuthenticationProvider p) {
                                         p.setAuthenticationValidator(
