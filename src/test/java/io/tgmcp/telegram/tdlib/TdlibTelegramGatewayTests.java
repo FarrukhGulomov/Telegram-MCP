@@ -44,7 +44,7 @@ class TdlibTelegramGatewayTests {
     private final ObjectMapper mapper = JsonMapper.builder().build();
     private final ScriptedTdlibClient client = new ScriptedTdlibClient(this.mapper);
     private final AppProperties.Telegram config =
-            new AppProperties.Telegram(TelegramAdapterKind.TDLIB, "12345", "hash", "./tdlib", true);
+            new AppProperties.Telegram(TelegramAdapterKind.TDLIB, "12345", "hash", "./tdlib", true, true);
     private final TdlibTelegramGateway gateway =
             new TdlibTelegramGateway(this.client, this.config, "dGVzdC1zZXNzaW9uLWVuY3J5cHRpb24ta2V5LTMyYnl0ZXM=");
 

@@ -29,8 +29,19 @@ class ProductionSafetyValidatorTests {
     private static AppProperties properties(boolean realAccountAccessAuthorized, boolean seedSyntheticData,
                                             String sessionEncryptionKey, String cursorSigningKey,
                                             String oauthRsaPrivateKey) {
+        // Every test other than the ones specifically about SEC-07 wants that check to be a
+        // non-issue, so it can focus on its own one setting; acknowledged=true here.
+        return properties(realAccountAccessAuthorized, seedSyntheticData, sessionEncryptionKey, cursorSigningKey,
+                oauthRsaPrivateKey, true);
+    }
+
+    private static AppProperties properties(boolean realAccountAccessAuthorized, boolean seedSyntheticData,
+                                            String sessionEncryptionKey, String cursorSigningKey,
+                                            String oauthRsaPrivateKey,
+                                            boolean acknowledgeMissingEditDeletionPipeline) {
         AppProperties.Telegram telegram = new AppProperties.Telegram(TelegramAdapterKind.TDLIB,
-                "1", "hash", "./tdlib-data", realAccountAccessAuthorized);
+                "1", "hash", "./tdlib-data", realAccountAccessAuthorized,
+                acknowledgeMissingEditDeletionPipeline);
         AppProperties.Secrets secrets = new AppProperties.Secrets(sessionEncryptionKey, "key-id", cursorSigningKey,
                 oauthRsaPrivateKey);
         AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo", "owner@demo.invalid",
@@ -132,6 +143,32 @@ class ProductionSafetyValidatorTests {
                 .hasMessageContaining("oauth.issuer")
                 .hasMessageContaining("public-base-url")
                 .hasMessageContaining("cookie.secure");
+    }
+
+    /**
+     * Security-audit finding SEC-07: F08 only ever logged the TDLIB adapter's missing
+     * edit/deletion pipeline as a warning -- a deployment could authorize real-account access
+     * against it and start anyway. This must now refuse to start unless the operator has
+     * explicitly acknowledged the gap.
+     */
+    @Test
+    void refusesRealAccountAccessAgainstAnAdapterWithNoLiveRevisionPipelineUnlessAcknowledged() {
+        AppProperties properties = properties(true, false, KEY, KEY, KEY, false);
+
+        assertThatThrownBy(() -> new ProductionSafetyValidator(properties,
+                "https://mcp.example.com", "https://mcp.example.com", true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no live edit/deletion pipeline")
+                .hasMessageContaining("acknowledge-missing-edit-deletion-pipeline");
+    }
+
+    @Test
+    void allowsRealAccountAccessAgainstAnAdapterWithNoLiveRevisionPipelineOnceAcknowledged() {
+        AppProperties properties = properties(true, false, KEY, KEY, KEY, true);
+
+        assertThatCode(() -> new ProductionSafetyValidator(properties,
+                "https://mcp.example.com", "https://mcp.example.com", true))
+                .doesNotThrowAnyException();
     }
 
     @Test

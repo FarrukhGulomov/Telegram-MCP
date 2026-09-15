@@ -20,6 +20,15 @@ public interface TelegramGateway {
 
     TelegramAdapterKind kind();
 
+    /**
+     * Security-audit finding SEC-07: exposes {@link TelegramAdapterKind#supportsLiveRevisions}
+     * on the gateway instance itself, so code holding a live gateway need not re-derive the
+     * same capability from its {@link #kind()}.
+     */
+    default boolean supportsLiveRevisions() {
+        return kind().supportsLiveRevisions();
+    }
+
     // --- session lifecycle (management UI only; never reachable from MCP) -------------
 
     LoginState beginLogin(ConnectionRef ref, LoginMethod method, String phoneNumber);

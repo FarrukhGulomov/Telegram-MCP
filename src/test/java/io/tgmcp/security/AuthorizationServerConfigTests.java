@@ -25,7 +25,7 @@ class AuthorizationServerConfigTests {
 
     private static AppProperties propertiesWithOauthKey(String oauthRsaPrivateKey) {
         AppProperties.Telegram telegram = new AppProperties.Telegram(TelegramAdapterKind.MOCK,
-                null, null, "./tdlib", false);
+                null, null, "./tdlib", false, false);
         AppProperties.Secrets secrets = new AppProperties.Secrets(null, "test", null, oauthRsaPrivateKey);
         AppProperties.Demo demo = new AppProperties.Demo(false, "demo", "Demo", "a@b.invalid", "pw", List.of());
         return new AppProperties(telegram, null, null, null, secrets, demo);

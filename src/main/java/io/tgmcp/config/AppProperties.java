@@ -28,7 +28,18 @@ public record AppProperties(@DefaultValue Telegram telegram,
                             * Real Telegram accounts must not be contacted unless an operator has
                             * explicitly authorized it, even when the TDLIB adapter is selected.
                             */
-                           @DefaultValue("false") boolean realAccountAccessAuthorized) {
+                           @DefaultValue("false") boolean realAccountAccessAuthorized,
+                           /**
+                            * Security-audit findings F08/SEC-07: {@link
+                            * TelegramAdapterKind#supportsLiveRevisions} is {@code false} for
+                            * TDLIB -- edits and deletions made on Telegram after ingestion are
+                            * silently not reflected here, with no pipeline built to change that.
+                            * {@link ProductionSafetyValidator} refuses real-account access
+                            * against such an adapter unless this is explicitly set, so that gap
+                            * is a deliberate, acknowledged choice rather than a discovered
+                            * surprise.
+                            */
+                           @DefaultValue("false") boolean acknowledgeMissingEditDeletionPipeline) {
     }
 
     /**

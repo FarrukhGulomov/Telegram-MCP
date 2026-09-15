@@ -95,6 +95,7 @@ tgmcp:
     api-hash: ${TGMCP_TELEGRAM_API_HASH:}
     database-directory: ${TGMCP_TDLIB_DIR:./tdlib-data}
     real-account-access-authorized: ${TGMCP_REAL_ACCOUNT_AUTHORIZED:false}
+    acknowledge-missing-edit-deletion-pipeline: ${TGMCP_ACK_NO_EDIT_DELETE_PIPELINE:false}
 
   mcp:
     default-page-size: 50

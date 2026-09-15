@@ -75,6 +75,20 @@ public class ProductionSafetyValidator {
                     + "would otherwise be sent over plain HTTP. Set TGMCP_COOKIE_SECURE=true "
                     + "(only safe once the app is actually served over HTTPS).");
         }
+        // Security-audit finding SEC-07: F08 only ever logged this gap as a warning: a real
+        // deployment could authorize real-account access against an adapter with no live
+        // edit/deletion pipeline and start anyway. Turning that into a startup refusal, like
+        // every other unsafe combination here, means processing real chats where edits or
+        // deletions matter requires a deliberate, explicit acknowledgement rather than
+        // depending on someone having read the log.
+        if (!properties.telegram().adapter().supportsLiveRevisions()
+                && !properties.telegram().acknowledgeMissingEditDeletionPipeline()) {
+            problems.add("The " + properties.telegram().adapter() + " adapter has no live "
+                    + "edit/deletion pipeline: a message edited or deleted on Telegram after ingestion "
+                    + "will not be reflected here (see docs/production-prerequisites.md). Set "
+                    + "tgmcp.telegram.acknowledge-missing-edit-deletion-pipeline=true only once you have "
+                    + "confirmed this gap is acceptable for every chat you plan to activate.");
+        }
 
         if (!problems.isEmpty()) {
             throw new IllegalStateException(

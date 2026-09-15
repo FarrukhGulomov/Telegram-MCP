@@ -197,7 +197,7 @@ class RateLimitAndResponseCapTests extends AbstractIntegrationTest {
     private static AppProperties propertiesWithLimit(int perMinute) {
         return new AppProperties(
                 new AppProperties.Telegram(io.tgmcp.telegram.gateway.TelegramAdapterKind.MOCK,
-                        null, null, "./tdlib", false),
+                        null, null, "./tdlib", false, false),
                 new AppProperties.Mcp(50, 200, 20, 512, 20, 262144, 4000, 366,
                         Duration.ofMinutes(15), perMinute, "http://localhost:8080/mcp", "mcp:read"),
                 new AppProperties.Consent("2026-09-v1", true, Duration.ofDays(365)),

@@ -43,7 +43,7 @@ class CursorCodecTests {
     private CursorCodec newCodec(String base64Key) {
         AppProperties properties = new AppProperties(
                 new AppProperties.Telegram(io.tgmcp.telegram.gateway.TelegramAdapterKind.MOCK,
-                        null, null, "./tdlib", false),
+                        null, null, "./tdlib", false, false),
                 mcpDefaults(),
                 new AppProperties.Consent("2026-09-v1", true, Duration.ofDays(365)),
                 syncDefaults(),
