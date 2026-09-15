@@ -2,29 +2,42 @@
 <html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.audit}, ~{::section})}">
 <body>
 <section>
-  <h1 th:text="#{nav.audit}">Audit events</h1>
-  <p class="muted" th:text="#{audit.hint}">
-    A plain history of who did what and when: connections, chat selections, consent given or
-    revoked, and every access attempt this app made or refused. Access metadata, consent changes,
-    sync failures and revocations. Message text is never recorded here.
-  </p>
-  <table>
-    <thead><tr><th th:text="#{audit.table.when}">When</th><th th:text="#{audit.table.actor}">Actor</th>
-      <th th:text="#{audit.table.action}">Action</th><th th:text="#{audit.table.chat}">Chat</th>
-      <th th:text="#{audit.table.outcome}">Outcome</th><th th:text="#{audit.table.detail}">Detail</th></tr></thead>
-    <tbody>
-    <tr th:each="e : ${events}">
-      <td th:text="${e.occurredAt}"></td>
-      <td th:text="#{${'actorType.' + e.actorType}} + ' · ' + (${e.actorId} ?: '—')"></td>
-      <td th:text="#{${'auditAction.' + e.action}}"></td>
-      <td th:text="${e.chatId} ?: '—'"></td>
-      <td th:text="#{${'auditOutcome.' + e.outcome}}"
-          th:classappend="${e.outcome} == 'DENIED' ? 'warn' : (${e.outcome} == 'ERROR' ? 'err' : 'ok')"></td>
-      <td><code th:text="${e.detail}"></code></td>
-    </tr>
-    <tr th:if="${#lists.isEmpty(events)}"><td colspan="6" class="muted" th:text="#{audit.table.empty}">No events yet.</td></tr>
-    </tbody>
-  </table>
+  <div class="page-head">
+    <h1 th:text="#{nav.audit}">Audit events</h1>
+    <p class="muted" th:text="#{audit.hint}">
+      A plain history of who did what and when: connections, chat selections, consent given or
+      revoked, and every access attempt this app made or refused. Access metadata, consent changes,
+      sync failures and revocations. Message text is never recorded here.
+    </p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th th:text="#{audit.table.when}">When</th><th th:text="#{audit.table.actor}">Actor</th>
+        <th th:text="#{audit.table.action}">Action</th><th th:text="#{audit.table.chat}">Chat</th>
+        <th th:text="#{audit.table.outcome}">Outcome</th><th th:text="#{audit.table.detail}">Detail</th></tr></thead>
+      <tbody>
+      <tr th:each="e : ${events}">
+        <td th:text="${e.occurredAt}"></td>
+        <td th:text="#{${'actorType.' + e.actorType}} + ' · ' + (${e.actorId} ?: '—')"></td>
+        <td th:text="#{${'auditAction.' + e.action}}"></td>
+        <td th:text="${e.chatId} ?: '—'"></td>
+        <td>
+          <span class="pill" th:text="#{${'auditOutcome.' + e.outcome}}"
+                th:classappend="${e.outcome} == 'DENIED' ? 'warn' : (${e.outcome} == 'ERROR' ? 'err' : 'ok')"></span>
+        </td>
+        <td><code th:text="${e.detail}"></code></td>
+      </tr>
+      <tr th:if="${#lists.isEmpty(events)}">
+        <td colspan="6">
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            <span th:text="#{audit.table.empty}">No events yet.</span>
+          </div>
+        </td>
+      </tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 </body>
 </html>

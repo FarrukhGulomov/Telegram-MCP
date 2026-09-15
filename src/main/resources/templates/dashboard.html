@@ -2,27 +2,31 @@
 <html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.chats}, ~{::section})}">
 <body>
 <section>
-  <h1 th:text="#{nav.chats}">Chats</h1>
+  <div class="page-head">
+    <h1 th:text="#{nav.chats}">Chats</h1>
+  </div>
 
   <div class="card">
     <h2 th:text="#{dashboard.howItWorks.title}">How this works, in short</h2>
-    <ol class="muted">
-      <li th:text="#{dashboard.howItWorks.step1}">Connect your Telegram account (once).</li>
-      <li th:text="#{dashboard.howItWorks.step2}">Refresh the chat list below and pick a chat to manage.</li>
-      <li th:text="#{dashboard.howItWorks.step3}">Choose which AI app may read it, and wait for everyone in the chat to consent.</li>
-      <li th:text="#{dashboard.howItWorks.step4}">Activate. Only from that moment can an AI assistant read that one chat.</li>
+    <ol class="steps-list">
+      <li><span class="step-num" aria-hidden="true">1</span><span th:text="#{dashboard.howItWorks.step1}">Connect your Telegram account (once).</span></li>
+      <li><span class="step-num" aria-hidden="true">2</span><span th:text="#{dashboard.howItWorks.step2}">Refresh the chat list below and pick a chat to manage.</span></li>
+      <li><span class="step-num" aria-hidden="true">3</span><span th:text="#{dashboard.howItWorks.step3}">Choose which AI app may read it, and wait for everyone in the chat to consent.</span></li>
+      <li><span class="step-num" aria-hidden="true">4</span><span th:text="#{dashboard.howItWorks.step4}">Activate. Only from that moment can an AI assistant read that one chat.</span></li>
     </ol>
   </div>
 
   <p class="banner demo" th:if="${demoMode}">
-    <strong th:text="#{dashboard.demoBanner.strong}">Demo mode.</strong>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <span><strong th:text="#{dashboard.demoBanner.strong}">Demo mode.</strong>
     <span th:text="#{dashboard.demoBanner.text(${adapter})}">Adapter MOCK — all data below is
-      synthetic. No Telegram account is connected.</span>
+      synthetic. No Telegram account is connected.</span></span>
   </p>
   <p class="banner live" th:unless="${demoMode}">
-    <strong th:text="#{dashboard.liveBanner.strong(${adapter})}">Live adapter (TDLIB).</strong>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
+    <span><strong th:text="#{dashboard.liveBanner.strong(${adapter})}">Live adapter (TDLIB).</strong>
     <span th:text="#{dashboard.liveBanner.text}">A real Telegram account session is in use. Only
-      chats you activate with recorded participant consent are ever read.</span>
+      chats you activate with recorded participant consent are ever read.</span></span>
   </p>
 
   <div class="grid">
@@ -53,47 +57,54 @@
     </div>
   </div>
 
-  <table>
-    <thead>
-    <tr>
-      <th th:text="#{dashboard.table.chat}">Chat</th><th th:text="#{dashboard.table.type}">Type</th>
-      <th th:text="#{dashboard.table.state}">State</th><th th:text="#{dashboard.table.consent}">Consent</th>
-      <th th:text="#{dashboard.table.providers}">Providers</th>
-      <th th:text="#{dashboard.table.stored}">Stored</th><th th:text="#{dashboard.table.sync}">Sync</th><th></th>
-    </tr>
-    </thead>
-    <tbody>
-    <tr th:each="c : ${chats}">
-      <td th:text="${c.chat.title}">chat</td>
-      <td th:text="#{${'chatType.' + c.chat.chatType}}">SUPERGROUP</td>
-      <td><span class="pill" th:classappend="${c.active} ? 'ok' : 'warn'"
-                th:text="#{${'state.' + c.stateLabel}}">INACTIVE</span></td>
-      <td>
-        <span th:if="${c.coverage == null}" class="muted" th:text="#{dashboard.table.notSelected}">not selected</span>
-        <span th:if="${c.coverage != null and c.consentComplete}" class="ok"
-              th:text="${c.coverage.coveredParticipants} + '/' + ${c.coverage.requiredParticipants}">0/0</span>
-        <span th:if="${c.coverage != null and !c.consentComplete}" class="warn"
-              th:text="${c.coverage.coveredParticipants} + '/' + ${c.coverage.requiredParticipants}">0/0</span>
-      </td>
-      <td>
-        <span th:each="p, iter : ${c.providers}">
-          <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
-        </span>
-      </td>
-      <td th:text="${c.stored.storedMessageCount}">0</td>
-      <td>
-        <span th:text="#{${'syncState.' + c.syncState}}">NEVER_STARTED</span>
-        <span class="warn" th:if="${c.selected and c.partialHistory}" th:title="#{dashboard.table.partialTitle}"
-              th:text="#{dashboard.table.partialLabel}">partial</span>
-        <span class="err" th:if="${c.lastErrorCode != null}" th:text="${c.lastErrorCode}"></span>
-      </td>
-      <td><a th:href="@{'/chats/' + ${c.chat.id}}" th:text="#{dashboard.table.manage}">Manage</a></td>
-    </tr>
-    <tr th:if="${#lists.isEmpty(chats)}">
-      <td colspan="8" class="muted" th:text="#{dashboard.table.empty}">No chats discovered yet. Connect Telegram, then refresh the chat list.</td>
-    </tr>
-    </tbody>
-  </table>
+  <div class="table-wrap">
+    <table>
+      <thead>
+      <tr>
+        <th th:text="#{dashboard.table.chat}">Chat</th><th th:text="#{dashboard.table.type}">Type</th>
+        <th th:text="#{dashboard.table.state}">State</th><th th:text="#{dashboard.table.consent}">Consent</th>
+        <th th:text="#{dashboard.table.providers}">Providers</th>
+        <th th:text="#{dashboard.table.stored}">Stored</th><th th:text="#{dashboard.table.sync}">Sync</th><th></th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr th:each="c : ${chats}">
+        <td th:text="${c.chat.title}">chat</td>
+        <td th:text="#{${'chatType.' + c.chat.chatType}}">SUPERGROUP</td>
+        <td><span class="pill" th:classappend="${c.active} ? 'ok' : 'warn'"
+                  th:text="#{${'state.' + c.stateLabel}}">INACTIVE</span></td>
+        <td>
+          <span th:if="${c.coverage == null}" class="muted" th:text="#{dashboard.table.notSelected}">not selected</span>
+          <span th:if="${c.coverage != null and c.consentComplete}" class="ok"
+                th:text="${c.coverage.coveredParticipants} + '/' + ${c.coverage.requiredParticipants}">0/0</span>
+          <span th:if="${c.coverage != null and !c.consentComplete}" class="warn"
+                th:text="${c.coverage.coveredParticipants} + '/' + ${c.coverage.requiredParticipants}">0/0</span>
+        </td>
+        <td>
+          <span th:each="p, iter : ${c.providers}">
+            <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
+          </span>
+        </td>
+        <td th:text="${c.stored.storedMessageCount}">0</td>
+        <td>
+          <span th:text="#{${'syncState.' + c.syncState}}">NEVER_STARTED</span>
+          <span class="warn" th:if="${c.selected and c.partialHistory}" th:title="#{dashboard.table.partialTitle}"
+                th:text="#{dashboard.table.partialLabel}">partial</span>
+          <span class="err" th:if="${c.lastErrorCode != null}" th:text="${c.lastErrorCode}"></span>
+        </td>
+        <td><a th:href="@{'/chats/' + ${c.chat.id}}" th:text="#{dashboard.table.manage}">Manage</a></td>
+      </tr>
+      <tr th:if="${#lists.isEmpty(chats)}">
+        <td colspan="8">
+          <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span th:text="#{dashboard.table.empty}">No chats discovered yet. Connect Telegram, then refresh the chat list.</span>
+          </div>
+        </td>
+      </tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 </body>
 </html>

@@ -2,12 +2,14 @@
 <html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{chat.pageTitle}, ~{::section})}">
 <body>
 <section>
-  <h1 th:text="${view.chat.title}">Chat</h1>
-  <p class="muted">
-    <span th:text="#{${'chatType.' + view.chat.chatType}}"></span> ·
-    <span th:text="${view.participantCount}"></span> <span th:text="#{chat.meta.participants}">participant(s)</span> ·
-    <span th:text="#{chat.meta.state}">state</span> <span class="pill" th:text="#{${'state.' + view.stateLabel}}">INACTIVE</span>
-  </p>
+  <div class="page-head">
+    <h1 th:text="${view.chat.title}">Chat</h1>
+    <p class="muted">
+      <span th:text="#{${'chatType.' + view.chat.chatType}}"></span> ·
+      <span th:text="${view.participantCount}"></span> <span th:text="#{chat.meta.participants}">participant(s)</span> ·
+      <span th:text="#{chat.meta.state}">state</span> <span class="pill" th:text="#{${'state.' + view.stateLabel}}">INACTIVE</span>
+    </p>
+  </div>
 
   <div class="card" th:if="${view.selected}">
     <h2 th:text="#{chat.shared.title}">What gets shared, and with whom</h2>
@@ -54,7 +56,9 @@
     </div>
 
     <div class="card">
-      <h2 th:text="${view.selected} ? #{chat.select.settingsTitle} : #{chat.select.title}">Step 1 — Select this chat</h2>
+      <h2 th:unless="${view.selected}" class="step-title"><span class="step-num" aria-hidden="true">1</span>
+        <span th:text="#{chat.select.title}">Select this chat</span></h2>
+      <h2 th:if="${view.selected}" th:text="#{chat.select.settingsTitle}">Approval settings</h2>
       <p class="muted" th:unless="${view.selected}" th:text="#{chat.select.hint}">
         Fill in the 4 boxes below, then press "Select chat". Nothing is read from this chat yet —
         that only happens after every participant has given consent and you press "Activate".
@@ -106,100 +110,111 @@
   </div>
 
   <div class="card" th:if="${view.selected}">
-    <h2 th:text="#{chat.consentStep.title}">Step 2 — Get everyone's consent</h2>
+    <h2 class="step-title"><span class="step-num" aria-hidden="true">2</span>
+      <span th:text="#{chat.consentStep.title}">Get everyone's consent</span></h2>
     <p class="muted" th:text="#{chat.consentStep.hint}">
       Every person listed below must agree before this chat can be turned on. Ask them, then
       press the button next to their name.
     </p>
 
     <div class="flash err" th:if="${view.coverage != null and !view.consentComplete}">
-      <strong th:text="#{chat.consentGap.title}">Consent coverage is incomplete.</strong>
-      <span th:text="#{chat.consentGap.blocked}">MCP access stays blocked.</span>
-      <ul>
-        <li th:each="g : ${view.coverage.gaps}">
-          <span th:text="${g.displayName}"></span> — <span th:text="${g.reason}"></span>
-        </li>
-      </ul>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <span>
+        <strong th:text="#{chat.consentGap.title}">Consent coverage is incomplete.</strong>
+        <span th:text="#{chat.consentGap.blocked}">MCP access stays blocked.</span>
+        <ul>
+          <li th:each="g : ${view.coverage.gaps}">
+            <span th:text="${g.displayName}"></span> — <span th:text="${g.reason}"></span>
+          </li>
+        </ul>
+      </span>
     </div>
 
-    <table>
-      <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
-        <th th:text="#{chat.participantsTable.telegramId}">Telegram id</th>
-        <th th:text="#{chat.participantsTable.recordConsent}">Record consent</th><th></th></tr></thead>
-      <tbody>
-      <tr th:each="p : ${participants}">
-        <td th:text="${p.displayName}"></td>
-        <td><code th:text="${p.tgUserId}"></code></td>
-        <td>
-          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent'}" method="post" data-guard-resubmit class="inline">
-            <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
-            <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
-            <input type="hidden" th:unless="${demoMode}" name="method" value="OPERATOR_CONFIRMED">
-            <select th:if="${demoMode}" name="method">
-              <option value="OPERATOR_CONFIRMED" th:text="#{chat.consentMethod.operatorConfirmed}">Confirmed by operator</option>
-              <option value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
-            </select>
-            <button type="submit" th:text="#{chat.record.button}">They agreed</button>
-          </form>
-        </td>
-        <td>
-          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" method="post" data-guard-resubmit class="inline">
-            <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
-            <button type="submit" class="danger" th:text="#{chat.revoke.button}">Revoke</button>
-          </form>
-        </td>
-      </tr>
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
+          <th th:text="#{chat.participantsTable.telegramId}">Telegram id</th>
+          <th th:text="#{chat.participantsTable.recordConsent}">Record consent</th><th></th></tr></thead>
+        <tbody>
+        <tr th:each="p : ${participants}">
+          <td th:text="${p.displayName}"></td>
+          <td><code th:text="${p.tgUserId}"></code></td>
+          <td>
+            <form th:action="@{'/chats/' + ${view.chat.id} + '/consent'}" method="post" data-guard-resubmit class="inline">
+              <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
+              <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
+              <input type="hidden" th:unless="${demoMode}" name="method" value="OPERATOR_CONFIRMED">
+              <select th:if="${demoMode}" name="method">
+                <option value="OPERATOR_CONFIRMED" th:text="#{chat.consentMethod.operatorConfirmed}">Confirmed by operator</option>
+                <option value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
+              </select>
+              <button type="submit" th:text="#{chat.record.button}">They agreed</button>
+            </form>
+          </td>
+          <td>
+            <form th:action="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" method="post" data-guard-resubmit class="inline">
+              <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
+              <button type="submit" class="danger secondary" th:text="#{chat.revoke.button}">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        </tbody>
+      </table>
+    </div>
 
     <h3 th:text="#{chat.recordedConsents.title}">Recorded consents</h3>
-    <table>
-      <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
-        <th th:text="#{chat.recordedConsents.version}">Version</th>
-        <th th:text="#{chat.recordedConsents.providers}">Providers</th>
-        <th th:text="#{chat.recordedConsents.method}">Method</th>
-        <th th:text="#{chat.recordedConsents.granted}">Granted</th>
-        <th th:text="#{chat.recordedConsents.expires}">Expires</th>
-        <th th:text="#{chat.recordedConsents.revoked}">Revoked</th></tr></thead>
-      <tbody>
-      <tr th:each="c : ${consents}">
-        <td th:text="${c.participantDisplayName}"></td>
-        <td th:text="${c.consentVersion}"></td>
-        <td>
-          <span th:each="p, iter : ${#strings.arraySplit(c.providerScope, ',')}">
-            <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
-          </span>
-        </td>
-        <td th:text="#{${'consentMethod.' + c.method}}"></td>
-        <td th:text="${c.grantedAt}"></td>
-        <td th:text="${c.expiresAt} ?: '—'"></td>
-        <td th:text="${c.revokedAt} ?: '—'"></td>
-      </tr>
-      <tr th:if="${#lists.isEmpty(consents)}"><td colspan="7" class="muted" th:text="#{chat.recordedConsents.empty}">No consent recorded yet.</td></tr>
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
+          <th th:text="#{chat.recordedConsents.version}">Version</th>
+          <th th:text="#{chat.recordedConsents.providers}">Providers</th>
+          <th th:text="#{chat.recordedConsents.method}">Method</th>
+          <th th:text="#{chat.recordedConsents.granted}">Granted</th>
+          <th th:text="#{chat.recordedConsents.expires}">Expires</th>
+          <th th:text="#{chat.recordedConsents.revoked}">Revoked</th></tr></thead>
+        <tbody>
+        <tr th:each="c : ${consents}">
+          <td th:text="${c.participantDisplayName}"></td>
+          <td th:text="${c.consentVersion}"></td>
+          <td>
+            <span th:each="p, iter : ${#strings.arraySplit(c.providerScope, ',')}">
+              <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
+            </span>
+          </td>
+          <td th:text="#{${'consentMethod.' + c.method}}"></td>
+          <td th:text="${c.grantedAt}"></td>
+          <td th:text="${c.expiresAt} ?: '—'"></td>
+          <td th:text="${c.revokedAt} ?: '—'"></td>
+        </tr>
+        <tr th:if="${#lists.isEmpty(consents)}"><td colspan="7" class="muted" th:text="#{chat.recordedConsents.empty}">No consent recorded yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <div class="card danger" th:if="${view.selected}">
-    <h2 th:text="#{chat.accessControls.title}">Step 3 — Turn access on or off</h2>
+    <h2 class="step-title"><span class="step-num" aria-hidden="true">3</span>
+      <span th:text="#{chat.accessControls.title}">Turn access on or off</span></h2>
     <p class="muted" th:utext="#{chat.accessControls.hint}">
       <strong>Activate</strong> turns on reading for this chat (only once every participant has
       consented above). <strong>Pause</strong> blocks access instantly but keeps everything else
       as-is, so you can resume later. <strong>Revoke</strong> and <strong>Delete stored data</strong>
       are permanent — use them when you're done with this chat for good.
     </p>
-    <form th:action="@{'/chats/' + ${view.chat.id} + '/activate'}" method="post" data-guard-resubmit class="inline">
-      <button type="submit" th:text="#{chat.activate.button}">Activate</button>
-    </form>
-    <form th:action="@{'/chats/' + ${view.chat.id} + '/pause'}" method="post" data-guard-resubmit class="inline">
-      <button type="submit" th:text="#{chat.pause.button}">Pause</button>
-    </form>
-    <form th:action="@{'/chats/' + ${view.chat.id} + '/revoke'}" method="post" data-guard-resubmit class="inline">
-      <button type="submit" class="danger" th:text="#{chat.revokeConsent.button}">Revoke consent and delete data</button>
-    </form>
-    <form th:action="@{'/chats/' + ${view.chat.id} + '/delete-data'}" method="post" data-guard-resubmit class="inline">
-      <button type="submit" class="danger" th:text="#{chat.deleteData.button}">Delete stored data only</button>
-    </form>
+    <div class="actions-row">
+      <form th:action="@{'/chats/' + ${view.chat.id} + '/activate'}" method="post" data-guard-resubmit class="inline">
+        <button type="submit" th:text="#{chat.activate.button}">Activate</button>
+      </form>
+      <form th:action="@{'/chats/' + ${view.chat.id} + '/pause'}" method="post" data-guard-resubmit class="inline">
+        <button type="submit" class="secondary" th:text="#{chat.pause.button}">Pause</button>
+      </form>
+      <form th:action="@{'/chats/' + ${view.chat.id} + '/revoke'}" method="post" data-guard-resubmit class="inline">
+        <button type="submit" class="danger" th:text="#{chat.revokeConsent.button}">Revoke consent and delete data</button>
+      </form>
+      <form th:action="@{'/chats/' + ${view.chat.id} + '/delete-data'}" method="post" data-guard-resubmit class="inline">
+        <button type="submit" class="danger" th:text="#{chat.deleteData.button}">Delete stored data only</button>
+      </form>
+    </div>
   </div>
 </section>
 </body>
