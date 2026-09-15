@@ -204,6 +204,17 @@ public class ConsentService {
      * real Telegram account is in play (any adapter other than the synthetic mock), so it can
      * never substitute for genuine consent once real people's data is involved.
      */
+    /**
+     * Security-audit finding SEC-08: the shortest string that still counts as a real evidence
+     * reference is inherently a judgement call, but "a" or "ok" plainly is not one -- a plain
+     * non-blank check accepted either. This is a low bar, not a guarantee of genuine evidence:
+     * it cannot verify that a reference actually points to anything, only rule out the most
+     * obvious placeholder text and push recorders toward naming something an auditor could
+     * later go and look at (a document link, a message id, a ticket number, a dated
+     * description of the interaction).
+     */
+    private static final int MIN_EVIDENCE_REFERENCE_LENGTH = 15;
+
     private void validateMethod(ConsentMethod method, String evidenceRef) {
         if (method == ConsentMethod.SELF_SERVICE_LINK) {
             throw new IllegalArgumentException("validation.selfServiceNotAvailable");
@@ -211,8 +222,14 @@ public class ConsentService {
         if (method == ConsentMethod.DEMO_SYNTHETIC && this.gateway.kind() != TelegramAdapterKind.MOCK) {
             throw new IllegalArgumentException("validation.demoConsentNotAllowed");
         }
-        if (method == ConsentMethod.SIGNED_ATTESTATION && (evidenceRef == null || evidenceRef.isBlank())) {
-            throw new IllegalArgumentException("validation.evidenceRequired");
+        if (method == ConsentMethod.SIGNED_ATTESTATION) {
+            String trimmed = evidenceRef == null ? "" : evidenceRef.trim();
+            if (trimmed.isEmpty()) {
+                throw new IllegalArgumentException("validation.evidenceRequired");
+            }
+            if (trimmed.length() < MIN_EVIDENCE_REFERENCE_LENGTH) {
+                throw new IllegalArgumentException("validation.evidenceTooShort");
+            }
         }
     }
 }

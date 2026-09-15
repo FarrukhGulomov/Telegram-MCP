@@ -90,6 +90,23 @@ class ConsentMethodGuardTests extends AbstractIntegrationTest {
                 .hasMessage("validation.evidenceRequired");
     }
 
+    /**
+     * Security-audit finding SEC-08: a plain non-blank check accepted a single character
+     * ("x", "ok") as sufficient "signed attestation" evidence -- no better than no evidence at
+     * all for anyone auditing the record later.
+     */
+    @Test
+    void signedAttestationRejectsEvidenceThatIsTooShortToBeMeaningful() {
+        Fixtures.Team team = this.fixtures.team("f02-evidence-too-short");
+        Chat chat = chat(team);
+
+        assertThatThrownBy(() -> this.consentService.record(team.actor(), chat.id(), 111L, "Alice",
+                "purpose", "ANTHROPIC_CLAUDE", "v1", "rev-1", ConsentMethod.SIGNED_ATTESTATION, "ok",
+                Instant.now().plus(Duration.ofDays(1))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("validation.evidenceTooShort");
+    }
+
     @Test
     void signedAttestationWithEvidenceSucceeds() {
         Fixtures.Team team = this.fixtures.team("f02-evidence-ok");
