@@ -124,6 +124,13 @@ public class NativeTdlibClient implements TdlibClient {
             this.library.td_send(this.clientId, this.objectMapper.writeValueAsString(payload));
             JsonNode response = future.get(this.requestTimeoutSeconds, TimeUnit.SECONDS);
             if (TdlibErrors.isError(response)) {
+                // Logged here, server-side only, rather than folded into the translated
+                // exception's own message: TdlibErrorTranslationTests deliberately asserts the
+                // raw upstream text (which can carry chat/user identifiers) never reaches
+                // callers through the exception itself. Quieting TDLib's native verbosity
+                // elsewhere in this class removed the only other way to ever see this text.
+                log.warn("TDLib request '{}' failed with code {}: {}", method,
+                        response.path("code").asInt(0), response.path("message").asString(""));
                 throw TdlibErrors.translate(response);
             }
             return response;
