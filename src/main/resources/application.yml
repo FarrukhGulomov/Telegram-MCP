@@ -147,6 +147,15 @@ tgmcp:
     owner-email: ${TGMCP_DEMO_EMAIL:owner@demo.invalid}
     owner-password: ${TGMCP_DEMO_PASSWORD:demo-password}
 
+  # Security-audit finding SEC-10: separate, smaller budgets for endpoints reachable before
+  # or without MCP authentication. Keyed by client IP for login/OAuth, by tenant+user for
+  # onboarding (see PreAuthRateLimitFilter and ConnectionController).
+  abuse-controls:
+    login-attempts-per-minute-per-ip: 10
+    oauth-token-requests-per-minute-per-ip: 20
+    oauth-registrations-per-hour-per-ip: 5
+    connect-actions-per-minute-per-user: 30
+
   oauth:
     issuer: ${TGMCP_OAUTH_ISSUER:http://localhost:8080}
     public-base-url: ${TGMCP_PUBLIC_BASE_URL:http://localhost:8080}

@@ -42,3 +42,10 @@ tgmcp:
     rate-limit-requests-per-minute: 1000
   oauth:
     issuer: http://localhost:8080
+  abuse-controls:
+    # Generous but still finite, so a dedicated test can exhaust the budget deliberately
+    # without every other test in the same JVM (sharing one client IP) tripping it by accident.
+    login-attempts-per-minute-per-ip: 1000
+    oauth-token-requests-per-minute-per-ip: 1000
+    oauth-registrations-per-hour-per-ip: 1000
+    connect-actions-per-minute-per-user: 1000

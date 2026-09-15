@@ -46,7 +46,7 @@ class ProductionSafetyValidatorTests {
                 oauthRsaPrivateKey);
         AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo", "owner@demo.invalid",
                 "pw", List.of());
-        return new AppProperties(telegram, null, null, null, secrets, demo);
+        return new AppProperties(telegram, null, null, null, secrets, demo, null);
     }
 
     @Test

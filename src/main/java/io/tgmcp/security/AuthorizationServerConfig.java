@@ -118,11 +118,27 @@ public class AuthorizationServerConfig {
 
     @Bean
     @Order(1)
-    public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http, AppProperties properties)
+    public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http, AppProperties properties,
+                                                               java.time.Clock clock)
             throws Exception {
         OAuth2AuthorizationServerConfigurer configurer = new OAuth2AuthorizationServerConfigurer();
         RequestMatcher endpoints = configurer.getEndpointsMatcher();
         String expectedResource = AudienceValidator.normalise(properties.mcp().resourceIdentifier());
+
+        // Security-audit finding SEC-10: token issuance and dynamic client registration are
+        // both reachable with no prior credential (registration by design; token issuance by
+        // any client that can reach the endpoint), so each gets its own IP-keyed budget,
+        // independent of the MCP tool-call budget that only ever applies afterward, to an
+        // already-issued token.
+        io.tgmcp.ratelimit.RateLimiter tokenLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().oauthTokenRequestsPerMinutePerIp(), java.time.Duration.ofMinutes(1),
+                clock);
+        io.tgmcp.ratelimit.RateLimiter registrationLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().oauthRegistrationsPerHourPerIp(), java.time.Duration.ofHours(1), clock);
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/oauth2/token", tokenLimiter),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/oauth2/register", registrationLimiter),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
 
         http.securityMatcher(endpoints)
                 .with(configurer, server -> server

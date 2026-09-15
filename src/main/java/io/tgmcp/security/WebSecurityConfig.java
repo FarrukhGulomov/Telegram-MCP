@@ -90,7 +90,16 @@ public class WebSecurityConfig {
     /** Management UI: form login, session cookie, CSRF protection, conservative headers. */
     @Bean
     @Order(3)
-    public SecurityFilterChain managementUiFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain managementUiFilterChain(HttpSecurity http, AppProperties properties,
+                                                        java.time.Clock clock) throws Exception {
+        // Security-audit finding SEC-10: a login attempt is unauthenticated by definition, so
+        // it shares no budget with anything else in this application; IP-keyed and placed
+        // before every other Spring Security filter so a caller who has spent it is turned
+        // away before the credential check itself runs.
+        io.tgmcp.ratelimit.RateLimiter loginLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login", loginLimiter),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
         http.authorizeHttpRequests(requests -> requests
                         .requestMatchers("/login", "/css/**", "/js/**", "/actuator/health").permitAll()
                         // Security-audit finding F17: AppUser carries an OWNER/ADMIN/MEMBER

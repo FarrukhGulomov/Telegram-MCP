@@ -1,6 +1,10 @@
 package io.tgmcp.ui;
 
+import java.time.Clock;
+import java.time.Duration;
+
 import io.tgmcp.config.AppProperties;
+import io.tgmcp.ratelimit.RateLimiter;
 import io.tgmcp.tenancy.AuthenticatedActor;
 import io.tgmcp.telegram.TelegramConnectionService;
 import io.tgmcp.telegram.gateway.LoginMethod;
@@ -30,15 +34,34 @@ public class ConnectionController {
     private final TelegramConnectionService connectionService;
     private final AppProperties properties;
     private final MessageSource messages;
+    /**
+     * Security-audit finding SEC-10: onboarding actions can trigger real, costly native TDLib
+     * work (a login attempt, a full chat discovery pass). They previously shared no budget
+     * distinct from ordinary authenticated page views, so a compromised or careless owner
+     * account could repeatedly trigger that work with no independent limit of its own.
+     */
+    private final RateLimiter connectLimiter;
 
     public ConnectionController(CurrentActor currentActor,
                                 TelegramConnectionService connectionService,
                                 AppProperties properties,
-                                MessageSource messages) {
+                                MessageSource messages,
+                                Clock clock) {
         this.currentActor = currentActor;
         this.connectionService = connectionService;
         this.properties = properties;
         this.messages = messages;
+        this.connectLimiter = new RateLimiter(properties.abuseControls().connectActionsPerMinutePerUser(),
+                Duration.ofMinutes(1), clock);
+    }
+
+    /** @return true (and sets the flash error) if the caller's onboarding budget is spent. */
+    private boolean rateLimited(AuthenticatedActor actor, RedirectAttributes redirectAttributes) {
+        if (this.connectLimiter.tryAcquire(actor.tenantId() + ":" + actor.userId())) {
+            return false;
+        }
+        redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "error.rateLimited"));
+        return true;
     }
 
     @GetMapping("/connect")
@@ -60,28 +83,44 @@ public class ConnectionController {
     public String start(@RequestParam("method") LoginMethod method,
                         @RequestParam(name = "phoneNumber", required = false) String phoneNumber,
                         RedirectAttributes redirectAttributes) {
-        LoginState state = this.connectionService.beginLogin(this.currentActor.requireAdmin(), method, phoneNumber);
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
+        if (rateLimited(actor, redirectAttributes)) {
+            return "redirect:/connect";
+        }
+        LoginState state = this.connectionService.beginLogin(actor, method, phoneNumber);
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
     @PostMapping("/connect/code")
     public String code(@RequestParam("code") String code, RedirectAttributes redirectAttributes) {
-        LoginState state = this.connectionService.submitCode(this.currentActor.requireAdmin(), code);
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
+        if (rateLimited(actor, redirectAttributes)) {
+            return "redirect:/connect";
+        }
+        LoginState state = this.connectionService.submitCode(actor, code);
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
     @PostMapping("/connect/password")
     public String password(@RequestParam("password") String password, RedirectAttributes redirectAttributes) {
-        LoginState state = this.connectionService.submitPassword(this.currentActor.requireAdmin(), password);
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
+        if (rateLimited(actor, redirectAttributes)) {
+            return "redirect:/connect";
+        }
+        LoginState state = this.connectionService.submitPassword(actor, password);
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
         return "redirect:/connect";
     }
 
     @PostMapping("/connect/discover")
     public String discover(RedirectAttributes redirectAttributes) {
-        int count = this.connectionService.discoverChats(this.currentActor.requireAdmin()).size();
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
+        if (rateLimited(actor, redirectAttributes)) {
+            return "redirect:/";
+        }
+        int count = this.connectionService.discoverChats(actor).size();
         redirectAttributes.addFlashAttribute("message",
                 Messages.text(this.messages, "connect.discover.success", count));
         return "redirect:/";
@@ -89,7 +128,11 @@ public class ConnectionController {
 
     @PostMapping("/connect/disconnect")
     public String disconnect(RedirectAttributes redirectAttributes) {
-        this.connectionService.disconnect(this.currentActor.requireAdmin());
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
+        if (rateLimited(actor, redirectAttributes)) {
+            return "redirect:/connect";
+        }
+        this.connectionService.disconnect(actor);
         redirectAttributes.addFlashAttribute("message",
                 Messages.text(this.messages, "connect.disconnect.success"));
         return "redirect:/connect";

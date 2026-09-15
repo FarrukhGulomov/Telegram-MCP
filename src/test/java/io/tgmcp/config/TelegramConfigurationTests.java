@@ -34,7 +34,7 @@ class TelegramConfigurationTests {
 
         AppProperties.Telegram telegramConfig = new AppProperties.Telegram(TelegramAdapterKind.TDLIB,
                 "1", "hash", "./tdlib-data", true, true);
-        AppProperties properties = new AppProperties(telegramConfig, null, null, null, null, null);
+        AppProperties properties = new AppProperties(telegramConfig, null, null, null, null, null, null);
         TelegramConfiguration configuration = new TelegramConfiguration();
 
         try {

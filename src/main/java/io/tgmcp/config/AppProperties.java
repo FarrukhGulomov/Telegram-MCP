@@ -17,7 +17,8 @@ public record AppProperties(@DefaultValue Telegram telegram,
                             @DefaultValue Consent consent,
                             @DefaultValue Sync sync,
                             @DefaultValue Secrets secrets,
-                            @DefaultValue Demo demo) {
+                            @DefaultValue Demo demo,
+                            @DefaultValue AbuseControls abuseControls) {
 
     public record Telegram(@DefaultValue("MOCK") TelegramAdapterKind adapter,
                            /** TDLib api_id / api_hash. Required only for the TDLIB adapter. */
@@ -114,5 +115,20 @@ public record AppProperties(@DefaultValue Telegram telegram,
                        @DefaultValue("owner@demo.invalid") String ownerEmail,
                        @DefaultValue("demo-password") String ownerPassword,
                        @DefaultValue List<String> extraUsers) {
+    }
+
+    /**
+     * Security-audit finding SEC-10: {@code Mcp#rateLimitRequestsPerMinute} only ever budgets
+     * MCP tool calls, made by an already-authenticated caller. Every endpoint reachable before
+     * or without that authentication -- sign-in, OAuth token issuance, dynamic client
+     * registration -- had no independent budget of its own, and Telegram onboarding actions
+     * (which can trigger real, costly native TDLib work) shared no budget distinct from
+     * ordinary page views. These are deliberately separate, smaller numbers, keyed by client
+     * IP for the pre-authentication endpoints and by tenant/user for onboarding.
+     */
+    public record AbuseControls(@DefaultValue("10") int loginAttemptsPerMinutePerIp,
+                                @DefaultValue("20") int oauthTokenRequestsPerMinutePerIp,
+                                @DefaultValue("5") int oauthRegistrationsPerHourPerIp,
+                                @DefaultValue("30") int connectActionsPerMinutePerUser) {
     }
 }
