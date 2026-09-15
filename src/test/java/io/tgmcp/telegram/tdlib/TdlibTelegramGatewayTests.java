@@ -206,12 +206,26 @@ class TdlibTelegramGatewayTests {
     }
 
     @Test
-    void takesTheCaptionForMediaAndNothingForUnsupportedContent() {
+    void labelsMediaWithItsCaptionRatherThanContributingAnEmptyBody() {
+        // Media is not downloaded, transcribed or OCR'd in this MVP -- but real-account testing
+        // found that used to mean an empty body, indistinguishable from no message at all.
         assertThat(TdlibTelegramGateway.extractText(json("""
-                {"@type":"messagePhoto","caption":{"text":"a diagram"}}"""))).isEqualTo("a diagram");
-        // Media is not downloaded, transcribed or OCR'd in this MVP.
+                {"@type":"messagePhoto","caption":{"text":"a diagram"}}"""))).isEqualTo("[Photo]: a diagram");
         assertThat(TdlibTelegramGateway.extractText(json("""
-                {"@type":"messageVoiceNote"}"""))).isEmpty();
+                {"@type":"messagePhoto","caption":{"text":""}}"""))).isEqualTo("[Photo]");
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageVoiceNote"}"""))).isEqualTo("[Voice message]");
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageDocument","document":{"file_name":"report.pdf"}}""")))
+                .isEqualTo("[File: report.pdf]");
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageDocument","document":{"file_name":""},"caption":{"text":"see attached"}}""")))
+                .isEqualTo("[File]: see attached");
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageSticker","sticker":{"emoji":"😀"}}"""))).isEqualTo("[Sticker 😀]");
+        // A genuinely unhandled content type (e.g. a service message) still contributes nothing.
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageChatChangeTitle","title":"New name"}"""))).isEmpty();
     }
 
     @Test
@@ -414,8 +428,50 @@ class TdlibTelegramGatewayTests {
     @Test
     void returnsNoParticipantsForChatTypesThatDoNotExposeAMemberList() {
         this.client.enqueue("""
+                {"@type":"chat","id":9,"title":"Secret chat",
+                 "type":{"@type":"chatTypeSecret","secret_chat_id":9,"user_id":42}}""");
+
+        assertThat(this.gateway.listParticipants(this.ref, 9L)).isEmpty();
+    }
+
+    /**
+     * Real-account testing found a plain (non-super) group could never collect consent either,
+     * for the same reason as the private-chat case above: basic groups fell into the same "no
+     * member list available" catch-all as truly unsupported chat types, leaving the participant
+     * table permanently empty. Unlike a supergroup, a basic group has no separate paginated
+     * members call and no size beyond Telegram's own 200-member cap for this chat type --
+     * getBasicGroupFullInfo returns the whole roster in one shot.
+     */
+    @Test
+    void returnsBasicGroupMembersViaGetBasicGroupFullInfo() {
+        this.client.enqueue("""
                 {"@type":"chat","id":9,"title":"Small group",
                  "type":{"@type":"chatTypeBasicGroup","basic_group_id":9}}""");
+        this.client.enqueue("""
+                {"@type":"basicGroupFullInfo","members":[
+                  {"member_id":{"@type":"messageSenderUser","user_id":1}},
+                  {"member_id":{"@type":"messageSenderChat","chat_id":-9}},
+                  {"member_id":{"@type":"messageSenderUser","user_id":2}}]}""");
+        this.client.enqueue("""
+                {"@type":"user","id":1,"first_name":"Ada","last_name":"Lovelace",
+                 "type":{"@type":"userTypeRegular"}}""");
+        this.client.enqueue("""
+                {"@type":"user","id":2,"first_name":"Helper","last_name":"",
+                 "type":{"@type":"userTypeBot"}}""");
+
+        List<RemoteParticipant> participants = this.gateway.listParticipants(this.ref, 9L);
+
+        assertThat(participants).containsExactly(
+                new RemoteParticipant(1L, "Ada Lovelace", false),
+                new RemoteParticipant(2L, "Helper", true));
+    }
+
+    @Test
+    void returnsNoParticipantsRatherThanThrowingWhenABasicGroupsMemberListIsInaccessible() {
+        this.client.enqueue("""
+                {"@type":"chat","id":9,"title":"Restricted small group",
+                 "type":{"@type":"chatTypeBasicGroup","basic_group_id":9}}""");
+        this.client.enqueueError(400, "Not enough rights");
 
         assertThat(this.gateway.listParticipants(this.ref, 9L)).isEmpty();
     }

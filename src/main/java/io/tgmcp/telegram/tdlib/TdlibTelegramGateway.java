@@ -294,9 +294,32 @@ public class TdlibTelegramGateway implements TelegramGateway {
             addParticipant(result, type.path("user_id").asLong());
             return List.copyOf(result);
         }
+        if ("chatTypeBasicGroup".equals(chatType)) {
+            // A plain (non-super) group has no separate paginated members call -- TDLib caps it
+            // at 200 members and returns the whole roster in one shot via getBasicGroupFullInfo.
+            // Real-account testing found this case entirely unwired: every basic group's
+            // participant table stayed permanently empty, so ConsentCoverage.noParticipantsKnown()
+            // never had anyone to grant consent against and the chat could never leave
+            // AWAITING_CONSENT -- indistinguishable, from the operator's side, from "consent
+            // cannot be granted at all" for that group.
+            long basicGroupId = type.path("basic_group_id").asLong();
+            List<RemoteParticipant> result = new ArrayList<>();
+            JsonNode info;
+            try {
+                info = this.client.request("getBasicGroupFullInfo", Map.of("basic_group_id", basicGroupId));
+            }
+            catch (TelegramPermissionException ex) {
+                return List.of();
+            }
+            for (JsonNode member : info.path("members")) {
+                JsonNode senderId = member.path("member_id");
+                if ("messageSenderUser".equals(senderId.path("@type").asString(""))) {
+                    addParticipant(result, senderId.path("user_id").asLong());
+                }
+            }
+            return List.copyOf(result);
+        }
         if (!"chatTypeSupergroup".equals(chatType)) {
-            // Basic groups still do not expose a member list through this call (they need
-            // getBasicGroupFullInfo, not wired here yet -- see docs/production-prerequisites.md).
             return List.of();
         }
         long supergroupId = type.path("supergroup_id").asLong();
@@ -432,15 +455,56 @@ public class TdlibTelegramGateway implements TelegramGateway {
     }
 
     /**
-     * Only textual content is in scope for the MVP: media, voice and files are neither
-     * downloaded nor transcribed, so a non-text message contributes an empty body.
+     * Media, voice and files are never downloaded, transcribed or OCR'd in this MVP -- that
+     * would need TDLib file downloads, its own storage/retention/consent handling, and likely a
+     * vision- or audio-capable model, all out of scope here (see docs/production-
+     * prerequisites.md). But real-account testing found a photo, document, voice note or other
+     * non-text message contributed a completely empty body: not "we can't read the content" but
+     * literally nothing, indistinguishable from an empty text message and invisible to Claude
+     * even as "something was shared here". A short bracketed label (with the filename, for a
+     * document, or the caption, where the message carries one) at least says a file or photo
+     * exists and roughly what kind, without claiming to have looked inside it.
      */
     static String extractText(JsonNode content) {
-        return switch (content.path("@type").asString("")) {
-            case "messageText" -> content.path("text").path("text").asString("");
-            case "messagePhoto", "messageVideo", "messageDocument", "messageAudio", "messageAnimation" ->
-                    content.path("caption").path("text").asString("");
-            default -> "";
+        String type = content.path("@type").asString("");
+        if ("messageText".equals(type)) {
+            return content.path("text").path("text").asString("");
+        }
+        String label = mediaLabel(content, type);
+        if (label == null) {
+            return "";
+        }
+        String caption = content.path("caption").path("text").asString("");
+        return caption.isEmpty() ? label : label + ": " + caption;
+    }
+
+    private static String mediaLabel(JsonNode content, String type) {
+        return switch (type) {
+            case "messagePhoto" -> "[Photo]";
+            case "messageVideo" -> "[Video]";
+            case "messageVideoNote" -> "[Video message]";
+            case "messageVoiceNote" -> "[Voice message]";
+            case "messageAnimation" -> "[GIF]";
+            case "messageSticker" -> {
+                String emoji = content.path("sticker").path("emoji").asString("");
+                yield emoji.isEmpty() ? "[Sticker]" : "[Sticker " + emoji + "]";
+            }
+            case "messageAudio" -> {
+                JsonNode audio = content.path("audio");
+                String title = audio.path("title").asString("");
+                String performer = audio.path("performer").asString("");
+                String described = String.join(" - ", java.util.stream.Stream.of(performer, title)
+                        .filter(s -> !s.isEmpty()).toList());
+                yield described.isEmpty() ? "[Audio]" : "[Audio: " + described + "]";
+            }
+            case "messageDocument" -> {
+                String fileName = content.path("document").path("file_name").asString("");
+                yield fileName.isEmpty() ? "[File]" : "[File: " + fileName + "]";
+            }
+            case "messageLocation" -> "[Location]";
+            case "messageContact" -> "[Contact]";
+            case "messagePoll" -> "[Poll]";
+            default -> null;
         };
     }
 
