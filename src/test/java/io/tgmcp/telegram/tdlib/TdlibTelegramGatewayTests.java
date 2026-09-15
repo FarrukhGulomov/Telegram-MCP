@@ -93,6 +93,11 @@ class TdlibTelegramGatewayTests {
 
         this.client.enqueue("""
                 {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
+        // Reaching READY also warms the runtime chat list (see TdlibTelegramGateway
+        // .warmChatList()), so this test must script that pair of calls too.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[]}""");
         this.client.pushUpdate("""
                 {"@type":"updateAuthorizationState",
                  "authorization_state":{"@type":"authorizationStateReady"}}""");
@@ -113,6 +118,11 @@ class TdlibTelegramGatewayTests {
         this.gateway.onStateChange(this.ref, notifications::add);
 
         this.client.enqueueError(500, "INTERNAL");
+        // Reaching READY also warms the runtime chat list (see TdlibTelegramGateway
+        // .warmChatList()), independently of whether the identity lookup above succeeded.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[]}""");
         this.client.pushUpdate("""
                 {"@type":"updateAuthorizationState",
                  "authorization_state":{"@type":"authorizationStateReady"}}""");
@@ -122,6 +132,32 @@ class TdlibTelegramGatewayTests {
                 .as("a failed identity lookup must not swallow the READY transition itself")
                 .isEqualTo(LoginStage.READY);
         assertThat(notifications.get(0).tgUserId()).isNull();
+    }
+
+    @Test
+    void aFailedChatListWarmUpAlsoDoesNotSwallowTheReadyTransition() {
+        // Symmetric to stillNotifiesTheListenerWhenReadyIdentityCannotBeFetched above, but for
+        // the other best-effort call reaching READY makes: warmChatList() failing must not stop
+        // the READY state itself from being recorded and notified.
+        List<LoginState> notifications = new ArrayList<>();
+        this.gateway.onStateChange(this.ref, notifications::add);
+
+        this.client.enqueue("""
+                {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
+        // loadChats succeeds, but getChats -- the one call in warmChatList() not guarded by its
+        // own catch, since only loadChats' documented "already loaded" 404 is expected -- fails.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueueError(500, "INTERNAL");
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateReady"}}""");
+
+        assertThat(notifications).hasSize(1);
+        assertThat(notifications.get(0).stage()).isEqualTo(LoginStage.READY);
+        assertThat(notifications.get(0).tgUserId())
+                .as("the identity lookup already succeeded and must not be undone by the "
+                        + "chat-list warm-up failing afterward")
+                .isEqualTo(777L);
     }
 
     @Test
@@ -536,8 +572,20 @@ class TdlibTelegramGatewayTests {
     void neverFabricatesALinkWhenTelegramRefuses() {
         this.client.enqueueError(403, "CHANNEL_PRIVATE");
 
-        assertThat(this.gateway.messageLink(new RemoteChat(-1L, "x", "GROUP", null, null), 1L))
+        assertThat(this.gateway.messageLink(new RemoteChat(-100123L, "x", "SUPERGROUP", null, null), 1L))
                 .isEqualTo(Optional.empty());
+    }
+
+    @Test
+    void skipsTheCallEntirelyForChatTypesTelegramDocumentsAsNeverSupportingLinks() {
+        // Real-account testing found getMessageLink answering "Message links are available only
+        // for messages in supergroups and channel chats" for every message in a private chat or
+        // a basic group -- a doomed call repeated once per message. No response is enqueued
+        // here; ScriptedTdlibClient would throw if the gateway called TDLib at all.
+        assertThat(this.gateway.messageLink(new RemoteChat(5L, "DM", "PRIVATE", null, null), 1L))
+                .isEmpty();
+        assertThat(this.gateway.messageLink(new RemoteChat(-1L, "Basic group", "GROUP", null, null), 1L))
+                .isEmpty();
     }
 
     /** Replays canned TDLib responses in order; records what was sent. */

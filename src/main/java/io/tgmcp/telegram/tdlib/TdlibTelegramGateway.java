@@ -139,6 +139,28 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // thread specifically so a listener may call request() itself.
         if (mapped.stage() == LoginStage.READY) {
             mapped = withAccountIdentity(mapped);
+            // Real-account testing found every per-chat call (getChat, and so getChatHistory
+            // and listParticipants which both start from it) fail with "Chat not found" for a
+            // chat this TDLib session has not yet loaded into its runtime chat list -- true for
+            // every chat right after each process restart, even one this app already knows
+            // about from a previous session, because loadChats/getChats populate an in-memory
+            // list separate from TDLib's own on-disk chat-info database. Until an operator
+            // happened to click "Refresh chat list" (the only place this was previously called),
+            // every already-activated chat's sync and participant refresh failed outright and
+            // TdlibErrors.translate() maps that 400 to a permission failure, halting sync -- so
+            // an MCP client connecting right after a restart saw an ACTIVE chat with nothing
+            // ever synced into it. Warming the list here, once per session, as soon as it is
+            // possible to call anything at all, removes the dependency on that manual click.
+            // Best-effort, like withAccountIdentity just above: a failure here must not stop
+            // this READY transition itself from being recorded, since the ordinary "Refresh
+            // chat list" button remains a fallback path to the same warmed state.
+            try {
+                warmChatList();
+            }
+            catch (RuntimeException ex) {
+                log.warn("Reached authorizationStateReady but could not warm the chat list: {}",
+                        ex.getClass().getSimpleName());
+            }
         }
         this.loginState.set(mapped);
         if ("authorizationStateWaitTdlibParameters".equals(state.path("@type").asString(""))) {
@@ -249,22 +271,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public List<RemoteChat> listAvailableChats(ConnectionRef ref) {
-        // loadChats populates the local chat list; getChats then reports it.
-        try {
-            this.client.request("loadChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
-        }
-        catch (TelegramTransientException ignored) {
-            // TDLib answers 404 ("Not Found") when the chat list is already fully loaded --
-            // documented TDLib behaviour, not a failure. TdlibErrors.translate() has no
-            // specific mapping for code 404 (it is neither a flood wait, an auth failure, a
-            // permission failure, nor a malformed request), so it falls through to
-            // TelegramTransientException -- not TelegramPermissionException, which this catch
-            // clause caught until real-account testing hit exactly this path and found the
-            // "refresh chat list" button crashing every single time with that 404 propagating
-            // straight out to the generic error page, uncaught.
-        }
-        JsonNode chats = this.client.request("getChats",
-                Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
+        JsonNode chats = warmChatList();
 
         List<RemoteChat> result = new ArrayList<>();
         for (JsonNode idNode : chats.path("chat_ids")) {
@@ -272,6 +279,29 @@ public class TdlibTelegramGateway implements TelegramGateway {
             result.add(toRemoteChat(chat));
         }
         return List.copyOf(result);
+    }
+
+    /**
+     * Populates TDLib's runtime chat list (a separate, in-memory concept from its own on-disk
+     * chat-info database -- see the caller in {@link #handleUpdate}) and returns what {@code
+     * getChats} reports for it, so every chat this account can see becomes reachable by {@code
+     * getChat}/{@code getChatHistory} afterward. Safe and cheap to call more than once per
+     * session: once the list is fully loaded, {@code loadChats} answers 404 ("Not Found"), which
+     * is documented TDLib behaviour for "nothing left to load", not a failure.
+     */
+    private JsonNode warmChatList() {
+        try {
+            this.client.request("loadChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
+        }
+        catch (TelegramTransientException ignored) {
+            // TdlibErrors.translate() has no specific mapping for code 404 (it is neither a
+            // flood wait, an auth failure, a permission failure, nor a malformed request), so it
+            // falls through to TelegramTransientException -- not TelegramPermissionException,
+            // which this catch clause caught until real-account testing hit exactly this path
+            // and found the "refresh chat list" button crashing every single time with that 404
+            // propagating straight out to the generic error page, uncaught.
+        }
+        return this.client.request("getChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
     }
 
     RemoteChat toRemoteChat(JsonNode chat) {
@@ -534,6 +564,16 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public Optional<String> messageLink(RemoteChat chat, long tgMessageId) {
+        // Real-account testing found getMessageLink answering "Message links are available only
+        // for messages in supergroups and channel chats" (code 400) for every single message
+        // synced from a private chat or a basic (non-super) group -- a doomed call, not a
+        // transient failure, per TDLib's own documented restriction on this method. The
+        // TelegramPermissionException catch below already degrades this correctly to
+        // Optional.empty(), but repeating the call and logging a WARN for every message in
+        // every such chat is pure noise once the outcome is guaranteed in advance.
+        if (!"SUPERGROUP".equals(chat.chatType()) && !"CHANNEL".equals(chat.chatType())) {
+            return Optional.empty();
+        }
         try {
             JsonNode link = this.client.request("getMessageLink", Map.of(
                     "chat_id", chat.tgChatId(),
