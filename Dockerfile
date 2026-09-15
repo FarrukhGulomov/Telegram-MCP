@@ -57,4 +57,4 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=40s --retries=5 \
 # real mounted volume: setTdlibParameters failed with "Permission denied" creating
 # TGMCP_TDLIB_DIR/files, since the app previously ran as `tgmcp` from container start with
 # no chance to fix a root-owned mount it has no permission to chown itself.
-ENTRYPOINT ["sh", "-c", "dir=\"${TGMCP_TDLIB_DIR:-/tmp/tdlib}\"; mkdir -p \"$dir\" && chown -R tgmcp:tgmcp \"$dir\" && exec su --preserve-environment -s /bin/sh tgmcp -c 'exec java $JAVA_OPTS -jar /app/app.jar'"]
+ENTRYPOINT ["sh", "-c", "dir=\"${TGMCP_TDLIB_DIR:-/tmp/tdlib}\"; mkdir -p \"$dir\" && chown -R tgmcp:tgmcp \"$dir\" && exec su --preserve-environment -s /bin/sh tgmcp -c 'exec \"$JAVA_HOME/bin/java\" $JAVA_OPTS -jar /app/app.jar'"]
