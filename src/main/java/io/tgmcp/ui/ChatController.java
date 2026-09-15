@@ -5,10 +5,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import io.tgmcp.chat.ActivationState;
 import io.tgmcp.chat.Chat;
+import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatActivationService;
 import io.tgmcp.chat.ChatParticipantRepository;
 import io.tgmcp.chat.ChatRepository;
@@ -20,6 +22,8 @@ import io.tgmcp.sync.ChatSyncService;
 import io.tgmcp.sync.SyncOutcome;
 import io.tgmcp.tenancy.AuthenticatedActor;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -31,6 +35,8 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 @Controller
 public class ChatController {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
     private final CurrentActor currentActor;
     private final ChatRepository chatRepository;
@@ -69,13 +75,20 @@ public class ChatController {
                 .orElseThrow(() -> new IllegalArgumentException("error.noSuchChat"));
 
         // importParticipants() otherwise only ever runs once, from select() at the moment a
-        // chat is first proposed. A chat left sitting in AWAITING_CONSENT (or one proposed
-        // before a participant-discovery fix landed) had no way back to a current snapshot
-        // short of re-submitting Step 1 from scratch -- ChatSyncService.sync() refuses to run
-        // at all before the chat is ACTIVE, which consent coverage can never let it reach on a
-        // stale snapshot. Refreshing here means simply reopening the page is enough.
-        this.activationService.find(actor, chatId)
-                .filter(activation -> activation.state() == ActivationState.AWAITING_CONSENT)
+        // chat is first proposed. A chat left sitting in AWAITING_CONSENT or PAUSED (pausing is
+        // reachable from AWAITING_CONSENT too -- ChatController.pause() has no precondition on
+        // the current state) had no way back to a current participant snapshot short of
+        // re-submitting Step 1 from scratch -- ChatSyncService.sync() refuses to run at all
+        // before the chat is ACTIVE, which consent coverage can never let it reach on a stale
+        // snapshot. Refreshing here means simply reopening the page is enough. Skipped once
+        // ACTIVE (periodic sync already keeps membership current) or REVOKED (permanently done).
+        Optional<ChatActivation> activationForRefresh = this.activationService.find(actor, chatId);
+        log.info("chat page load: chatId={} activationPresent={} state={}", chatId,
+                activationForRefresh.isPresent(),
+                activationForRefresh.map(ChatActivation::state).orElse(null));
+        activationForRefresh
+                .filter(activation -> activation.state() == ActivationState.AWAITING_CONSENT
+                        || activation.state() == ActivationState.PAUSED)
                 .ifPresent(activation -> this.activationService.importParticipants(actor, chat));
 
         model.addAttribute("view", this.chatViewFactory.of(actor, chat));

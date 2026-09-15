@@ -84,4 +84,44 @@ class ChatParticipantRefreshTests extends AbstractIntegrationTest {
         Mockito.verify(this.gateway, Mockito.times(2))
                 .listParticipants(Mockito.any(), Mockito.eq(SyntheticDataset.ENGINEERING_CHAT));
     }
+
+    /**
+     * pause() has no precondition on the current state -- an operator can pause a chat that
+     * was never activated, straight out of AWAITING_CONSENT. Real-account testing hit exactly
+     * that: a chat paused by mistake before ever recording consent stopped refreshing its
+     * participant list on reopen, because the fix above only covered AWAITING_CONSENT.
+     */
+    @Test
+    void reopeningAPausedChatThatWasNeverActivatedAlsoRefreshesParticipants() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Mockito.doReturn(List.<RemoteParticipant>of())
+                .doReturn(List.of(new RemoteParticipant(555L, "Farrukh Gulomov", false)))
+                .when(this.gateway).listParticipants(Mockito.any(), Mockito.eq(SyntheticDataset.ENGINEERING_CHAT));
+
+        Fixtures.Team team = this.fixtures.team("participant-refresh-paused");
+        Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Refresh chat", "refresh_chat_paused");
+
+        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
+                        .param("username", team.user().email()).param("password", "pw"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        assertThat(session).isNotNull();
+
+        this.mockMvc.perform(post("/chats/" + chat.id() + "/select").session(session).with(csrf())
+                        .param("purpose", "Answer questions about team decisions")
+                        .param("providers", McpScopes.ANTHROPIC_CLAUDE)
+                        .param("approvedFrom", "2026-01-01")
+                        .param("approvedTo", "2026-12-31")
+                        .param("retentionDays", "365"))
+                .andExpect(status().is3xxRedirection());
+
+        // Paused straight out of AWAITING_CONSENT -- never activated, no consent recorded.
+        this.mockMvc.perform(post("/chats/" + chat.id() + "/pause").session(session).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+
+        this.mockMvc.perform(get("/chats/" + chat.id()).session(session))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Farrukh Gulomov")));
+    }
 }

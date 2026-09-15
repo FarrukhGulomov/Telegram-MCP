@@ -22,6 +22,8 @@ import io.tgmcp.telegram.gateway.RemoteParticipant;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.tenancy.AuthenticatedActor;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +36,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class ChatActivationService {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatActivationService.class);
 
     private final ChatRepository chatRepository;
     private final ChatActivationRepository activationRepository;
@@ -226,10 +230,21 @@ public class ChatActivationService {
         Optional<TelegramConnection> connection =
                 this.connectionRepository.find(actor.tenantId(), chat.connectionId());
         if (connection.isEmpty() || !connection.get().ready()) {
+            // Temporary diagnostic: real-account testing found a chat whose participant list
+            // stayed empty across every fix so far, with zero corresponding TDLib request logs
+            // at any point -- meaning this early return, not listParticipants() itself, is what
+            // actually runs. Logging exactly which half of the condition is true settles it
+            // instead of guessing again.
+            log.info("importParticipants skipped for chat {}: connectionId={} connectionFound={} ready={}",
+                    chat.id(), chat.connectionId(), connection.isPresent(),
+                    connection.map(TelegramConnection::ready).orElse(null));
             return this.participantRepository.findActive(actor.tenantId(), chat.id());
         }
+        log.info("importParticipants calling listParticipants for chat {} (tgChatId={})",
+                chat.id(), chat.tgChatId());
         List<RemoteParticipant> remote = this.gateway.listParticipants(connection.get().ref(),
                 chat.tgChatId());
+        log.info("importParticipants got {} participant(s) for chat {}", remote.size(), chat.id());
         for (RemoteParticipant participant : remote) {
             this.participantRepository.upsert(new ChatParticipant(Ids.newId(), actor.tenantId(), chat.id(),
                     participant.tgUserId(), participant.displayName(), participant.bot(), null, null));
