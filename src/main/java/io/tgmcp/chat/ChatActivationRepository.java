@@ -36,6 +36,27 @@ public class ChatActivationRepository {
                 .optional();
     }
 
+    /**
+     * Same as {@link #find}, but takes a row lock for the rest of the caller's transaction.
+     * Security-audit finding SEC-04: {@code revoke} below bumps the epoch atomically in a
+     * single statement, but every other writer of this row ({@code propose}, {@code
+     * activate}, {@code updateSettings}) used to read the row with a plain SELECT and later
+     * write back a whole new row built from that stale read -- including its epoch and state.
+     * If a revoke lands in between, that write silently overwrites the bumped epoch back down
+     * and can even flip a just-revoked chat back to an active state. Locking the row here
+     * before deciding what to write closes that window: a concurrent revoke either already
+     * committed (and this read sees its result) or blocks until this transaction is done, so
+     * revocation can never be quietly undone by a stale write.
+     */
+    public Optional<ChatActivation> findForUpdate(UUID tenantId, UUID chatId) {
+        return jdbc.sql("SELECT " + COLUMNS
+                        + " FROM chat_activations WHERE tenant_id = :tenantId AND chat_id = :chatId FOR UPDATE")
+                .param("tenantId", tenantId)
+                .param("chatId", chatId)
+                .query(this::map)
+                .optional();
+    }
+
     public List<ChatActivation> findByState(UUID tenantId, ActivationState state) {
         return jdbc.sql("SELECT " + COLUMNS
                         + " FROM chat_activations WHERE tenant_id = :tenantId AND state = :state")

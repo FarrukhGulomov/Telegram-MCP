@@ -28,6 +28,7 @@ import static io.tgmcp.McpProtocolTests.errorCode;
 import static io.tgmcp.McpProtocolTests.items;
 import static io.tgmcp.McpProtocolTests.structured;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Retention and revocation.
@@ -111,6 +112,74 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
         assertThat(this.activations.find(chat.team().tenant().id(), chat.chat().id())
                 .orElseThrow().state()).isEqualTo(ActivationState.REVOKED);
         assertThat(this.messages.countForChat(chat.team().tenant().id(), chat.chat().id())).isZero();
+    }
+
+    /**
+     * Security-audit finding SEC-04: {@code activate()} never checked the activation's current
+     * state at all -- only whether consent coverage happened to be complete -- so calling it on
+     * a chat that had already been revoked would silently flip it straight back to ACTIVE.
+     * Revocation must require a fresh {@code propose()} before a chat can be activated again.
+     */
+    @Test
+    void activatingARevokedChatIsRefusedRatherThanSilentlyReactivatingIt() {
+        Fixtures.ReadyChat chat = this.fixtures.readyEngineeringChat("sec04seq", this.clock.instant());
+        this.activationService.revoke(chat.team().actor(), chat.chat().id(), "test revoke");
+
+        assertThatThrownBy(() -> this.activationService.activate(chat.team().actor(), chat.chat().id()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.chatRevoked");
+
+        assertThat(this.activations.find(chat.team().tenant().id(), chat.chat().id())
+                .orElseThrow().state()).isEqualTo(ActivationState.REVOKED);
+    }
+
+    /**
+     * Security-audit finding SEC-04: {@code activate()} used to read the activation row with a
+     * plain SELECT and later overwrite the whole row -- epoch included -- from that stale
+     * read. A {@code revoke()} landing in between would have its atomic epoch bump silently
+     * undone, and the chat could even flip back to ACTIVE right after being revoked. Row
+     * locking makes the two calls serialize instead: whichever order they actually land in,
+     * the chat must end up REVOKED with a strictly higher epoch than it started with -- never
+     * ACTIVE, and never back at the epoch it had before either call ran.
+     */
+    @Test
+    void concurrentActivateAndRevokeNeverLeaveTheChatActiveOrRegressTheEpoch() throws Exception {
+        Fixtures.ReadyChat chat = this.fixtures.readyEngineeringChat("sec04conc", this.clock.instant());
+        long originalEpoch = this.activations.find(chat.team().tenant().id(), chat.chat().id())
+                .orElseThrow().epoch();
+
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(2);
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> activateAttempt = executor.submit(() -> {
+                barrier.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                try {
+                    this.activationService.activate(chat.team().actor(), chat.chat().id());
+                }
+                catch (IllegalArgumentException ignored) {
+                    // Acceptable: it lost the race and saw the chat already revoked.
+                }
+                return null;
+            });
+            java.util.concurrent.Future<?> revokeAttempt = executor.submit(() -> {
+                barrier.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                this.activationService.revoke(chat.team().actor(), chat.chat().id(), "concurrent test revoke");
+                return null;
+            });
+
+            activateAttempt.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            revokeAttempt.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        finally {
+            executor.shutdownNow();
+        }
+
+        ChatActivation finalState = this.activations.find(chat.team().tenant().id(), chat.chat().id())
+                .orElseThrow();
+        assertThat(finalState.state()).as("revoke must never be silently undone by a racing activate")
+                .isEqualTo(ActivationState.REVOKED);
+        assertThat(finalState.epoch()).as("the fencing epoch must never regress")
+                .isEqualTo(originalEpoch + 1);
     }
 
     @Test

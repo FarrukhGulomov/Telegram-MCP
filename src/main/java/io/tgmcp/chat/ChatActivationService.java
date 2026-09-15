@@ -23,6 +23,7 @@ import io.tgmcp.telegram.gateway.RemoteParticipant;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.tenancy.AuthenticatedActor;
 
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +48,12 @@ public class ChatActivationService {
     private final AuditService auditService;
     private final AppProperties properties;
     private final Clock clock;
+    // Security-audit finding SEC-04: a proxy reference to this same bean, used only so that
+    // propose() can call proposeLocked() *through the Spring proxy* rather than via a plain
+    // `this.` call. A plain self-invocation would bypass @Transactional entirely -- the row
+    // lock proposeLocked() takes would be released the instant its own query finished, well
+    // before the upsert that must share it. @Lazy avoids a circular dependency at bean creation.
+    private final ChatActivationService self;
 
     public ChatActivationService(ChatRepository chatRepository,
                                  ChatActivationRepository activationRepository,
@@ -58,7 +65,8 @@ public class ChatActivationService {
                                  TelegramGateway gateway,
                                  AuditService auditService,
                                  AppProperties properties,
-                                 Clock clock) {
+                                 Clock clock,
+                                 @Lazy ChatActivationService self) {
         this.chatRepository = chatRepository;
         this.activationRepository = activationRepository;
         this.participantRepository = participantRepository;
@@ -70,13 +78,21 @@ public class ChatActivationService {
         this.auditService = auditService;
         this.properties = properties;
         this.clock = clock;
+        this.self = self;
     }
 
     /**
      * Selects a chat for AI access and imports its participant list, so that the people whose
      * consent is required are known before any content is touched.
+     *
+     * <p>Security-audit finding SEC-04: {@link #importParticipants} makes a network call to
+     * Telegram. It must never run while holding the {@code chat_activations} row lock that
+     * {@link #proposeLocked} below takes -- doing so would let a slow or hung upstream call
+     * block a concurrent {@code revoke()} from acquiring that same lock for as long as
+     * Telegram takes to answer, which would undermine "revocation blocks access immediately".
+     * This method therefore is not itself transactional: the network call happens first, with
+     * no row locked, and only the short second half runs inside a transaction.
      */
-    @Transactional
     public ChatActivation propose(AuthenticatedActor actor, UUID chatId, String purpose,
                                   List<String> providers, Instant approvedFrom, Instant approvedTo,
                                   int retentionDays) {
@@ -86,8 +102,23 @@ public class ChatActivationService {
         }
         validateProviders(providers);
         importParticipants(actor, chat);
+        return this.self.proposeLocked(actor, chatId, purpose, providers, approvedFrom, approvedTo, retentionDays);
+    }
 
-        Optional<ChatActivation> existing = this.activationRepository.find(actor.tenantId(), chatId);
+    /**
+     * The locked second half of {@link #propose}. Public only so the {@code @Transactional}
+     * proxy can intercept the call made through {@link #self} -- it is not meant to be called
+     * directly by anything other than {@code propose()} itself.
+     */
+    @Transactional
+    public ChatActivation proposeLocked(AuthenticatedActor actor, UUID chatId, String purpose,
+                                        List<String> providers, Instant approvedFrom, Instant approvedTo,
+                                        int retentionDays) {
+        // Security-audit finding SEC-04: a plain find() here (as this used to be) reads a
+        // snapshot that a concurrent revoke() can move past before this method's own upsert
+        // lands, and that upsert would silently overwrite the bumped epoch back down. Locking
+        // the row now makes the read and the write atomic with respect to any other writer.
+        Optional<ChatActivation> existing = this.activationRepository.findForUpdate(actor.tenantId(), chatId);
         // Re-proposing a chat keeps its epoch, rather than resetting it to zero, so the
         // fencing token stays monotonic across the whole lifetime of the row (security audit
         // finding F07): a sync run that captured an epoch from a previous cycle must never be
@@ -117,7 +148,14 @@ public class ChatActivationService {
     /** Turns AI access on. Refuses while any required participant is uncovered. */
     @Transactional
     public ChatActivation activate(AuthenticatedActor actor, UUID chatId) {
-        ChatActivation activation = require(actor, chatId);
+        // Security-audit finding SEC-04: locked so that a revoke() racing this call either
+        // has already committed (and is seen here) or is forced to wait -- a plain read could
+        // see a since-revoked chat as still active and this method's own upsert would then
+        // silently flip it back, undoing the revoke.
+        ChatActivation activation = requireForUpdate(actor, chatId);
+        if (activation.state() == ActivationState.REVOKED) {
+            throw new IllegalArgumentException("error.chatRevoked");
+        }
         ConsentCoverage coverage = this.consentService.coverageFor(activation);
         if (!coverage.complete()) {
             this.auditService.record(actor, AuditAction.CHAT_ACTIVATED, chatId, AuditService.DENIED,
@@ -190,7 +228,10 @@ public class ChatActivationService {
             throw new IllegalArgumentException("validation.dateRange");
         }
         validateProviders(providers);
-        ChatActivation existing = require(actor, chatId);
+        // Security-audit finding SEC-04: locked for the same reason as activate() -- this
+        // method's upsert rewrites the whole row from `existing`, so a stale, unlocked read
+        // here could let a concurrent revoke()'s epoch bump be silently undone.
+        ChatActivation existing = requireForUpdate(actor, chatId);
         // Security-audit finding F03: retentionDays used to be excluded from this check, so an
         // operator could silently widen how long content is kept without invalidating the
         // consent that was given for a narrower retention window. Every field that describes
@@ -256,6 +297,12 @@ public class ChatActivationService {
 
     private ChatActivation require(AuthenticatedActor actor, UUID chatId) {
         return this.activationRepository.find(actor.tenantId(), chatId)
+                .orElseThrow(() -> new IllegalArgumentException("error.noSuchChat"));
+    }
+
+    /** Same as {@link #require}, but see {@link ChatActivationRepository#findForUpdate}. */
+    private ChatActivation requireForUpdate(AuthenticatedActor actor, UUID chatId) {
+        return this.activationRepository.findForUpdate(actor.tenantId(), chatId)
                 .orElseThrow(() -> new IllegalArgumentException("error.noSuchChat"));
     }
 
