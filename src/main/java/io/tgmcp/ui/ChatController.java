@@ -220,7 +220,7 @@ public class ChatController {
     @PostMapping("/chats/{chatId}/sync")
     public String sync(@PathVariable UUID chatId, RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = this.currentActor.require();
-        SyncOutcome outcome = this.syncService.sync(actor.tenantId(), chatId);
+        SyncOutcome outcome = this.syncService.syncNow(actor.tenantId(), chatId);
         redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "chat.sync.result",
                 outcome.status(), outcome.messagesIngested(), outcome.revisionsApplied(), outcome.detail()));
         return "redirect:/chats/" + chatId;

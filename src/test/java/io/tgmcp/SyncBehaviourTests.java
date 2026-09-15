@@ -383,6 +383,26 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
         assertThat(mockGateway().callCount()).isEqualTo(callsWhenHalted);
     }
 
+    /**
+     * A halted checkpoint has no automatic way back -- by design, so the scheduler never
+     * hammers Telegram after what looked like a permanent failure -- but that must not mean
+     * ingestion is stuck forever with no recovery at all once whatever caused it is gone. An
+     * operator explicitly asking to sync (the "Sync now" button, {@link ChatSyncService
+     * #syncNow}) is exactly the human attention a halt exists to wait for.
+     */
+    @Test
+    void syncNowClearsAHaltAndResumesIngestion() {
+        mockGateway().failNextCall(new TelegramAuthException("session revoked"));
+        assertThat(sync().status()).isEqualTo(SyncOutcome.Status.HALTED);
+        assertThat(checkpoint().halted()).isTrue();
+
+        SyncOutcome resumed = this.syncService.syncNow(ready().team().tenant().id(), ready().chat().id());
+
+        assertThat(resumed.status()).isEqualTo(SyncOutcome.Status.SYNCED);
+        assertThat(checkpoint().halted()).isFalse();
+        assertThat(checkpoint().consecutiveFailures()).isZero();
+    }
+
     // --- retention while not active ---------------------------------------------------------
 
     @Test

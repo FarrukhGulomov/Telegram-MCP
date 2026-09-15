@@ -90,6 +90,20 @@ public class ChatSyncService {
         this.clock = clock;
     }
 
+    /**
+     * Entry point for an operator explicitly asking to sync right now (the "Sync now" button).
+     * A halted checkpoint (see {@link #handleGatewayFailure}) deliberately stops the scheduler
+     * from silently hammering Telegram after what looked like a permanent failure -- but that
+     * also means, unless something clears it, ingestion stays stuck forever with no way back
+     * even once whatever caused it is gone (a since-fixed bug, a since-restored permission, or
+     * simply a TDLib hiccup misclassified as permanent). An operator explicitly asking to sync
+     * is exactly the human attention a halt exists to wait for, so this clears it first.
+     */
+    public SyncOutcome syncNow(UUID tenantId, UUID chatId) {
+        this.checkpointRepository.clearHalt(tenantId, chatId);
+        return sync(tenantId, chatId);
+    }
+
     public SyncOutcome sync(UUID tenantId, UUID chatId) {
         Instant now = this.clock.instant();
         Optional<ChatActivation> maybeActivation = this.activationRepository.find(tenantId, chatId);
@@ -224,6 +238,15 @@ public class ChatSyncService {
         this.auditService.system(tenantId, halt ? AuditAction.SYNC_HALTED : AuditAction.SYNC_FAILED,
                 chatId, AuditService.ERROR,
                 Map.of("errorCode", ex.code(), "attempt", attempt, "retryable", ex.retryable()));
+        // The audit trail above is only visible from the management UI's /audit page; this is
+        // the same event logged server-side too, since a halt otherwise stops ingestion
+        // silently -- forever, until an operator happens to look -- with no trace in Railway's
+        // own logs to explain why. ex.getMessage() never carries raw upstream TDLib text (see
+        // TdlibErrorTranslationTests), so this is safe to log as-is.
+        if (halt) {
+            log.warn("Sync halted for chat {}: errorCode={} message={} (after {} attempt(s))",
+                    chatId, ex.code(), ex.getMessage(), attempt);
+        }
         return new SyncOutcome(halt ? SyncOutcome.Status.HALTED : SyncOutcome.Status.RETRYABLE_FAILURE,
                 0, 0, ex.code());
     }
