@@ -134,6 +134,28 @@ class AccessPolicyTests extends AbstractIntegrationTest {
         assertThat(errorCode(history(chat.team(), chat.chat().id()))).isEqualTo("CONSENT_REQUIRED");
     }
 
+    /**
+     * Security-audit finding SEC-06: coverage is only ever computed from the participant list
+     * last confirmed by a successful sync -- once upstream authorization is lost (the account
+     * is logged out, banned, or loses permission), that list can never be reconfirmed again,
+     * yet nothing previously stopped MCP reads from continuing to trust it indefinitely. Once
+     * the last successful sync is older than the configured freshness budget (PT2H in the test
+     * profile), the chat must stop being readable, exactly as if membership were unknown.
+     */
+    @Test
+    void blocksReadsOnceMembershipHasNotBeenReconfirmedWithinTheFreshnessBudget() {
+        Fixtures.ReadyChat chat = this.fixtures.readyEngineeringChat("sec06-stale", this.clock.instant());
+        this.syncService.sync(chat.team().tenant().id(), chat.chat().id());
+        assertThat(history(chat.team(), chat.chat().id()).isError())
+                .as("freshly synced, this chat is readable").isFalse();
+
+        this.mutableClock().advance(Duration.ofHours(3));
+
+        McpSchema.CallToolResult result = history(chat.team(), chat.chat().id());
+        assertThat(result.isError()).isTrue();
+        assertThat(errorCode(result)).isEqualTo("CONSENT_REQUIRED");
+    }
+
     @Test
     void deniesARevokedChatWithoutRevealingThatItOnceExisted() {
         Fixtures.ReadyChat chat = this.fixtures.readyEngineeringChat("acme", this.clock.instant());

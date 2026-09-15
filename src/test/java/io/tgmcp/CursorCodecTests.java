@@ -59,7 +59,7 @@ class CursorCodecTests {
 
     private static AppProperties.Sync syncDefaults() {
         return new AppProperties.Sync(Duration.ofSeconds(30), 200, 5, 2, 6,
-                Duration.ofSeconds(5), Duration.ofMinutes(10), Duration.ofHours(1));
+                Duration.ofSeconds(5), Duration.ofMinutes(10), Duration.ofHours(1), Duration.ofHours(24));
     }
 
     private static AuthenticatedActor actor(UUID tenantId, UUID userId) {

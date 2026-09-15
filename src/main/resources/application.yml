@@ -125,6 +125,7 @@ tgmcp:
     initial-backoff: PT5S
     max-backoff: PT10M
     retention-interval: PT1H
+    membership-freshness-budget: PT24H
 
   secrets:
     # All three keys live outside the database. Without them the app derives an insecure

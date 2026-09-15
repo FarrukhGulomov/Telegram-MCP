@@ -1,6 +1,7 @@
 package io.tgmcp.access;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -15,6 +16,7 @@ import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatActivationRepository;
 import io.tgmcp.chat.ChatRepository;
+import io.tgmcp.config.AppProperties;
 import io.tgmcp.consent.ConsentCoverage;
 import io.tgmcp.consent.ConsentService;
 import io.tgmcp.sync.SyncCheckpoint;
@@ -40,23 +42,33 @@ public class ChatAccessService {
     private final ChatActivationRepository activationRepository;
     private final ConsentService consentService;
     private final SyncCheckpointRepository checkpointRepository;
+    private final Duration membershipFreshnessBudget;
     private final Clock clock;
 
     public ChatAccessService(ChatRepository chatRepository,
                              ChatActivationRepository activationRepository,
                              ConsentService consentService,
                              SyncCheckpointRepository checkpointRepository,
+                             AppProperties properties,
                              Clock clock) {
         this.chatRepository = chatRepository;
         this.activationRepository = activationRepository;
         this.consentService = consentService;
         this.checkpointRepository = checkpointRepository;
+        this.membershipFreshnessBudget = properties.sync().membershipFreshnessBudget();
         this.clock = clock;
     }
 
     /**
      * Chats this caller may read. Only ACTIVE chats with complete consent coverage for the
      * requesting provider are ever listed; everything else is simply absent.
+     *
+     * <p>Security-audit finding SEC-06: a chat that HAS synced before but has gone stale
+     * beyond the freshness budget (lost upstream authorization with no way to reconfirm
+     * membership) is excluded the same way {@link #authorize} excludes it for reading. A chat
+     * that has simply never synced yet is left alone here -- that is the existing, separate
+     * {@code requireSynced}/{@code SYNC_PENDING} concept {@link #authorize} already handles
+     * per call, not a loss of something this listing previously had.
      */
     public List<AuthorizedChat> listAllowed(AuthenticatedActor actor, String provider) {
         List<AuthorizedChat> allowed = new ArrayList<>();
@@ -72,6 +84,9 @@ public class ChatAccessService {
             }
             SyncCheckpoint checkpoint = this.checkpointRepository
                     .find(actor.tenantId(), activation.chatId()).orElse(null);
+            if (checkpoint != null && checkpoint.everSucceeded() && membershipStale(checkpoint)) {
+                continue;
+            }
             allowed.add(new AuthorizedChat(chat.get(), activation, coverage, checkpoint));
         }
         return List.copyOf(allowed);
@@ -120,11 +135,33 @@ public class ChatAccessService {
         }
 
         SyncCheckpoint checkpoint = this.checkpointRepository.find(actor.tenantId(), chatId).orElse(null);
-        if (requireSynced && (checkpoint == null || !checkpoint.everSucceeded())) {
-            throw ChatAccessException.syncPending(
-                    "This chat has been approved but no messages have been synchronised yet.");
+        if (requireSynced) {
+            if (checkpoint == null || !checkpoint.everSucceeded()) {
+                throw ChatAccessException.syncPending(
+                        "This chat has been approved but no messages have been synchronised yet.");
+            }
+            // Security-audit finding SEC-06: coverage above is only ever computed from the
+            // participant list last confirmed by a successful sync. If upstream authorization
+            // is lost -- the Telegram account is logged out, banned, or loses permission on
+            // this chat -- that list can never be reconfirmed again, yet nothing stopped reads
+            // from trusting it forever. Once the last confirmation is older than the
+            // configured budget, this chat stops being readable until sync succeeds again,
+            // exactly as if membership were currently unknown.
+            if (membershipStale(checkpoint)) {
+                throw ChatAccessException.consentRequired(
+                        "Membership could not be reconfirmed recently enough to trust; this chat will become "
+                                + "readable again once synchronisation succeeds.");
+            }
         }
         return new AuthorizedChat(chat, activation, coverage, checkpoint);
+    }
+
+    private boolean membershipStale(SyncCheckpoint checkpoint) {
+        if (checkpoint == null || !checkpoint.everSucceeded()) {
+            return true;
+        }
+        return Duration.between(checkpoint.lastSuccessAt(), this.clock.instant())
+                .compareTo(this.membershipFreshnessBudget) > 0;
     }
 
     /**

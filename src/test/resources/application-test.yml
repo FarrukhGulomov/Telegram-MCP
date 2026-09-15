@@ -30,6 +30,7 @@ tgmcp:
     initial-backoff: PT5S
     max-backoff: PT1M
     max-consecutive-failures: 3
+    membership-freshness-budget: PT2H
   secrets:
     # Fixed test keys so that a cursor minted in one assertion verifies in the next.
     session-encryption-key: /Wjt+kmZlBiINB/7s1f3pYYU7g5MOp8dCy91vRHBB10=

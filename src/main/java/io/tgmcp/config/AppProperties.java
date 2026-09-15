@@ -65,7 +65,17 @@ public record AppProperties(@DefaultValue Telegram telegram,
                        @DefaultValue("6") int maxConsecutiveFailures,
                        @DefaultValue("PT5S") Duration initialBackoff,
                        @DefaultValue("PT10M") Duration maxBackoff,
-                       @DefaultValue("PT1H") Duration retentionInterval) {
+                       @DefaultValue("PT1H") Duration retentionInterval,
+                       /**
+                        * Security-audit finding SEC-06: consent coverage is only ever computed
+                        * from the participant list last confirmed by a successful sync -- once
+                        * upstream authorization is lost (the account is logged out, banned, or
+                        * loses permission), that list can never be reconfirmed again, yet
+                        * nothing stopped MCP reads from continuing to trust it indefinitely.
+                        * Once a chat's last successful sync is older than this, it stops being
+                        * MCP-readable until synchronisation succeeds again.
+                        */
+                       @DefaultValue("PT24H") Duration membershipFreshnessBudget) {
     }
 
     /**

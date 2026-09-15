@@ -143,25 +143,39 @@ public class TelegramConnectionService {
         find(actor).ifPresent(connection -> {
             this.gateway.disconnect(connection.ref());
             this.connectionRepository.clearSession(actor.tenantId(), connection.id());
-            // Security-audit finding F16: without a live connection there is no way to keep
-            // verifying this account's chat membership or consent freshness, so every chat it
-            // had activated must stop being MCP-readable the moment it disconnects -- not keep
-            // silently serving whatever was already stored, indefinitely, as if nothing had
-            // changed. Pausing (not revoking) is deliberate: reconnecting the same account
-            // should let an operator resume, not have to re-collect consent for a disconnect
-            // that was never a data-deletion event.
-            int pausedChats = 0;
-            for (Chat chat : this.chatRepository.findByConnection(actor.tenantId(), connection.id())) {
-                if (this.activationService.find(actor, chat.id())
-                        .map(activation -> activation.state() == ActivationState.ACTIVE)
-                        .orElse(false)) {
-                    this.activationService.pause(actor, chat.id(), "Telegram connection disconnected");
-                    pausedChats++;
-                }
-            }
+            int pausedChats = pauseActiveChatsForConnection(actor, connection, "Telegram connection disconnected");
             this.auditService.record(actor, AuditAction.TELEGRAM_DISCONNECTED, null, AuditService.ALLOWED,
                     Map.of("adapter", connection.adapter().name(), "chatsPaused", pausedChats));
         });
+    }
+
+    /**
+     * Security-audit finding F16: without a live connection there is no way to keep verifying
+     * this account's chat membership or consent freshness, so every chat it had activated must
+     * stop being MCP-readable the moment the connection is lost -- not keep silently serving
+     * whatever was already stored, indefinitely, as if nothing had changed. Pausing (not
+     * revoking) is deliberate: reconnecting the same account should let an operator resume,
+     * not have to re-collect consent for a disconnect that was never a data-deletion event.
+     *
+     * <p>Security-audit finding SEC-06 broadens this beyond the explicit {@link #disconnect}
+     * call: {@link #applyAsyncStateChange} reaches this too, for a connection that TDLib
+     * itself reports as logged out, closed, or erroring -- the account was banned, logged out
+     * remotely from another device, or otherwise lost authorization with no user action here
+     * at all. That loss is exactly as blinding to future membership/consent verification as an
+     * explicit disconnect, so it must pause access exactly the same way.
+     */
+    private int pauseActiveChatsForConnection(AuthenticatedActor actor, TelegramConnection connection,
+                                              String reason) {
+        int pausedChats = 0;
+        for (Chat chat : this.chatRepository.findByConnection(actor.tenantId(), connection.id())) {
+            if (this.activationService.find(actor, chat.id())
+                    .map(activation -> activation.state() == ActivationState.ACTIVE)
+                    .orElse(false)) {
+                this.activationService.pause(actor, chat.id(), reason);
+                pausedChats++;
+            }
+        }
+        return pausedChats;
     }
 
     /**
@@ -235,6 +249,22 @@ public class TelegramConnectionService {
                     this.sessionCipher.keyId());
             this.auditService.record(actor, AuditAction.TELEGRAM_CONNECTED, null, AuditService.ALLOWED,
                     Map.of("adapter", connection.adapter().name()));
+        }
+        else if (state.stage() == LoginStage.DISCONNECTED || state.stage() == LoginStage.ERROR) {
+            // Security-audit finding SEC-06: this state can arrive with no user action at all
+            // -- TDLib reporting authorizationStateLoggingOut/Closing/Closed, or any other
+            // unrecognised state mapped to ERROR -- meaning the account was logged out
+            // remotely, banned, or otherwise lost authorization out of band. That is exactly
+            // as blinding to future membership/consent verification as calling disconnect()
+            // explicitly, so it must pause every chat this connection had activated the same
+            // way (see pauseActiveChatsForConnection).
+            int pausedChats = pauseActiveChatsForConnection(actor, connection,
+                    "Telegram authorization was lost (" + state.stage() + ")");
+            if (pausedChats > 0) {
+                this.auditService.record(actor, AuditAction.TELEGRAM_DISCONNECTED, null, AuditService.ALLOWED,
+                        Map.of("adapter", connection.adapter().name(), "chatsPaused", pausedChats,
+                                "reason", "async authorization loss: " + state.stage()));
+            }
         }
     }
 }
