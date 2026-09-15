@@ -340,7 +340,11 @@ public class AuthorizationServerConfig {
                         //    consent flow at /oauth2/authorize, walk away with a token scoped to
                         //    read content that was only ever meant for the genuine provider. A
                         //    provider:* scope must only ever reach a client that was registered
-                        //    through a trusted, non-self-service path (today: DemoDataSeeder).
+                        //    through a trusted, non-self-service path (io.tgmcp.config
+                        //    .TrustedMcpClientSeeder pre-registers "claude" and "chatgpt" this
+                        //    way; the real connectors use that client id directly -- e.g.
+                        //    Claude.ai's own "Add an OAuth Client ID" connector setting -- rather
+                        //    than registering themselves here).
                         //    mcp:read remains open to self-registration, since it grants nothing
                         //    beyond "this client may attempt MCP calls" -- chat-level access is
                         //    still gated entirely by the authenticated user's own tenant/chat data.
