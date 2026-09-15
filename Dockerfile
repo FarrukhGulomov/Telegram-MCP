@@ -43,10 +43,18 @@ COPY --from=tdlib-build /td/build/libtdjson.so* /usr/local/lib/
 RUN ldconfig
 ENV LD_LIBRARY_PATH=/usr/local/lib
 RUN chown -R tgmcp:tgmcp /app
-USER tgmcp
 
 EXPOSE 8080
 ENV JAVA_OPTS=""
 HEALTHCHECK --interval=15s --timeout=3s --start-period=40s --retries=5 \
   CMD ["sh", "-c", "wget -qO- http://127.0.0.1:8080/actuator/health | grep -q UP"]
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
+# Deliberately no `USER tgmcp` above: TGMCP_TDLIB_DIR is a runtime volume mount (Railway
+# mounts it root-owned), which `chown` at build time cannot touch since it doesn't exist
+# until the container starts. The container starts as root, fixes ownership of whatever is
+# actually mounted there on every start (idempotent, and cheap even once it holds TDLib's
+# database), then drops to the unprivileged `tgmcp` user for the JVM itself. Real-account
+# testing on this branch caught this the first time the TDLIB adapter ever ran against a
+# real mounted volume: setTdlibParameters failed with "Permission denied" creating
+# TGMCP_TDLIB_DIR/files, since the app previously ran as `tgmcp` from container start with
+# no chance to fix a root-owned mount it has no permission to chown itself.
+ENTRYPOINT ["sh", "-c", "dir=\"${TGMCP_TDLIB_DIR:-/tmp/tdlib}\"; mkdir -p \"$dir\" && chown -R tgmcp:tgmcp \"$dir\" && exec su -s /bin/sh tgmcp -c 'exec java $JAVA_OPTS -jar /app/app.jar'"]
