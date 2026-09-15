@@ -84,6 +84,15 @@ public class TelegramConnectionService {
     @Transactional
     public LoginState beginLogin(AuthenticatedActor actor, LoginMethod method, String phoneNumber) {
         TelegramConnection connection = getOrCreate(actor);
+        if (connection.ready()) {
+            // Real-account testing hit this directly: a container restart silently restores an
+            // already-authorized TDLib session from its persisted local database (no login
+            // needed), but the connect form has no way to know that without asking, so a
+            // resubmitted login attempt reached TDLib as setAuthenticationPhoneNumber, which
+            // correctly refused it with the protocol-level "Call to setAuthenticationPhoneNumber
+            // unexpected" -- a confusing error for something that was never actually a failure.
+            return LoginState.of(LoginStage.READY, "login.tdlib.ready");
+        }
         requireNoOtherActiveOwner(actor);
         // Security-audit finding F13: QR-code confirmation happens out of band (the user scans
         // on another device), so it can complete well after this call returns with no request

@@ -97,4 +97,27 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
 
         assertThat(this.connectionService.find(team.actor()).orElseThrow().ready()).isFalse();
     }
+
+    /**
+     * Real-account testing hit this directly: a container restart silently restores an
+     * already-authorized TDLib session from its persisted local database (an async READY
+     * transition with no beginLogin call of its own -- exactly what this test simulates), but
+     * a visitor re-submitting the login form has no way to know that. Before this fix,
+     * beginLogin() forwarded straight to TDLib, which correctly refused the redundant
+     * setAuthenticationPhoneNumber call with a confusing protocol-level error.
+     */
+    @Test
+    void beginLoginOnAnAlreadyReadyConnectionReturnsReadyInsteadOfErroring() {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = team("already-ready");
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+        this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+
+        LoginState state = this.connectionService.beginLogin(team.actor(), LoginMethod.PHONE_NUMBER, "+1555");
+
+        assertThat(state.stage()).isEqualTo(LoginStage.READY);
+        Mockito.verify(this.gateway, Mockito.never())
+                .beginLogin(ArgumentMatchers.any(), Mockito.eq(LoginMethod.PHONE_NUMBER), ArgumentMatchers.any());
+    }
 }
