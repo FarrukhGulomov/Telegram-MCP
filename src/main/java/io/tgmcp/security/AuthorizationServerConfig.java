@@ -472,7 +472,17 @@ public class AuthorizationServerConfig {
                 return;
             }
             JwtClaimsSet.Builder claims = context.getClaims();
-            claims.audience(java.util.List.of(properties.mcp().resourceIdentifier()));
+            // Deliberately a plain ArrayList, not List.of(...): Spring Authorization Server
+            // persists a JWT access token's claims (including this audience list) as part of
+            // the stored OAuth2Authorization's metadata, JSON-serialized with polymorphic
+            // type info by JdbcOAuth2AuthorizationService. Confirmed from a real Railway
+            // deployment's logs: List.of(...)'s runtime type (java.util.ImmutableCollections
+            // $List12) is a JDK-internal class Spring Security's Jackson PolymorphicTypeValidator
+            // does not allow-list, so every read of that row after the first (a token refresh,
+            // a second grant) threw InvalidTypeIdException and fell through to a bare redirect
+            // -- silent from the client's point of view, but fatal to ever completing a second
+            // request. An ordinary ArrayList is a type every such allow-list already covers.
+            claims.audience(new java.util.ArrayList<>(java.util.List.of(properties.mcp().resourceIdentifier())));
             claims.claim("client_id", context.getRegisteredClient().getClientId());
 
             String principalName = context.getPrincipal().getName();

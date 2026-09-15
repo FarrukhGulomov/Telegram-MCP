@@ -108,6 +108,15 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
         return matcher.group(1);
     }
 
+    private static String extractAuthorizationCode(String redirectLocation) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("[?&]code=([^&]+)")
+                .matcher(redirectLocation);
+        assertThat(matcher.find()).as("a successful consent must redirect back with an authorization code")
+                .isTrue();
+        return matcher.group(1);
+    }
+
     @Test
     void selfRegisteredClientWithNoDeclaredScopeCanStillCompleteAuthorization() throws Exception {
         String redirectUri = "https://example.com/callback";
@@ -208,5 +217,76 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
                 .contains("mcp:read")
                 .doesNotContain("provider:anthropic_claude")
                 .doesNotContain("provider:openai_chatgpt");
+    }
+
+    /**
+     * Regression coverage for a second real connection failure, found immediately after the
+     * scope fix above let a connector reach this far for the first time: no test anywhere in
+     * this suite had ever driven a real {@code /oauth2/token} exchange end to end, so nothing
+     * caught that {@link AuthorizationServerConfig#jwtCustomizer} put the audience claim in as
+     * {@code List.of(...)} -- a JDK-internal immutable list type Spring Security's Jackson
+     * {@code PolymorphicTypeValidator} refuses to deserialize. The first {@code /oauth2/token}
+     * call only ever *writes* that claims map to the database as part of the persisted {@code
+     * OAuth2Authorization} row; a real Railway deployment's logs showed the exact failure only
+     * on the connector's very next {@code POST /oauth2/token} two seconds later, which has to
+     * *read* that row back -- confirmed by an {@code InvalidTypeIdException} naming exactly
+     * {@code java.util.ImmutableCollections$List12}. This client (like every client this server
+     * ever registers -- {@code token_endpoint_auth_method: none}, PKCE, no client secret) is
+     * never issued a refresh token, so the connector's second call cannot have been a refresh
+     * grant; the same shape (a second {@code /oauth2/token} call against an authorization
+     * already used once) is reproduced here by reusing the same authorization code, which reads
+     * back the very row the first exchange just wrote the poisoned claims into.
+     */
+    @Test
+    void anIssuedTokenSurvivesTheAuthorizationBeingReReadFromStorageAfterwards() throws Exception {
+        String redirectUri = "https://example.com/callback";
+        String clientId = register("generic-mcp-client-refresh", redirectUri, null);
+        String password = "connector-test-pw-5";
+        this.fixtures.signInReadyTeam("connector-5", "connector5@test.invalid",
+                this.passwordEncoder.encode(password), "OWNER");
+        MockHttpSession session = signIn("connector5@test.invalid", password);
+        assertThat(session).isNotNull();
+
+        MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQuery(clientId, redirectUri, "mcp:read"))
+                        .session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        String state = extractHiddenInputValue(authorizeResult.getResponse().getContentAsString(), "state");
+        MvcResult consentResult = this.mockMvc.perform(post("/oauth2/authorize").session(session)
+                        .param("client_id", clientId)
+                        .param("state", state)
+                        .param("scope", "mcp:read"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        String code = extractAuthorizationCode(consentResult.getResponse().getHeader("Location"));
+
+        this.mockMvc.perform(post("/oauth2/token")
+                        .param("grant_type", "authorization_code")
+                        .param("code", code)
+                        .param("redirect_uri", redirectUri)
+                        .param("client_id", clientId)
+                        .param("code_verifier", "a-fixed-test-code-verifier-value-1234567890"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.access_token").exists());
+
+        // The exact real-world failure: this second call must re-read the very
+        // OAuth2Authorization row the first call just wrote, including the access token's
+        // persisted JWT claims -- reusing a spent code is what real Spring Authorization Server
+        // does to detect a replay, so it must cleanly reject it (invalid_grant), never throw a
+        // deserialization exception (which surfaced to the client as a bare redirect instead of
+        // any JSON response at all).
+        MvcResult reuseResult = this.mockMvc.perform(post("/oauth2/token")
+                        .param("grant_type", "authorization_code")
+                        .param("code", code)
+                        .param("redirect_uri", redirectUri)
+                        .param("client_id", clientId)
+                        .param("code_verifier", "a-fixed-test-code-verifier-value-1234567890"))
+                .andReturn();
+        assertThat(reuseResult.getResponse().getStatus())
+                .as("reusing a spent authorization code must cleanly fail as invalid_grant, not throw")
+                .isEqualTo(400);
+        var errorJson = MAPPER.readTree(reuseResult.getResponse().getContentAsByteArray());
+        assertThat(errorJson.get("error").asText()).isEqualTo("invalid_grant");
     }
 }
