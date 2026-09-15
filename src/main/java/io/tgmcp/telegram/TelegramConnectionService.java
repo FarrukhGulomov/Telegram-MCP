@@ -193,17 +193,31 @@ public class TelegramConnectionService {
     }
 
     /**
-     * F01 mitigation: {@code TdlibTelegramGateway} is one native client shared by the whole
-     * process, keyed by nothing — every {@code ConnectionRef} it receives talks to the same
-     * underlying Telegram identity. Until that has a real per-owner session manager, letting
-     * a second owner start (or continue) a login while another owner's connection is anything
-     * but DISCONNECTED would silently mix the two accounts' logins, chat lists and logouts.
-     * The mock adapter has no shared native state, so this only applies to TDLIB.
+     * F01 mitigation, hardened per security-audit finding SEC-01: {@code TdlibTelegramGateway}
+     * is one native client shared by the whole process, keyed by nothing on its own -- every
+     * {@code ConnectionRef} it receives talks to the same underlying Telegram identity unless
+     * the gateway itself rejects a mismatched one (see {@code TdlibTelegramGateway
+     * .requireCurrentOwner}, the other half of this fix). Until a real per-owner session
+     * manager exists, letting a second owner start (or continue) a login while another owner's
+     * connection is anything but DISCONNECTED would silently mix the two accounts' logins, chat
+     * lists and logouts.
+     *
+     * <p>{@code acquireSingleOwnerLease()} must run first, inside the same transaction as this
+     * check and everything {@code beginLogin} does afterward: the {@code SELECT EXISTS} below
+     * was previously not atomic with that surrounding transaction at all, so two concurrent
+     * {@code beginLogin} calls could both observe "no other active owner" before either had
+     * committed. The advisory lock it takes serializes every caller of this method against
+     * every other, cluster-wide, released automatically when this transaction ends -- the
+     * second caller blocks here until the first has fully committed (or rolled back), then
+     * re-reads current, authoritative state.
+     *
+     * <p>The mock adapter has no shared native state, so this only applies to TDLIB.
      */
     private void requireNoOtherActiveOwner(AuthenticatedActor actor) {
         if (this.gateway.kind() != TelegramAdapterKind.TDLIB) {
             return;
         }
+        this.connectionRepository.acquireSingleOwnerLease();
         if (this.connectionRepository.existsActiveForOtherOwner(actor.tenantId(), actor.userId())) {
             throw new IllegalStateException("validation.singleConnectionOnly");
         }

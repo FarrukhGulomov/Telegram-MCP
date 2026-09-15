@@ -78,4 +78,57 @@ class TelegramConnectionIsolationTests extends AbstractIntegrationTest {
 
         assertThat(this.connectionService.beginLogin(teamB.actor(), LoginMethod.QR_CODE, null)).isNotNull();
     }
+
+    /**
+     * Security-audit finding SEC-01: {@code requireNoOtherActiveOwner}'s {@code SELECT EXISTS}
+     * used to run with no lock of any kind, so two {@code beginLogin} calls truly overlapping in
+     * time (not just issued one after the other, as every test above does) could both read "no
+     * other active owner" before either had committed, and both would then proceed to claim the
+     * one shared session. {@code TelegramConnectionRepository.acquireSingleOwnerLease()} now
+     * takes a Postgres advisory transaction lock first, serializing every caller of this method
+     * against every other cluster-wide -- this drives two real threads at the guard at the same
+     * moment and asserts exactly one of them wins, the way VT-02 in the audit calls for.
+     */
+    @Test
+    void trulyConcurrentBeginLoginAttemptsAreSerializedAndExactlyOneWins() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team teamA = team("isolation-g");
+        Fixtures.Team teamB = team("isolation-h");
+
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(2);
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<Boolean> resultA = executor.submit(() -> {
+                barrier.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                try {
+                    this.connectionService.beginLogin(teamA.actor(), LoginMethod.QR_CODE, null);
+                    return true;
+                }
+                catch (IllegalStateException ex) {
+                    return false;
+                }
+            });
+            java.util.concurrent.Future<Boolean> resultB = executor.submit(() -> {
+                barrier.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                try {
+                    this.connectionService.beginLogin(teamB.actor(), LoginMethod.QR_CODE, null);
+                    return true;
+                }
+                catch (IllegalStateException ex) {
+                    return false;
+                }
+            });
+
+            boolean aWon = resultA.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            boolean bWon = resultB.get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+            assertThat(aWon ^ bWon)
+                    .as("exactly one truly-concurrent beginLogin attempt must win the shared session, never "
+                            + "both and never neither")
+                    .isTrue();
+        }
+        finally {
+            executor.shutdownNow();
+        }
+    }
 }

@@ -78,6 +78,23 @@ public class TdlibTelegramGateway implements TelegramGateway {
      */
     private volatile Consumer<LoginState> stateListener;
     /**
+     * Security-audit finding SEC-01: every gateway method accepted a {@link ConnectionRef} but
+     * none of them checked it against anything -- {@link io.tgmcp.telegram.TelegramConnectionService}
+     * enforces single ownership only at {@code beginLogin} time, and every other operation (a
+     * status poll, code/password submission, discovery, disconnect) reached this class with
+     * whatever ref the caller's own database row happened to carry, regardless of who currently
+     * owns the one shared native session. A second application user who had merely visited
+     * {@code /connect} (creating their own, still-disconnected row) could poll the real owner's
+     * live status and QR link, or disconnect their live session outright, and this class would
+     * have honoured it. This field is the one ref allowed to drive the shared client at all;
+     * {@link #beginLogin} and {@link #onStateChange} are the only methods allowed to (re)claim
+     * it, since both are only reachable through {@code TelegramConnectionService.beginLogin}
+     * after it has atomically verified this actor may become the new owner. Every other method
+     * calls {@link #requireCurrentOwner} first and touches no native state at all if the ref
+     * does not match -- fail closed, not fail open.
+     */
+    private volatile ConnectionRef currentOwner;
+    /**
      * Base64-encoded (TDLib's JSON interface represents {@code bytes} fields this way) key for
      * TDLib's own at-rest encryption of {@link AppProperties.Telegram#databaseDirectory()}.
      * Security-audit finding F19: {@code setTdlibParameters} used to omit this field entirely,
@@ -112,7 +129,25 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public void onStateChange(ConnectionRef ref, Consumer<LoginState> listener) {
+        // Claims ownership rather than checking it: TelegramConnectionService.beginLogin calls
+        // this before the native beginLogin request (security-audit finding F13, so an async
+        // transition cannot be missed), which means this is the first gateway call a brand new
+        // legitimate owner makes. It is only reachable after that service method's own atomic
+        // single-owner check has already passed.
+        this.currentOwner = ref;
         this.stateListener = listener;
+    }
+
+    /**
+     * Security-audit finding SEC-01: the one gate every non-claiming method shares. Throws
+     * rather than silently operating on the wrong owner's behalf, and does so before any native
+     * request is made -- a rejected ref must never reach TDLib at all.
+     */
+    private void requireCurrentOwner(ConnectionRef ref) {
+        if (!java.util.Objects.equals(ref, this.currentOwner)) {
+            throw new TelegramAuthException(
+                    "This connection is not the current owner of the shared Telegram session");
+        }
     }
 
     // --- authorization ----------------------------------------------------------------
@@ -202,6 +237,10 @@ public class TdlibTelegramGateway implements TelegramGateway {
     @Override
     public LoginState beginLogin(ConnectionRef ref, LoginMethod method, String phoneNumber) {
         requireRealAccessAuthorized();
+        // Claims ownership, same as onStateChange above and for the same reason: this is the
+        // other of the two calls TelegramConnectionService.beginLogin makes to establish a
+        // brand new, already-verified owner.
+        this.currentOwner = ref;
         if (method == LoginMethod.QR_CODE) {
             this.client.request("requestQrCodeAuthentication", Map.of("other_user_ids", List.of()));
         }
@@ -215,32 +254,41 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public LoginState submitCode(ConnectionRef ref, String code) {
+        requireCurrentOwner(ref);
         this.client.request("checkAuthenticationCode", Map.of("code", code));
         return this.loginState.get();
     }
 
     @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
+        requireCurrentOwner(ref);
         this.client.request("checkAuthenticationPassword", Map.of("password", password));
         return this.loginState.get();
     }
 
     @Override
     public LoginState currentState(ConnectionRef ref) {
+        requireCurrentOwner(ref);
         return this.loginState.get();
     }
 
     @Override
     public void disconnect(ConnectionRef ref) {
+        requireCurrentOwner(ref);
         // logOut ends the Telegram-side session for this client; close only detaches locally.
         this.client.request("logOut", Map.of());
         this.loginState.set(LoginState.of(LoginStage.DISCONNECTED, "login.tdlib.signedOut"));
+        // Security-audit finding SEC-01: releases the claim so a future legitimate owner's
+        // beginLogin/onStateChange starts from a clean slate rather than this stale ref lingering
+        // as "current" until someone else's login happens to overwrite it.
+        this.currentOwner = null;
     }
 
     // --- read-only data ---------------------------------------------------------------
 
     @Override
     public List<RemoteChat> listAvailableChats(ConnectionRef ref) {
+        requireCurrentOwner(ref);
         // loadChats populates the local chat list; getChats then reports it.
         try {
             this.client.request("loadChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
@@ -272,6 +320,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public List<RemoteParticipant> listParticipants(ConnectionRef ref, long tgChatId) {
+        requireCurrentOwner(ref);
         JsonNode chat = this.client.request("getChat", Map.of("chat_id", tgChatId));
         JsonNode type = chat.path("type");
         if (!"chatTypeSupergroup".equals(type.path("@type").asString(""))) {
@@ -315,6 +364,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public RemoteMessagePage fetchMessages(ConnectionRef ref, long tgChatId, MessageWindow window) {
+        requireCurrentOwner(ref);
         int limit = Math.min(window.limit(), MAX_HISTORY_BATCH);
         // getChatHistory only ever walks backwards from from_message_id (0 means "from the
         // newest"), so reaching a specific afterMessageId boundary -- or the start of the

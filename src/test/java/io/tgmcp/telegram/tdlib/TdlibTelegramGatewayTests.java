@@ -20,12 +20,15 @@ import io.tgmcp.telegram.gateway.RemoteMessage;
 import io.tgmcp.telegram.gateway.RemoteMessagePage;
 import io.tgmcp.telegram.gateway.RemoteParticipant;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
+import io.tgmcp.telegram.gateway.TelegramAuthException;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Exercises the real TDLib adapter's JSON translation against a scripted client.
@@ -48,6 +51,17 @@ class TdlibTelegramGatewayTests {
 
     private JsonNode json(String raw) {
         return this.mapper.readTree(raw);
+    }
+
+    @BeforeEach
+    void claimOwnershipForTheDefaultRef() {
+        // Security-audit finding SEC-01: every gateway method below now requires the caller's
+        // ref to be the current owner of the one shared session (see TdlibTelegramGateway
+        // .requireCurrentOwner). Ordinary per-chat behaviour tests are not about that guard, so
+        // claim ownership here the same way a real login start would (TelegramConnectionService
+        // .beginLogin calls onStateChange first, for the same reason). Tests exercising the
+        // guard itself use a second, never-claimed ref instead -- see below.
+        this.gateway.onStateChange(this.ref, state -> { });
     }
 
     @Test
@@ -420,6 +434,68 @@ class TdlibTelegramGatewayTests {
 
         assertThat(this.gateway.messageLink(new RemoteChat(-1L, "x", "GROUP", null, null), 1L))
                 .isEqualTo(Optional.empty());
+    }
+
+    // --- SEC-01: shared session ownership ----------------------------------------------
+
+    /**
+     * A second application user's own, never-claimed {@link ConnectionRef} -- exactly what
+     * {@code TelegramConnectionService} builds for any actor who has merely called {@code
+     * getOrCreate}, e.g. by visiting {@code /connect}, whether or not they ever started a real
+     * login. Every read/write method below must reject it without making any native call at
+     * all: {@link ScriptedTdlibClient#request} throws its own {@code AssertionError} if a
+     * request is attempted with nothing enqueued for it, so a passing test here proves no TDLib
+     * call was reachable, not just that the return value happened to look denied.
+     */
+    private final ConnectionRef foreignRef = new ConnectionRef(UUID.randomUUID(), UUID.randomUUID());
+
+    @Test
+    void rejectsEveryOperationFromAConnectionThatNeverClaimedOwnership() {
+        assertThatThrownBy(() -> this.gateway.submitCode(this.foreignRef, "12345"))
+                .isInstanceOf(TelegramAuthException.class);
+        assertThatThrownBy(() -> this.gateway.submitPassword(this.foreignRef, "hunter2"))
+                .isInstanceOf(TelegramAuthException.class);
+        assertThatThrownBy(() -> this.gateway.currentState(this.foreignRef))
+                .isInstanceOf(TelegramAuthException.class);
+        assertThatThrownBy(() -> this.gateway.disconnect(this.foreignRef))
+                .isInstanceOf(TelegramAuthException.class);
+        assertThatThrownBy(() -> this.gateway.listAvailableChats(this.foreignRef))
+                .isInstanceOf(TelegramAuthException.class);
+        assertThatThrownBy(() -> this.gateway.listParticipants(this.foreignRef, -100123L))
+                .isInstanceOf(TelegramAuthException.class);
+        assertThatThrownBy(() -> this.gateway.fetchMessages(this.foreignRef,
+                -100123L, new MessageWindow(Instant.EPOCH, Instant.now(), null, null, 10)))
+                .isInstanceOf(TelegramAuthException.class);
+    }
+
+    @Test
+    void aSecondLoginAttemptBySomeoneElseTakesOverAndTheFirstOwnersRefStopsWorking() {
+        // Mirrors what TelegramConnectionService.beginLogin does for a brand new owner: bind
+        // the listener, then start the login. Ownership moves to refB even though refA was
+        // claimed first -- the atomic single-owner decision belongs to
+        // TelegramConnectionService (security-audit finding SEC-01's other half); this class
+        // only enforces whichever ref last claimed it.
+        ConnectionRef refB = new ConnectionRef(UUID.randomUUID(), UUID.randomUUID());
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.gateway.onStateChange(refB, state -> { });
+        this.gateway.beginLogin(refB, io.tgmcp.telegram.gateway.LoginMethod.QR_CODE, null);
+
+        assertThatThrownBy(() -> this.gateway.currentState(this.ref))
+                .as("the previous owner's ref must stop working the moment someone else claims ownership")
+                .isInstanceOf(TelegramAuthException.class);
+
+        // The new owner's own ref keeps working.
+        assertThat(this.gateway.currentState(refB)).isNotNull();
+    }
+
+    @Test
+    void disconnectReleasesOwnershipSoNoStaleRefIsAccidentallyHonoured() {
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.gateway.disconnect(this.ref);
+
+        assertThatThrownBy(() -> this.gateway.currentState(this.ref))
+                .as("even the owner that just disconnected must not keep working against a cleared claim")
+                .isInstanceOf(TelegramAuthException.class);
     }
 
     /** Replays canned TDLib responses in order; records what was sent. */
