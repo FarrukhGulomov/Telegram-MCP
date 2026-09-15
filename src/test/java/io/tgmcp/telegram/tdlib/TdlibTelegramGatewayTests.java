@@ -420,6 +420,25 @@ class TdlibTelegramGatewayTests {
         assertThat(this.gateway.listParticipants(this.ref, 9L)).isEmpty();
     }
 
+    /**
+     * Real-account testing found Telegram routinely refuses getSupergroupMembers ("Member list
+     * is inaccessible", code 400) for a supergroup the connected account cannot see the
+     * membership of -- a normal, common situation, not a bug. Before this fix the exception
+     * propagated out of listParticipants() uncaught, crashing the entire "select this chat"
+     * action (ChatActivationService.propose()) instead of leaving participants empty, which
+     * already surfaces as ConsentCoverage.noParticipantsKnown() and correctly blocks
+     * activation.
+     */
+    @Test
+    void returnsNoParticipantsRatherThanThrowingWhenTheMemberListIsInaccessible() {
+        this.client.enqueue("""
+                {"@type":"chat","id":-100777,"title":"Restricted",
+                 "type":{"@type":"chatTypeSupergroup","supergroup_id":88,"is_channel":false}}""");
+        this.client.enqueueError(400, "Member list is inaccessible");
+
+        assertThat(this.gateway.listParticipants(this.ref, -100777L)).isEmpty();
+    }
+
     @Test
     void returnsAMessageLinkOnlyWhenTelegramSaysItIsPublic() {
         RemoteChat chat = new RemoteChat(-100123L, "Eng", "SUPERGROUP", "eng", null);

@@ -304,11 +304,25 @@ public class TdlibTelegramGateway implements TelegramGateway {
         List<RemoteParticipant> result = new ArrayList<>();
         int offset = 0;
         while (result.size() < MAX_MEMBERS) {
-            JsonNode members = this.client.request("getSupergroupMembers", Map.of(
-                    "supergroup_id", supergroupId,
-                    "filter", Map.of("@type", "supergroupMembersFilterRecent"),
-                    "offset", offset,
-                    "limit", MEMBER_PAGE_SIZE));
+            JsonNode members;
+            try {
+                members = this.client.request("getSupergroupMembers", Map.of(
+                        "supergroup_id", supergroupId,
+                        "filter", Map.of("@type", "supergroupMembersFilterRecent"),
+                        "offset", offset,
+                        "limit", MEMBER_PAGE_SIZE));
+            }
+            catch (TelegramPermissionException ex) {
+                // Real-account testing found Telegram routinely refuses this call ("Member list
+                // is inaccessible", code 400) for a supergroup where the connected account
+                // lacks sufficient privilege to see membership -- a normal, common situation,
+                // not a bug. Before this fix the exception propagated all the way out of
+                // propose()/importParticipants(), crashing the entire "select this chat" action
+                // instead of leaving the participant list empty, which already surfaces as
+                // ConsentCoverage.noParticipantsKnown() and correctly blocks activation until
+                // membership is somehow known.
+                break;
+            }
             int pageSize = 0;
             for (JsonNode member : members.path("members")) {
                 pageSize++;
