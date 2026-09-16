@@ -156,6 +156,16 @@ tgmcp:
     oauth-registrations-per-hour-per-ip: 5
     connect-actions-per-minute-per-user: 30
 
+  # Security-audit finding SEC-13: empty by default, matching server.forward-headers-strategy
+  # trusting forwarded headers unconditionally -- correct for local development and for a
+  # platform (Railway, Heroku, ...) whose own edge always sits in front of this process. Once
+  # real Telegram account access is authorized, ProductionSafetyValidator refuses to start
+  # unless this is set. List the exact public hostname(s) this deployment is served under (no
+  # scheme, no port); TrustedForwardedHostFilter then rejects any request whose effective host
+  # -- after Spring has already applied X-Forwarded-Host -- is not one of them.
+  forwarded-headers:
+    trusted-hosts: ${TGMCP_TRUSTED_FORWARDED_HOSTS:}
+
   oauth:
     issuer: ${TGMCP_OAUTH_ISSUER:http://localhost:8080}
     public-base-url: ${TGMCP_PUBLIC_BASE_URL:http://localhost:8080}

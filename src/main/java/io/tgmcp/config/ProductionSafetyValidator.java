@@ -38,7 +38,8 @@ public class ProductionSafetyValidator {
                                      RegisteredClientRepository clients,
                                      @Value("${tgmcp.oauth.issuer:http://localhost:8080}") String issuer,
                                      @Value("${tgmcp.oauth.public-base-url:http://localhost:8080}") String publicBaseUrl,
-                                     @Value("${server.servlet.session.cookie.secure:false}") boolean cookieSecure) {
+                                     @Value("${server.servlet.session.cookie.secure:false}") boolean cookieSecure,
+                                     @Value("${server.forward-headers-strategy:none}") String forwardHeadersStrategy) {
         if (!properties.telegram().realAccountAccessAuthorized()) {
             // Every check below only matters once a real Telegram account can be contacted.
             return;
@@ -117,6 +118,23 @@ public class ProductionSafetyValidator {
             problems.add("Demo-registered MCP client(s) are still present while real-account access is "
                     + "authorized: " + demoClientIds + ". Remove them before relying on registered-client "
                     + "identity for real provider traffic.");
+        }
+        // Security-audit finding SEC-13: server.forward-headers-strategy=framework trusts
+        // X-Forwarded-Host/-Proto/-Port unconditionally, which is only safe when every caller
+        // is guaranteed to arrive through a proxy that sets those headers itself and never
+        // passes a client-supplied value through unfiltered. That guarantee cannot be verified
+        // from inside this process; the operator must demonstrate it by declaring the exact
+        // public hostname(s), which TrustedForwardedHostFilter then enforces.
+        if ("framework".equalsIgnoreCase(forwardHeadersStrategy)
+                && properties.forwardedHeaders().trustedHosts().isEmpty()) {
+            problems.add("server.forward-headers-strategy=framework while real-account access is "
+                    + "authorized, but tgmcp.forwarded-headers.trusted-hosts is empty: "
+                    + "X-Forwarded-Host/-Proto/-Port would be trusted from any caller that can reach "
+                    + "this port, not only the intended proxy. Set "
+                    + "tgmcp.forwarded-headers.trusted-hosts to the exact public hostname(s) this "
+                    + "deployment is served under, or use server.forward-headers-strategy=native with "
+                    + "a real trusted-proxy allowlist, or =none if nothing in front of this process "
+                    + "ever sets those headers.");
         }
 
         if (!problems.isEmpty()) {

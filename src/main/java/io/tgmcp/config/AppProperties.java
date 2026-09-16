@@ -18,7 +18,8 @@ public record AppProperties(@DefaultValue Telegram telegram,
                             @DefaultValue Sync sync,
                             @DefaultValue Secrets secrets,
                             @DefaultValue Demo demo,
-                            @DefaultValue AbuseControls abuseControls) {
+                            @DefaultValue AbuseControls abuseControls,
+                            @DefaultValue ForwardedHeaders forwardedHeaders) {
 
     public record Telegram(@DefaultValue("MOCK") TelegramAdapterKind adapter,
                            /** TDLib api_id / api_hash. Required only for the TDLIB adapter. */
@@ -130,5 +131,19 @@ public record AppProperties(@DefaultValue Telegram telegram,
                                 @DefaultValue("20") int oauthTokenRequestsPerMinutePerIp,
                                 @DefaultValue("5") int oauthRegistrationsPerHourPerIp,
                                 @DefaultValue("30") int connectActionsPerMinutePerUser) {
+    }
+
+    /**
+     * Security-audit finding SEC-13: {@code server.forward-headers-strategy=framework} makes
+     * Spring trust {@code X-Forwarded-Host}/{@code -Proto}/{@code -Port} unconditionally --
+     * the right default when a platform's own edge (Railway, Heroku, ...) always sits between
+     * the internet and this process, but unproven and unenforced if this port is ever reachable
+     * directly or an intermediate hop passes those headers through unfiltered. Once {@code
+     * trustedHosts} is non-empty, {@link io.tgmcp.security.TrustedForwardedHostFilter} rejects
+     * any request whose effective host (after Spring has already applied the forwarded headers)
+     * is not in this list, so a forged header can never make this deployment believe it is
+     * reachable at a hostname it was not actually configured for.
+     */
+    public record ForwardedHeaders(@DefaultValue List<String> trustedHosts) {
     }
 }

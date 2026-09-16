@@ -27,15 +27,31 @@ class ProductionSafetyValidatorTests {
     private static final String KEY = "a-non-blank-value-is-enough-for-this-check";
 
     /** Mocked repositories reporting no leftover demo tenants/clients, for every test other
-     * than the ones specifically about SEC-11's promotion preflight. */
+     * than the ones specifically about SEC-11's promotion preflight. Also defaults {@code
+     * server.forward-headers-strategy} to "native" -- a non-issue value -- for every test other
+     * than the ones specifically about SEC-13. */
     private static ProductionSafetyValidator validator(AppProperties properties, String issuer,
                                                         String publicBaseUrl, boolean cookieSecure) {
-        return validator(properties, List.of(), List.of(), issuer, publicBaseUrl, cookieSecure);
+        return validator(properties, List.of(), List.of(), issuer, publicBaseUrl, cookieSecure, "native");
     }
 
     private static ProductionSafetyValidator validator(AppProperties properties, List<Tenant> demoTenants,
                                                         List<String> demoClientIds, String issuer,
                                                         String publicBaseUrl, boolean cookieSecure) {
+        return validator(properties, demoTenants, demoClientIds, issuer, publicBaseUrl, cookieSecure, "native");
+    }
+
+    private static ProductionSafetyValidator validator(AppProperties properties, String issuer,
+                                                        String publicBaseUrl, boolean cookieSecure,
+                                                        String forwardHeadersStrategy) {
+        return validator(properties, List.of(), List.of(), issuer, publicBaseUrl, cookieSecure,
+                forwardHeadersStrategy);
+    }
+
+    private static ProductionSafetyValidator validator(AppProperties properties, List<Tenant> demoTenants,
+                                                        List<String> demoClientIds, String issuer,
+                                                        String publicBaseUrl, boolean cookieSecure,
+                                                        String forwardHeadersStrategy) {
         TenantRepository tenants = Mockito.mock(TenantRepository.class);
         Mockito.when(tenants.findAllDemo()).thenReturn(demoTenants);
         RegisteredClientRepository clients = Mockito.mock(RegisteredClientRepository.class);
@@ -49,7 +65,8 @@ class ProductionSafetyValidatorTests {
                             .redirectUri("https://example.invalid/callback")
                             .build());
         }
-        return new ProductionSafetyValidator(properties, tenants, clients, issuer, publicBaseUrl, cookieSecure);
+        return new ProductionSafetyValidator(properties, tenants, clients, issuer, publicBaseUrl, cookieSecure,
+                forwardHeadersStrategy);
     }
 
     private static AppProperties properties(boolean realAccountAccessAuthorized, boolean seedSyntheticData,
@@ -71,6 +88,15 @@ class ProductionSafetyValidatorTests {
                                             String sessionEncryptionKey, String cursorSigningKey,
                                             String oauthRsaPrivateKey,
                                             boolean acknowledgeMissingEditDeletionPipeline) {
+        return properties(realAccountAccessAuthorized, seedSyntheticData, sessionEncryptionKey, cursorSigningKey,
+                oauthRsaPrivateKey, acknowledgeMissingEditDeletionPipeline, List.of());
+    }
+
+    private static AppProperties properties(boolean realAccountAccessAuthorized, boolean seedSyntheticData,
+                                            String sessionEncryptionKey, String cursorSigningKey,
+                                            String oauthRsaPrivateKey,
+                                            boolean acknowledgeMissingEditDeletionPipeline,
+                                            List<String> trustedForwardedHosts) {
         AppProperties.Telegram telegram = new AppProperties.Telegram(TelegramAdapterKind.TDLIB,
                 "1", "hash", "./tdlib-data", realAccountAccessAuthorized,
                 acknowledgeMissingEditDeletionPipeline);
@@ -78,7 +104,8 @@ class ProductionSafetyValidatorTests {
                 oauthRsaPrivateKey);
         AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo", "owner@demo.invalid",
                 "pw", List.of());
-        return new AppProperties(telegram, null, null, null, secrets, demo, null);
+        AppProperties.ForwardedHeaders forwardedHeaders = new AppProperties.ForwardedHeaders(trustedForwardedHosts);
+        return new AppProperties(telegram, null, null, null, secrets, demo, null, forwardedHeaders);
     }
 
     @Test
@@ -253,6 +280,42 @@ class ProductionSafetyValidatorTests {
 
         assertThatCode(() -> validator(properties, List.of(), List.of(),
                 "https://mcp.example.com", "https://mcp.example.com", true))
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * Security-audit finding SEC-13: {@code server.forward-headers-strategy=framework} trusts
+     * {@code X-Forwarded-Host}/{@code -Proto}/{@code -Port} unconditionally, which the audit
+     * calls an "unproven trusted-proxy boundary". Since that trust cannot be verified from
+     * inside this process, the operator must demonstrate it by declaring the exact public
+     * hostname(s) {@link io.tgmcp.security.TrustedForwardedHostFilter} then enforces.
+     */
+    @Test
+    void refusesRealAccountAccessWithFrameworkForwardedHeaderTrustAndNoDeclaredHosts() {
+        AppProperties properties = properties(true, false, KEY, KEY, KEY, true, List.of());
+
+        assertThatThrownBy(() -> validator(properties, "https://mcp.example.com",
+                "https://mcp.example.com", true, "framework"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("forward-headers-strategy=framework")
+                .hasMessageContaining("tgmcp.forwarded-headers.trusted-hosts");
+    }
+
+    @Test
+    void allowsRealAccountAccessWithFrameworkForwardedHeaderTrustOnceHostsAreDeclared() {
+        AppProperties properties = properties(true, false, KEY, KEY, KEY, true, List.of("mcp.example.com"));
+
+        assertThatCode(() -> validator(properties, "https://mcp.example.com",
+                "https://mcp.example.com", true, "framework"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void allowsRealAccountAccessWithNativeForwardedHeaderStrategyRegardlessOfDeclaredHosts() {
+        AppProperties properties = properties(true, false, KEY, KEY, KEY, true, List.of());
+
+        assertThatCode(() -> validator(properties, "https://mcp.example.com",
+                "https://mcp.example.com", true, "native"))
                 .doesNotThrowAnyException();
     }
 

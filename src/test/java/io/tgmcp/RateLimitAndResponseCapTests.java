@@ -205,6 +205,7 @@ class RateLimitAndResponseCapTests extends AbstractIntegrationTest {
                         Duration.ofSeconds(5), Duration.ofMinutes(10), Duration.ofHours(1), Duration.ofHours(24)),
                 new AppProperties.Secrets(null, "test", null, null),
                 new AppProperties.Demo(false, "demo", "Demo", "a@b.invalid", "pw", List.of()),
+                null,
                 null);
     }
 }

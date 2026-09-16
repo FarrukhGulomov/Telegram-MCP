@@ -28,7 +28,7 @@ class AuthorizationServerConfigTests {
                 null, null, "./tdlib", false, false);
         AppProperties.Secrets secrets = new AppProperties.Secrets(null, "test", null, oauthRsaPrivateKey);
         AppProperties.Demo demo = new AppProperties.Demo(false, "demo", "Demo", "a@b.invalid", "pw", List.of());
-        return new AppProperties(telegram, null, null, null, secrets, demo, null);
+        return new AppProperties(telegram, null, null, null, secrets, demo, null, null);
     }
 
     private static String freshBase64Pkcs8Key() throws Exception {

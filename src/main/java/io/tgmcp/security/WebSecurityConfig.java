@@ -7,8 +7,10 @@ import com.nimbusds.jose.proc.SecurityContext;
 import io.tgmcp.config.AppProperties;
 
 import org.springframework.boot.web.server.servlet.CookieSameSiteSupplier;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -166,5 +168,24 @@ public class WebSecurityConfig {
     @Bean
     public CookieSameSiteSupplier sessionCookieSameSiteSupplier() {
         return CookieSameSiteSupplier.ofLax().whenHasName("TGMCPSESSION");
+    }
+
+    /**
+     * Security-audit finding SEC-13: registered directly with the servlet container (not tied
+     * to either {@link SecurityFilterChain} above) so it covers every request regardless of
+     * which chain would otherwise match it. Ordered immediately after Spring Boot's own {@code
+     * ForwardedHeaderFilter}, which always runs at {@code Ordered.HIGHEST_PRECEDENCE} when
+     * {@code server.forward-headers-strategy=framework} -- by the time this filter runs, {@link
+     * jakarta.servlet.http.HttpServletRequest#getServerName()} already reflects whatever the
+     * (possibly forged) forwarded headers said.
+     */
+    @Bean
+    public FilterRegistrationBean<TrustedForwardedHostFilter> trustedForwardedHostFilter(
+            AppProperties properties) {
+        FilterRegistrationBean<TrustedForwardedHostFilter> registration = new FilterRegistrationBean<>(
+                new TrustedForwardedHostFilter(properties.forwardedHeaders().trustedHosts()));
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 1);
+        registration.addUrlPatterns("/*");
+        return registration;
     }
 }

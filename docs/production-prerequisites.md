@@ -150,3 +150,10 @@ Also outstanding:
   account access authorized until that key is set.
 - Sensitive chats stay `INACTIVE` until someone activates them deliberately; the synthetic
   dataset includes one such chat to make the point.
+- `server.forward-headers-strategy=framework` trusts `X-Forwarded-Host`/`-Proto`/`-Port`
+  unconditionally (security-audit finding SEC-13); `ProductionSafetyValidator` refuses to
+  start with real account access authorized unless `tgmcp.forwarded-headers.trusted-hosts`
+  names the exact public hostname(s) this deployment is served under, and
+  `TrustedForwardedHostFilter` then rejects any request whose effective host is not one of
+  them. This is a defense-in-depth check, not a substitute for keeping the application port
+  unreachable except through the intended proxy.
