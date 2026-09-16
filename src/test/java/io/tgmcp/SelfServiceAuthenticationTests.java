@@ -53,6 +53,9 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
     @Autowired
     private AppUserRepository users;
 
+    @Autowired
+    private io.tgmcp.telegram.TelegramConnectionRepository connections;
+
     @Test
     void selfRegistrationCreatesAnIsolatedTenantThatCanThenSignIn() throws Exception {
         this.mockMvc.perform(post("/register").with(csrf())
@@ -126,9 +129,11 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
     @Test
     void telegramSignInProvisionsAndThenReusesTheSameAccount() throws Exception {
         long telegramUserId = 555_001L;
+        // A brand-new Telegram identity: signed in AND its QR connection is already started,
+        // rather than landing on an empty dashboard with a Connection tab still to find.
         MvcResult first = this.mockMvc.perform(get("/login/telegram/callback")
                         .params(signedTelegramParams(telegramUserId, "Ada", "Lovelace", "ada")))
-                .andExpect(redirectedUrl("/"))
+                .andExpect(redirectedUrl("/connect"))
                 .andReturn();
         AppUser provisioned = this.users.findByTelegramUserId(telegramUserId).orElseThrow();
         assertThat(provisioned.role()).isEqualTo("OWNER");
@@ -141,8 +146,12 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
         assertThat(context).isNotNull();
         assertThat(context.getAuthentication().getName()).isEqualTo(provisioned.email());
 
-        // The session the callback established actually works for a later authenticated request.
-        this.mockMvc.perform(get("/").session(session)).andExpect(status().isOk());
+        // The session the callback established actually works for a later authenticated request,
+        // and the QR connection was already started -- no separate "pick a method" click needed.
+        this.mockMvc.perform(get("/connect").session(session)).andExpect(status().isOk());
+        io.tgmcp.telegram.TelegramConnection connection = this.connections
+                .findByOwner(provisioned.tenantId(), provisioned.id()).orElseThrow();
+        assertThat(connection.status()).isEqualTo(io.tgmcp.telegram.gateway.LoginStage.WAIT_QR_SCAN);
 
         // A returning Telegram identity resolves to the same account, not a second one.
         this.mockMvc.perform(get("/login/telegram/callback")
