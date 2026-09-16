@@ -55,14 +55,13 @@ export DYLD_LIBRARY_PATH=/usr/local/lib:${DYLD_LIBRARY_PATH}  # macOS
 java -Djna.library.path=/usr/local/lib -jar target/telegram-consent-mcp-*.jar
 ```
 
-**On this branch only** (`tdlib-real-account-test`), the `Dockerfile` has a `tdlib-build`
-stage that compiles `libtdjson.so` from a pinned upstream commit (TDLib does not tag releases
-regularly, so a commit SHA is pinned for a reproducible build rather than following a moving
-branch) and copies it into the runtime image at `/usr/local/lib`, with `LD_LIBRARY_PATH` set
-accordingly. The branch this deploys to production from deliberately does not carry this
-stage — the default adapter does not need it, and it turns every image build into a slow,
-memory-hungry C++ compile. Do not merge this Dockerfile change back without deciding
-deliberately that every future build should pay that cost.
+The `Dockerfile` has a `tdlib-build` stage that compiles `libtdjson.so` from a pinned
+upstream commit (TDLib does not tag releases regularly, so a commit SHA is pinned for a
+reproducible build rather than following a moving branch) and copies it into the runtime
+image at `/usr/local/lib`, with `LD_LIBRARY_PATH` set accordingly. It runs unconditionally
+for every deployment, even one that only ever uses the MOCK adapter — a deliberate choice to
+keep one Dockerfile and one image for every environment, at the cost of a slower,
+memory-hungry C++ compile on every build.
 
 ## 3. Get an api_id and api_hash
 

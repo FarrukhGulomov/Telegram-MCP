@@ -4,9 +4,9 @@
 # reproducible). Only the `tdjson` CMake target is built, not the full TDLib CLI/tests, to
 # keep this stage as fast as a from-source TDLib build can be.
 #
-# THIS STAGE IS ONLY PRESENT ON THIS test branch. It is deliberately not on the branch
-# production deploys from -- see the Dockerfile comment on the previous branch explaining
-# why the default image ships without it.
+# Built unconditionally, even for a deployment that only ever runs the MOCK adapter: the
+# extra build time is the price of every deployment coming from one branch and one image,
+# rather than maintaining a second Dockerfile that only diverges here.
 FROM debian:bookworm-slim AS tdlib-build
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git make cmake g++ gperf zlib1g-dev libssl-dev \
