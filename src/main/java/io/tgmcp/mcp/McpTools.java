@@ -80,7 +80,7 @@ public class McpTools {
     // --- tools -------------------------------------------------------------------------
 
     public McpSchema.CallToolResult listAllowedChats(McpCallContext context, McpSchema.CallToolRequest request) {
-        return guarded(context, McpToolNames.LIST_ALLOWED_CHATS, reportChatIds -> {
+        return guarded(context, McpToolNames.LIST_ALLOWED_CHATS, request, reportChatIds -> {
             new ToolArguments(request.arguments()).rejectUnknown(List.of());
             Instant now = this.clock.instant();
 
@@ -100,7 +100,7 @@ public class McpTools {
     public McpSchema.CallToolResult searchMessages(McpCallContext context, McpSchema.CallToolRequest request) {
         // Parsing happens inside guarded() so that an argument error becomes a structured
         // INVALID_ARGUMENT result rather than escaping as a protocol-level exception.
-        return guarded(context, McpToolNames.SEARCH_MESSAGES, reportChatIds -> {
+        return guarded(context, McpToolNames.SEARCH_MESSAGES, request, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
             args.rejectUnknown(List.of("chat_ids", "query", "from", "to", "cursor", "limit"));
 
@@ -200,7 +200,7 @@ public class McpTools {
     }
 
     public McpSchema.CallToolResult getChatHistory(McpCallContext context, McpSchema.CallToolRequest request) {
-        return guarded(context, McpToolNames.GET_CHAT_HISTORY, reportChatIds -> {
+        return guarded(context, McpToolNames.GET_CHAT_HISTORY, request, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
             args.rejectUnknown(List.of("chat_id", "from", "to", "cursor", "limit"));
 
@@ -274,7 +274,7 @@ public class McpTools {
     }
 
     public McpSchema.CallToolResult getMessageContext(McpCallContext context, McpSchema.CallToolRequest request) {
-        return guarded(context, McpToolNames.GET_MESSAGE_CONTEXT, reportChatIds -> {
+        return guarded(context, McpToolNames.GET_MESSAGE_CONTEXT, request, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
             args.rejectUnknown(List.of("chat_id", "message_id", "before", "after"));
 
@@ -337,7 +337,7 @@ public class McpTools {
     }
 
     public McpSchema.CallToolResult getSyncStatus(McpCallContext context, McpSchema.CallToolRequest request) {
-        return guarded(context, McpToolNames.GET_SYNC_STATUS, reportChatIds -> {
+        return guarded(context, McpToolNames.GET_SYNC_STATUS, request, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
             args.rejectUnknown(List.of("chat_id"));
             UUID chatId = args.requiredUuid("chat_id");
@@ -370,8 +370,18 @@ public class McpTools {
      * #searchMessages}) reports all of them and gets one audit row per chat, matching how every
      * other multi-chat action in this codebase (see {@code ChatActivationService#pause} from
      * finding F16) already records one row per chat rather than one row with none.
+     *
+     * <p>Security-audit finding SEC-15 fixes three further gaps in this same method: (1) a
+     * rate-limit rejection happens before {@code body} ever runs, so {@code reportChatIds} had
+     * never been called yet -- {@code request} is used for a lenient, unvalidated, best-effort
+     * extraction of whatever chat id(s) it names, purely so that denial is still attributable;
+     * (2) {@code body} can return a structured error result (see {@link ToolResponses#error})
+     * without throwing at all -- previously unconditionally logged as {@code ALLOWED} because
+     * nothing inspected {@link McpSchema.CallToolResult#isError()}; (3) a generic {@link
+     * RuntimeException} was logged but never recorded as a structured audit event at all.
      */
     private McpSchema.CallToolResult guarded(McpCallContext context, String tool,
+                                             McpSchema.CallToolRequest request,
                                              Function<Consumer<List<UUID>>, McpSchema.CallToolResult> body) {
         List<UUID> touchedChatIds = new ArrayList<>();
         Consumer<List<UUID>> reportChatIds = ids -> {
@@ -380,15 +390,21 @@ public class McpTools {
         };
         String rateKey = context.actor().tenantId() + ":" + context.actor().userId();
         if (!this.rateLimiter.tryAcquire(rateKey)) {
-            recordPerChat(context, AuditAction.MCP_RATE_LIMITED, touchedChatIds, AuditService.DENIED,
+            recordPerChat(context, AuditAction.MCP_RATE_LIMITED, bestEffortChatIds(request), AuditService.DENIED,
                     Map.of("tool", tool));
             return this.responses.error(AccessErrorCode.RATE_LIMITED,
                     "Too many requests. Retry shortly.");
         }
         try {
             McpSchema.CallToolResult result = body.apply(reportChatIds);
-            recordPerChat(context, AuditAction.MCP_TOOL_CALL, touchedChatIds, AuditService.ALLOWED,
-                    Map.of("tool", tool, "provider", context.provider()));
+            if (Boolean.TRUE.equals(result.isError())) {
+                recordPerChat(context, AuditAction.MCP_TOOL_CALL, touchedChatIds, AuditService.ERROR,
+                        Map.of("tool", tool, "provider", context.provider()));
+            }
+            else {
+                recordPerChat(context, AuditAction.MCP_TOOL_CALL, touchedChatIds, AuditService.ALLOWED,
+                        Map.of("tool", tool, "provider", context.provider()));
+            }
             return result;
         }
         catch (ChatAccessException ex) {
@@ -405,8 +421,45 @@ public class McpTools {
         catch (RuntimeException ex) {
             // Never surface internal detail to an MCP client.
             log.error("MCP tool {} failed", tool, ex);
+            recordPerChat(context, AuditAction.MCP_TOOL_CALL, touchedChatIds, AuditService.ERROR,
+                    Map.of("tool", tool, "error", ex.getClass().getSimpleName()));
             return this.responses.error(AccessErrorCode.INTERNAL_ERROR,
                     "The request could not be completed.");
+        }
+    }
+
+    /**
+     * Security-audit finding SEC-15: a rate-limited call is rejected before {@code guarded}'s
+     * {@code body} runs any tool-specific argument parsing, so the resulting audit row would
+     * otherwise carry no chat attribution at all. Reads whatever the raw, not-yet-validated
+     * request names under the conventional {@code chat_id}/{@code chat_ids} argument names --
+     * best effort, silently ignoring anything that fails to parse as a UUID -- purely so that
+     * denial can still be attributed to the chat(s) it was actually about. Never used for
+     * authorization; only {@code guarded}'s real, validated parsing inside {@code body} is.
+     */
+    private static List<UUID> bestEffortChatIds(McpSchema.CallToolRequest request) {
+        List<UUID> ids = new ArrayList<>();
+        Object single = request.arguments().get("chat_id");
+        if (single instanceof String text) {
+            parseUuid(text).ifPresent(ids::add);
+        }
+        Object many = request.arguments().get("chat_ids");
+        if (many instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof String text) {
+                    parseUuid(text).ifPresent(ids::add);
+                }
+            }
+        }
+        return ids;
+    }
+
+    private static java.util.Optional<UUID> parseUuid(String text) {
+        try {
+            return java.util.Optional.of(UUID.fromString(text));
+        }
+        catch (IllegalArgumentException ex) {
+            return java.util.Optional.empty();
         }
     }
 

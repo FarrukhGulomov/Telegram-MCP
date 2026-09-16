@@ -77,6 +77,15 @@ class RateLimitAndResponseCapTests extends AbstractIntegrationTest {
 
         assertThat(limited).as("the budget is finite").isNotNull();
         assertThat(errorCode(limited)).isEqualTo("RATE_LIMITED");
+
+        // Security-audit finding SEC-15: a rate-limit rejection happens before McpTools.guarded
+        // ever runs the tool body that would normally report which chat(s) a request named --
+        // this asserts the best-effort fallback still attributes the resulting audit row to the
+        // chat the rejected call actually named, rather than leaving it unattributed.
+        List<java.util.UUID> rateLimitedChatIds = this.jdbcTemplate.queryForList(
+                "SELECT chat_id FROM audit_events WHERE tenant_id = ? AND action = 'MCP_RATE_LIMITED'",
+                java.util.UUID.class, chat.team().tenant().id());
+        assertThat(rateLimitedChatIds).contains(chat.chat().id());
     }
 
     // --- response byte cap -----------------------------------------------------------------

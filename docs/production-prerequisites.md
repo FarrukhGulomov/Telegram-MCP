@@ -130,6 +130,21 @@ Also outstanding:
   authorization checks. This depends on the specific hosting provider's administrative
   access model, so it is left as an operational task rather than a migration this codebase
   applies for you.
+- **Audit transaction consistency and append-only storage (security-audit finding SEC-15).**
+  `AuditService.record` runs in its own `REQUIRES_NEW` transaction specifically so an audit
+  row survives a caller's later rollback (finding F20) -- the flip side is that a state-changing
+  service which records `ALLOWED` (or a successful outcome) before its own surrounding
+  transaction commits can leave that row saying a change succeeded when the enclosing
+  transaction still fails afterward. A correct fix is a transaction-consistent outbox (decision,
+  attempt, and committed-outcome recorded as distinct events, or an after-commit hook) rather
+  than a same-transaction write, and is a larger design change than this pass attempts. Two
+  related gaps: the database role this application connects as has ordinary `INSERT`/`UPDATE`
+  privileges on `audit_events`, not a restricted append-only grant enforced at the database
+  level (see the role-separation gap above); and nested `REQUIRES_NEW` audit transactions each
+  borrow a connection from the same pool (`spring.datasource.hikari.maximum-pool-size: 10`) as
+  the surrounding request, so a burst of concurrent state-changing calls could exhaust it while
+  waiting on their own audit write -- this needs load testing against a real deployment's
+  expected concurrency, not a change this codebase can safely make blind.
 
 ## 4. Safety interlocks currently in place
 
@@ -162,3 +177,8 @@ Also outstanding:
   full, further updates apply backpressure to the native receive loop itself instead of being
   dropped or accumulating without limit, so a busy account or a slow listener cannot exhaust
   memory.
+- `McpTools.guarded` (security-audit finding SEC-15) now attributes a rate-limit rejection to
+  the chat(s) the raw request named even though that happens before argument parsing runs, and
+  inspects the returned `CallToolResult`'s error flag so a structured error result is recorded
+  as `ERROR` rather than `ALLOWED`; a generic runtime failure is now also recorded as a
+  structured `ERROR` audit event rather than only logged.
