@@ -157,3 +157,8 @@ Also outstanding:
   `TrustedForwardedHostFilter` then rejects any request whose effective host is not one of
   them. This is a defense-in-depth check, not a substitute for keeping the application port
   unreachable except through the intended proxy.
+- The TDLib update listener dispatch queue (security-audit finding SEC-14) is bounded rather
+  than the unbounded default a plain `Executors.newSingleThreadExecutor()` would give it: once
+  full, further updates apply backpressure to the native receive loop itself instead of being
+  dropped or accumulating without limit, so a busy account or a slow listener cannot exhaust
+  memory.

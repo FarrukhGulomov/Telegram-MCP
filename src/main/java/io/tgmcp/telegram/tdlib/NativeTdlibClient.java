@@ -3,12 +3,13 @@ package io.tgmcp.telegram.tdlib;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -46,6 +47,20 @@ public class NativeTdlibClient implements TdlibClient {
     private static final Logger log = LoggerFactory.getLogger(NativeTdlibClient.class);
     private static final double RECEIVE_TIMEOUT_SECONDS = 1.0;
 
+    /**
+     * Security-audit finding SEC-14: {@code Executors.newSingleThreadExecutor()} backs its
+     * queue with an unbounded {@code LinkedBlockingQueue} -- a busy upstream account, a slow
+     * database write inside a listener, or a listener blocked making its own synchronous {@link
+     * #request} could accumulate unbounded work here, since every update TDLib sends is
+     * unconditionally enqueued before any adapter gets a chance to decide it is irrelevant. This
+     * caps the queue instead.
+     */
+    private static final int LISTENER_QUEUE_CAPACITY = 10_000;
+
+    /** Throttles the backpressure warning below so a sustained overload logs a signal an
+     * operator can act on, not a log flood that makes the underlying slowdown worse. */
+    private static final long BACKPRESSURE_WARNING_INTERVAL_MILLIS = TimeUnit.SECONDS.toMillis(10);
+
     private final TdJsonLibrary library;
     private final ObjectMapper objectMapper;
     private final int clientId;
@@ -56,25 +71,45 @@ public class NativeTdlibClient implements TdlibClient {
     private final AtomicLong extraSequence = new AtomicLong();
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicLong lastBackpressureWarningAt = new AtomicLong();
+    private final int listenerQueueCapacity;
     private final Thread receiveThread;
-    private final ExecutorService listenerExecutor =
-            Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "tdlib-listener");
-                t.setDaemon(true);
-                return t;
-            });
+    /**
+     * Bounded, single-threaded, and never drops a task: once the queue is full, {@link
+     * #onListenerQueueSaturated} runs the update on the submitting thread (the native receive
+     * thread) instead, which naturally slows {@code td_receive} draining until the listener
+     * catches up rather than accumulating unbounded backlog or silently discarding an update --
+     * including an authorization-state or deletion update -- to make room for it.
+     */
+    private final ExecutorService listenerExecutor;
 
     public NativeTdlibClient(String libraryName, ObjectMapper objectMapper, long requestTimeoutSeconds) {
         this(Native.load(libraryName, TdJsonLibrary.class), objectMapper, requestTimeoutSeconds);
     }
 
     NativeTdlibClient(TdJsonLibrary library, ObjectMapper objectMapper, long requestTimeoutSeconds) {
+        this(library, objectMapper, requestTimeoutSeconds, LISTENER_QUEUE_CAPACITY);
+    }
+
+    /** Package-visible so tests can shrink {@code listenerQueueCapacity} to exercise saturation
+     * without pushing thousands of updates through a fake library. */
+    NativeTdlibClient(TdJsonLibrary library, ObjectMapper objectMapper, long requestTimeoutSeconds,
+                      int listenerQueueCapacity) {
         this.library = library;
         this.objectMapper = objectMapper;
         this.requestTimeoutSeconds = requestTimeoutSeconds;
         this.clientId = library.td_create_client_id();
+        this.listenerQueueCapacity = listenerQueueCapacity;
         this.receiveThread = new Thread(this::receiveLoop, "tdlib-receive");
         this.receiveThread.setDaemon(true);
+        this.listenerExecutor = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(listenerQueueCapacity),
+                r -> {
+                    Thread t = new Thread(r, "tdlib-listener");
+                    t.setDaemon(true);
+                    return t;
+                },
+                this::onListenerQueueSaturated);
     }
 
     /**
@@ -127,6 +162,26 @@ public class NativeTdlibClient implements TdlibClient {
     @Override
     public void onUpdate(Consumer<JsonNode> listener) {
         this.updateListeners.add(listener);
+    }
+
+    /**
+     * Security-audit finding SEC-14: invoked by {@link #listenerExecutor} once {@link
+     * #LISTENER_QUEUE_CAPACITY} is exceeded. Running the task on the calling thread (the native
+     * receive loop) rather than a pool thread applies backpressure to {@code td_receive} itself
+     * -- the receive loop cannot fetch the next update until this one is dispatched -- so a slow
+     * or blocked listener throttles ingestion instead of this process accumulating unbounded
+     * memory or dropping an update to make room.
+     */
+    private void onListenerQueueSaturated(Runnable task, ThreadPoolExecutor executor) {
+        long now = System.currentTimeMillis();
+        long last = this.lastBackpressureWarningAt.get();
+        if (now - last > BACKPRESSURE_WARNING_INTERVAL_MILLIS
+                && this.lastBackpressureWarningAt.compareAndSet(last, now)) {
+            log.warn("TDLib update listener queue is saturated (capacity {}); applying backpressure "
+                    + "to the native receive loop instead of dropping updates or growing unbounded. "
+                    + "A slow or blocked update listener is the likely cause.", this.listenerQueueCapacity);
+        }
+        task.run();
     }
 
     private void receiveLoop() {

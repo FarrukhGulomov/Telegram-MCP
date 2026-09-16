@@ -6,6 +6,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -186,6 +187,70 @@ class NativeTdlibClientTests {
                 expected.add("method-" + i);
             }
             assertThat(methods).containsExactlyInAnyOrderElementsOf(expected);
+        }
+        finally {
+            client.close();
+        }
+    }
+
+    /**
+     * Security-audit finding SEC-14: the listener dispatch queue used to be an unbounded {@code
+     * LinkedBlockingQueue} (via {@code Executors.newSingleThreadExecutor()}), so a listener
+     * blocked while updates keep arriving could accumulate unbounded work. Uses the
+     * package-visible constructor to shrink the queue to a size a test can actually overflow,
+     * and deliberately blocks the listener on the very first update while a burst well past
+     * that capacity is pushed.
+     */
+    @Test
+    void aSustainedBurstWithABlockedListenerNeitherDropsUpdatesNorKillsTheReceiveThread()
+            throws InterruptedException {
+        int queueCapacity = 8;
+        int burstSize = queueCapacity * 5;
+        FakeTdJsonLibrary fake = new FakeTdJsonLibrary();
+        NativeTdlibClient client = new NativeTdlibClient(fake, new ObjectMapper(), REQUEST_TIMEOUT_SECONDS,
+                queueCapacity);
+
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        AtomicInteger firstSeen = new AtomicInteger();
+        AtomicInteger delivered = new AtomicInteger();
+        client.onUpdate(update -> {
+            if (firstSeen.getAndIncrement() == 0) {
+                try {
+                    // Deliberately blocked: exactly the "slow or blocked listener" scenario the
+                    // audit finding describes, held well past the time it takes to enqueue (or,
+                    // once the bounded queue is full, run via backpressure) the rest of the
+                    // burst below.
+                    releaseFirst.await(10, TimeUnit.SECONDS);
+                }
+                catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            delivered.incrementAndGet();
+        });
+        client.start();
+
+        for (int i = 0; i < burstSize; i++) {
+            fake.push("{\"@type\":\"updateOption\",\"n\":" + i + "}");
+        }
+
+        try {
+            // The queue (capacity 8) plus the one already dispatched to the blocked listener
+            // cannot hold all 40 updates; the remainder must be applying backpressure to the
+            // receive thread (CallerRunsPolicy) rather than being rejected or dropped. If
+            // execute() had instead thrown RejectedExecutionException, it would have propagated
+            // out of receiveLoop() uncaught and silently killed the receive thread -- in which
+            // case the wait below would time out with delivered stuck well short of burstSize.
+            releaseFirst.countDown();
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (delivered.get() < burstSize && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertThat(delivered.get())
+                    .as("every update in the burst must eventually be delivered -- backpressure, "
+                            + "not silent loss, is how a bounded queue must behave here")
+                    .isEqualTo(burstSize);
         }
         finally {
             client.close();
