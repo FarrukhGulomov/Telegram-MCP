@@ -205,12 +205,25 @@ public class ChatActivationService {
                 Map.of("reason", reason, "messagesDeleted", deleted));
     }
 
-    /** Explicit "delete my data" without changing the activation state. */
+    /**
+     * Explicit "delete my data" without changing the activation state.
+     *
+     * <p>Security-audit finding SEC-16: this used to also reset the sync checkpoint, which
+     * marks a chat's backfill as never having happened -- the very next scheduled or manual
+     * sync then treated an ACTIVE chat as brand new and silently re-backfilled the exact
+     * content just deleted. The checkpoint is left untouched instead: {@link
+     * io.tgmcp.sync.ChatSyncService#sync} already skips backfill once {@code
+     * backfillComplete()} is true and only ever pulls messages newer than {@code
+     * newestSyncedMessageId} going forward, so leaving it in place functions as the erasure
+     * watermark the deleted range needs -- the chat keeps capturing new messages (this is a
+     * live account still generating traffic, not a stop), but nothing re-imports what was
+     * just erased. Revoking access entirely, rather than only clearing what's stored so far,
+     * is {@link #revoke}.
+     */
     @Transactional
     public int deleteStoredData(AuthenticatedActor actor, UUID chatId) {
         require(actor, chatId);
         int deleted = this.messageRepository.deleteForChat(actor.tenantId(), chatId);
-        this.checkpointRepository.reset(actor.tenantId(), chatId);
         this.auditService.record(actor, AuditAction.DATA_DELETED, chatId, AuditService.ALLOWED,
                 Map.of("messagesDeleted", deleted, "requestedBy", "operator"));
         return deleted;

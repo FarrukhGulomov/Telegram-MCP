@@ -182,3 +182,8 @@ Also outstanding:
   inspects the returned `CallToolResult`'s error flag so a structured error result is recorded
   as `ERROR` rather than `ALLOWED`; a generic runtime failure is now also recorded as a
   structured `ERROR` audit event rather than only logged.
+- `ChatActivationService.deleteStoredData` (security-audit finding SEC-16) no longer resets the
+  sync checkpoint, so a chat left `ACTIVE` after an explicit data deletion does not have its
+  erased history silently re-backfilled by the next sync; only genuinely new messages are
+  captured going forward. The management UI now describes this action and `Revoke` separately,
+  rather than presenting both as an equally permanent "done with this chat for good" action.

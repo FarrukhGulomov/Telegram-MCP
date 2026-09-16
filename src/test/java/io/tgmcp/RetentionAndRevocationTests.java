@@ -387,6 +387,29 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
                 .orElseThrow().state()).isEqualTo(ActivationState.ACTIVE);
     }
 
+    /**
+     * Security-audit finding SEC-16: deleteStoredData used to also reset the sync checkpoint,
+     * which marks a chat as never having been backfilled -- the very next sync (scheduled or,
+     * as here, manually triggered by an operator) then silently re-backfilled the exact
+     * content that was just deleted, making "delete stored data" not actually delete anything
+     * durably for a chat left ACTIVE. The checkpoint must survive the deletion so backfill
+     * stays marked complete and only genuinely new messages are captured going forward.
+     */
+    @Test
+    void deletedDataIsNotReimportedByARunAfterTheDeletion() {
+        Fixtures.ReadyChat chat = synced();
+        assertThat(this.messages.countForChat(chat.team().tenant().id(), chat.chat().id())).isPositive();
+
+        this.activationService.deleteStoredData(chat.team().actor(), chat.chat().id());
+        assertThat(this.messages.countForChat(chat.team().tenant().id(), chat.chat().id())).isZero();
+
+        this.syncService.sync(chat.team().tenant().id(), chat.chat().id());
+
+        assertThat(this.messages.countForChat(chat.team().tenant().id(), chat.chat().id()))
+                .as("a sync run after an explicit delete must not silently reimport the erased history")
+                .isZero();
+    }
+
     @Test
     void reportsCoverageHonestlyAfterRetentionHasTrimmedHistory() {
         Fixtures.ReadyChat chat = synced();
