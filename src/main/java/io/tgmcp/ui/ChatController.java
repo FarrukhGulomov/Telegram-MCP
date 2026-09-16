@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -119,26 +120,55 @@ public class ChatController {
         return "redirect:/chats/" + chatId;
     }
 
-    @PostMapping("/chats/{chatId}/consent")
-    public String consent(@PathVariable UUID chatId,
-                          @RequestParam long participantTgUserId,
-                          @RequestParam String participantDisplayName,
-                          @RequestParam ConsentMethod method,
-                          @RequestParam(required = false) String evidenceRef,
-                          RedirectAttributes redirectAttributes) {
+    /**
+     * Records consent for every participant in one submission, instead of requiring an
+     * administrator to press a separate button per row. Each participant still carries its own
+     * {@code method}/{@code evidenceRef} (the form renders one input pair per row, all bound to
+     * this single {@code id="consent-all-form"} via the HTML5 {@code form} attribute rather than
+     * DOM nesting) -- this only removes the per-row *button*, not the per-participant evidence
+     * that {@link ConsentService#record} still requires for {@code SIGNED_ATTESTATION}. The four
+     * parameter lists are aligned by list index, which Spring binds correctly as long as the
+     * template renders all four inputs from the same {@code th:each} iteration in the same order.
+     */
+    @PostMapping("/chats/{chatId}/consent/all")
+    public String consentAll(@PathVariable UUID chatId,
+                             @RequestParam(required = false) List<Long> participantTgUserId,
+                             @RequestParam(required = false) List<String> participantDisplayName,
+                             @RequestParam(required = false) List<ConsentMethod> method,
+                             @RequestParam(required = false) List<String> evidenceRef,
+                             RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = this.currentActor.requireAdmin();
+        List<Long> tgUserIds = participantTgUserId == null ? List.of() : participantTgUserId;
+        if (tgUserIds.isEmpty()) {
+            redirectAttributes.addFlashAttribute("error",
+                    Messages.text(this.messages, "chat.consentAll.noParticipants"));
+            return "redirect:/chats/" + chatId;
+        }
         var activation = this.activationService.find(actor, chatId)
                 .orElseThrow(() -> new IllegalArgumentException("validation.selectChatFirst"));
-        try {
-            this.consentService.record(actor, chatId, participantTgUserId, participantDisplayName,
-                    activation.purpose(), activation.providerScope(), activation.consentVersion(),
-                    activation.contextRevision(), method, evidenceRef,
-                    Instant.now().plus(this.properties.consent().defaultValidity()));
-            redirectAttributes.addFlashAttribute("message",
-                    Messages.text(this.messages, "chat.consent.success", participantDisplayName));
+
+        int recorded = 0;
+        List<String> failures = new ArrayList<>();
+        for (int i = 0; i < tgUserIds.size(); i++) {
+            String displayName = participantDisplayName.get(i);
+            try {
+                this.consentService.record(actor, chatId, tgUserIds.get(i), displayName,
+                        activation.purpose(), activation.providerScope(), activation.consentVersion(),
+                        activation.contextRevision(), method.get(i), evidenceRef.get(i),
+                        Instant.now().plus(this.properties.consent().defaultValidity()));
+                recorded++;
+            }
+            catch (IllegalArgumentException ex) {
+                failures.add(displayName + ": " + Messages.text(this.messages, ex.getMessage()));
+            }
         }
-        catch (IllegalArgumentException ex) {
-            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+        if (failures.isEmpty()) {
+            redirectAttributes.addFlashAttribute("message",
+                    Messages.text(this.messages, "chat.consentAll.success", recorded));
+        }
+        else {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "chat.consentAll.partial",
+                    recorded, String.join("; ", failures)));
         }
         return "redirect:/chats/" + chatId;
     }

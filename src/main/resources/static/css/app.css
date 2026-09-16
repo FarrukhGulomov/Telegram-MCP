@@ -49,6 +49,20 @@ h3 { font-size: 15px; margin: 20px 0 8px; }
   padding: 16px; margin-bottom: 16px;
 }
 .card.danger { border-color: #f0c4c0; }
+.card.ok { border-color: #a9d9bd; }
+
+/* A single focused step (connect.html): a narrower card with a larger, easier-to-hit input
+   and button than the dense management forms elsewhere, since this is a one-field-at-a-time
+   flow rather than a settings form. */
+.step-card { max-width: 420px; }
+.step-card input[type="text"],
+.step-card input[type="tel"],
+.step-card input[type="password"] {
+  font-size: 18px; padding: 10px 12px; letter-spacing: 0.4px;
+}
+.step-card button[type="submit"] { padding: 10px 16px; font-size: 15px; margin-top: 4px; }
+
+.status-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
 
 table { width: 100%; border-collapse: collapse; background: var(--card); font-size: 14px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -93,3 +107,5 @@ button.link { background: none; border: none; color: var(--accent); padding: 0; 
 
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
 .qr code { display: block; padding: 8px; background: #f1f3f6; border-radius: 6px; }
+
+[hidden] { display: none !important; }

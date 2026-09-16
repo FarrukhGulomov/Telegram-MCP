@@ -145,21 +145,23 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
         assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
                 .isEqualTo(ActivationState.AWAITING_CONSENT);
 
-        // 7. Record consent per participant. Bots are not asked.
+        // 7. Record consent for every non-bot participant in one bulk submission, matching the
+        // management UI's single shared "record consent for everyone" button (one form, one
+        // input group per participant, no per-row submit).
         List<ChatParticipant> people = this.participants.findActive(team.tenant().id(), engineering.id());
         assertThat(people).hasSize(5);
+        var consentAll = post("/chats/" + engineering.id() + "/consent/all").session(session).with(csrf());
         for (ChatParticipant person : people) {
             if (person.bot()) {
                 continue;
             }
-            this.mockMvc.perform(post("/chats/" + engineering.id() + "/consent")
-                            .session(session).with(csrf())
-                            .param("participantTgUserId", String.valueOf(person.tgUserId()))
-                            .param("participantDisplayName", person.displayName())
-                            .param("method", "DEMO_SYNTHETIC")
-                            .param("evidenceRef", "synthetic demo consent"))
-                    .andExpect(status().is3xxRedirection());
+            consentAll = consentAll
+                    .param("participantTgUserId", String.valueOf(person.tgUserId()))
+                    .param("participantDisplayName", person.displayName())
+                    .param("method", "DEMO_SYNTHETIC")
+                    .param("evidenceRef", "synthetic demo consent");
         }
+        this.mockMvc.perform(consentAll).andExpect(status().is3xxRedirection());
 
         // 8. Now activation succeeds.
         this.mockMvc.perform(post("/chats/" + engineering.id() + "/activate").session(session).with(csrf()))

@@ -124,25 +124,31 @@
       </ul>
     </div>
 
+    <!-- One shared form for every participant's consent, submitted by the single button below
+         the table -- each row keeps its own method/evidence inputs (bound here via the form=
+         attribute rather than DOM nesting, since a <form> cannot legally contain another) so
+         evidence still names the specific person it is about, but recording is one action for
+         everyone instead of one click per row. -->
+    <form id="consent-all-form" th:action="@{'/chats/' + ${view.chat.id} + '/consent/all'}" method="post"
+          data-guard-resubmit></form>
+
     <table>
       <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
         <th th:text="#{chat.participantsTable.telegramId}">Telegram id</th>
-        <th th:text="#{chat.participantsTable.recordConsent}">Record consent</th><th></th></tr></thead>
+        <th th:text="#{chat.participantsTable.recordConsent}">Consent evidence</th><th></th></tr></thead>
       <tbody>
       <tr th:each="p : ${participants}">
         <td th:text="${p.displayName}"></td>
         <td><code th:text="${p.tgUserId}"></code></td>
         <td>
-          <form th:action="@{'/chats/' + ${view.chat.id} + '/consent'}" method="post" data-guard-resubmit class="inline">
-            <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
-            <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
-            <select name="method">
-              <option value="SIGNED_ATTESTATION" th:text="#{chat.consentMethod.evidence}">Recorded from evidence</option>
-              <option th:if="${demoMode}" value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
-            </select>
-            <input name="evidenceRef" th:placeholder="#{chat.evidenceRef.placeholder}" maxlength="300">
-            <button type="submit" th:text="#{chat.record.button}">Record</button>
-          </form>
+          <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}" form="consent-all-form">
+          <input type="hidden" name="participantDisplayName" th:value="${p.displayName}" form="consent-all-form">
+          <select name="method" form="consent-all-form">
+            <option value="SIGNED_ATTESTATION" th:text="#{chat.consentMethod.evidence}">Recorded from evidence</option>
+            <option th:if="${demoMode}" value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
+          </select>
+          <input name="evidenceRef" th:placeholder="#{chat.evidenceRef.placeholder}" maxlength="300"
+                 form="consent-all-form">
         </td>
         <td>
           <form th:action="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" method="post" data-guard-resubmit class="inline">
@@ -151,8 +157,13 @@
           </form>
         </td>
       </tr>
+      <tr th:if="${#lists.isEmpty(participants)}">
+        <td colspan="4" class="muted" th:text="#{chat.participantsTable.empty}">No participants known yet.</td>
+      </tr>
       </tbody>
     </table>
+    <button type="submit" form="consent-all-form" th:if="${!#lists.isEmpty(participants)}"
+            th:text="#{chat.consentAll.button}">Record consent for everyone</button>
 
     <h3 th:text="#{chat.recordedConsents.title}">Recorded consents</h3>
     <table>
