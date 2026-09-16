@@ -1,0 +1,21 @@
+version: 2
+
+# Security-audit finding SEC-18: "dependency ... scans" -- kept as Dependabot rather than a
+# custom CI step since it needs no additional tooling, runs on GitHub's own infrastructure, and
+# opens PRs directly rather than only reporting.
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

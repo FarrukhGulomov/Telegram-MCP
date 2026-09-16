@@ -1,0 +1,80 @@
+name: CI
+
+# Security-audit finding SEC-18: the tracked repository had no CI at all, and the Dockerfile
+# packages a release image with -DskipTests -- a reproducible build could succeed while a
+# security regression test failed, with nothing to catch it before the image shipped. This is
+# the required gate: the full Java test suite (which includes every security-audit regression
+# test added across the F01-F20 and SEC-01-SEC-16 remediation passes) must pass against a real
+# PostgreSQL instance before a release image is even built.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Java 21, PostgreSQL 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tgmcp
+          POSTGRES_PASSWORD: tgmcp
+          POSTGRES_DB: tgmcp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tgmcp -d tgmcp_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+
+      - name: Run the full test suite
+        env:
+          TGMCP_TEST_DB_URL: jdbc:postgresql://localhost:5432/tgmcp_test
+          TGMCP_TEST_DB_USER: tgmcp
+          TGMCP_TEST_DB_PASSWORD: tgmcp
+        run: mvn -B test
+
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports
+          retention-days: 14
+
+  docker-build:
+    name: Build release image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (not pushed)
+        run: docker build -t telegram-consent-mcp:ci .
+
+      # Security-audit finding SEC-18: dependency and container scanning. Report-only for now
+      # (exit-code 0) -- this is the first pass at wiring scanning in at all, and turning it
+      # into a hard merge gate needs the findings triaged first (see
+      # docs/production-prerequisites.md) so day-one noise doesn't make the gate impractical.
+      - name: Scan image for known vulnerabilities (report-only)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: telegram-consent-mcp:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '0'

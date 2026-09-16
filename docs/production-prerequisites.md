@@ -145,6 +145,16 @@ Also outstanding:
   the surrounding request, so a burst of concurrent state-changing calls could exhaust it while
   waiting on their own audit write -- this needs load testing against a real deployment's
   expected concurrency, not a change this codebase can safely make blind.
+- **Release pipeline coverage beyond the test gate (security-audit finding SEC-18).** CI now
+  enforces the test suite and builds a report-only container vulnerability scan (Trivy,
+  `CRITICAL,HIGH`, non-blocking); it does not yet: fail the build on unresolved High/Critical
+  findings (this needs the current findings triaged first, so day-one noise doesn't make the
+  gate impractical); run targeted concurrency/race tests as their own suite; generate an SBOM;
+  verify TDLib native-library provenance; publish images by immutable digest with signing
+  (e.g. cosign) rather than a mutable tag; or enforce branch protection requiring this workflow
+  to pass before merge, which is a GitHub repository setting outside this codebase's control.
+  These are real gaps in the audit's fuller remediation, left as explicit operational follow-up
+  rather than pipeline steps added without anything to verify them against in this environment.
 
 ## 4. Safety interlocks currently in place
 
@@ -187,3 +197,7 @@ Also outstanding:
   erased history silently re-backfilled by the next sync; only genuinely new messages are
   captured going forward. The management UI now describes this action and `Revoke` separately,
   rather than presenting both as an equally permanent "done with this chat for good" action.
+- `.github/workflows/ci.yml` (security-audit finding SEC-18) now runs the full test suite
+  against a real PostgreSQL service container on every push and pull request, and a separate
+  job builds the release Docker image only once that suite has passed. Dependabot
+  (`.github/dependabot.yml`) watches Maven, Docker base image, and Action dependencies weekly.
