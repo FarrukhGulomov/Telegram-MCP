@@ -50,6 +50,18 @@ public final class TdlibErrors {
             return new TelegramPermissionException("Chat is not readable by the connected account (code "
                     + code + ")");
         }
+        if (code == 400 && "Chat not found".equals(message)) {
+            // Real-account testing found this exact message coming back from getChat and
+            // getChatHistory for a chat this TDLib session has not yet loaded into its runtime
+            // chat list -- true for every chat right after a process restart, even one this
+            // app has read before, since TDLib's on-disk chat-info database does not by itself
+            // make a chat reachable by id until loadChats/getChats has run at least once this
+            // session (see TdlibTelegramGateway.warmChatList()). That is a transient condition,
+            // not a malformed request: retrying after the list has been warmed succeeds. Mapping
+            // it to TelegramPermissionException like every other code-400 below halted sync
+            // permanently on the very first attempt after every restart.
+            return new TelegramTransientException("Telegram could not find the chat (code 400)");
+        }
         if (code == 400) {
             // Bad request: retrying an identical malformed request cannot help.
             return new TelegramPermissionException("Telegram rejected the request (code 400)");

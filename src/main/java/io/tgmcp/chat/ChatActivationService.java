@@ -23,6 +23,8 @@ import io.tgmcp.telegram.gateway.RemoteParticipant;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.tenancy.AuthenticatedActor;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +38,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class ChatActivationService {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatActivationService.class);
 
     private final ChatRepository chatRepository;
     private final ChatActivationRepository activationRepository;
@@ -281,10 +285,22 @@ public class ChatActivationService {
         Optional<TelegramConnection> connection =
                 this.connectionRepository.find(actor.tenantId(), chat.connectionId());
         if (connection.isEmpty() || !connection.get().ready()) {
+            // Temporary diagnostic: real-account testing found a chat whose participant list
+            // stayed empty across every fix so far, with zero corresponding TDLib request logs
+            // at any point -- meaning this early return, not listParticipants() itself, is what
+            // actually runs. Logging exactly which half of the condition is true settles it
+            // instead of guessing again.
+            log.info("importParticipants skipped for chat {}: connectionId={} connectionFound={} ready={}",
+                    chat.id(), chat.connectionId(), connection.isPresent(),
+                    connection.map(TelegramConnection::ready).orElse(null));
             return this.participantRepository.findActive(actor.tenantId(), chat.id());
         }
+        log.info("importParticipants calling listParticipants for chat {} (tgChatId={})",
+                chat.id(), chat.tgChatId());
         RemoteMembership membership = this.gateway.listParticipants(connection.get().ref(),
                 chat.tgChatId());
+        log.info("importParticipants got {} participant(s) for chat {} (complete={})",
+                membership.participants().size(), chat.id(), membership.complete());
         // Security-audit finding SEC-02: an incomplete result (a pagination safety cap, or any
         // other reason the source could not confirm every member was seen) must never be
         // upserted as if it were the whole membership -- that would silently narrow who needs

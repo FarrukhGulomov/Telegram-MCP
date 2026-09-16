@@ -26,6 +26,7 @@ import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.gateway.TelegramPermissionException;
+import io.tgmcp.telegram.gateway.TelegramTransientException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -158,6 +159,13 @@ public class TdlibTelegramGateway implements TelegramGateway {
             return;
         }
         JsonNode state = update.path("authorization_state");
+        // Real-account testing found that quieting TDLib's own very noisy native logging
+        // (necessary -- see NativeTdlibClient -- since it was flooding Railway's log pipe past
+        // its rate limit) also silently removed the only visibility into which stage a login
+        // attempt actually reached. This one line, at the application's own log level rather
+        // than TDLib's, replaces it: one line per real transition, never per-file/per-reaction
+        // engine noise.
+        log.info("TDLib authorization state changed to {}", state.path("@type").asString("unknown"));
         LoginState mapped = mapAuthorizationState(state);
         // Security-audit finding F13: authorizationStateReady on its own carries no account
         // identity. Fetching it here -- rather than leaving tgUserId/tgUsername null until
@@ -167,6 +175,28 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // thread specifically so a listener may call request() itself.
         if (mapped.stage() == LoginStage.READY) {
             mapped = withAccountIdentity(mapped);
+            // Real-account testing found every per-chat call (getChat, and so getChatHistory
+            // and listParticipants which both start from it) fail with "Chat not found" for a
+            // chat this TDLib session has not yet loaded into its runtime chat list -- true for
+            // every chat right after each process restart, even one this app already knows
+            // about from a previous session, because loadChats/getChats populate an in-memory
+            // list separate from TDLib's own on-disk chat-info database. Until an operator
+            // happened to click "Refresh chat list" (the only place this was previously called),
+            // every already-activated chat's sync and participant refresh failed outright and
+            // TdlibErrors.translate() maps that 400 to a permission failure, halting sync -- so
+            // an MCP client connecting right after a restart saw an ACTIVE chat with nothing
+            // ever synced into it. Warming the list here, once per session, as soon as it is
+            // possible to call anything at all, removes the dependency on that manual click.
+            // Best-effort, like withAccountIdentity just above: a failure here must not stop
+            // this READY transition itself from being recorded, since the ordinary "Refresh
+            // chat list" button remains a fallback path to the same warmed state.
+            try {
+                warmChatList();
+            }
+            catch (RuntimeException ex) {
+                log.warn("Reached authorizationStateReady but could not warm the chat list: {}",
+                        ex.getClass().getSimpleName());
+            }
         }
         this.loginState.set(mapped);
         if ("authorizationStateWaitTdlibParameters".equals(state.path("@type").asString(""))) {
@@ -290,15 +320,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
     @Override
     public List<RemoteChat> listAvailableChats(ConnectionRef ref) {
         requireCurrentOwner(ref);
-        // loadChats populates the local chat list; getChats then reports it.
-        try {
-            this.client.request("loadChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
-        }
-        catch (TelegramPermissionException ignored) {
-            // TDLib answers 404 when the list is already fully loaded; that is not a failure.
-        }
-        JsonNode chats = this.client.request("getChats",
-                Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
+        JsonNode chats = warmChatList();
 
         List<RemoteChat> result = new ArrayList<>();
         for (JsonNode idNode : chats.path("chat_ids")) {
@@ -306,6 +328,29 @@ public class TdlibTelegramGateway implements TelegramGateway {
             result.add(toRemoteChat(chat));
         }
         return List.copyOf(result);
+    }
+
+    /**
+     * Populates TDLib's runtime chat list (a separate, in-memory concept from its own on-disk
+     * chat-info database -- see the caller in {@link #handleUpdate}) and returns what {@code
+     * getChats} reports for it, so every chat this account can see becomes reachable by {@code
+     * getChat}/{@code getChatHistory} afterward. Safe and cheap to call more than once per
+     * session: once the list is fully loaded, {@code loadChats} answers 404 ("Not Found"), which
+     * is documented TDLib behaviour for "nothing left to load", not a failure.
+     */
+    private JsonNode warmChatList() {
+        try {
+            this.client.request("loadChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
+        }
+        catch (TelegramTransientException ignored) {
+            // TdlibErrors.translate() has no specific mapping for code 404 (it is neither a
+            // flood wait, an auth failure, a permission failure, nor a malformed request), so it
+            // falls through to TelegramTransientException -- not TelegramPermissionException,
+            // which this catch clause caught until real-account testing hit exactly this path
+            // and found the "refresh chat list" button crashing every single time with that 404
+            // propagating straight out to the generic error page, uncaught.
+        }
+        return this.client.request("getChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
     }
 
     RemoteChat toRemoteChat(JsonNode chat) {
@@ -324,10 +369,55 @@ public class TdlibTelegramGateway implements TelegramGateway {
         requireCurrentOwner(ref);
         JsonNode chat = this.client.request("getChat", Map.of("chat_id", tgChatId));
         JsonNode type = chat.path("type");
-        if (!"chatTypeSupergroup".equals(type.path("@type").asString(""))) {
-            // Basic groups and private chats do not expose a member list through this call --
-            // confirmed empty, not unverifiable, so this is complete as far as this method can
-            // ever observe for these chat types.
+        String chatType = type.path("@type").asString("");
+
+        if ("chatTypePrivate".equals(chatType)) {
+            // A private chat's only counterpart is named directly in the chat's own `type` --
+            // there is no separate members call for it the way getSupergroupMembers is for a
+            // supergroup. Real-account testing found this case entirely unhandled: treating it
+            // like a type with no member list at all left the participant table permanently
+            // empty for any 1-on-1 chat, so there was never a row to record that person's
+            // consent against, and the chat could never leave AWAITING_CONSENT. Naming that one
+            // counterpart directly is itself the complete membership -- nothing paginated or
+            // permission-gated can make it any more or less verified than this.
+            Map<Long, RemoteParticipant> result = new LinkedHashMap<>();
+            addParticipant(result, type.path("user_id").asLong());
+            return RemoteMembership.complete(List.copyOf(result.values()));
+        }
+        if ("chatTypeBasicGroup".equals(chatType)) {
+            // A plain (non-super) group has no separate paginated members call -- TDLib caps it
+            // at 200 members and returns the whole roster in one shot via getBasicGroupFullInfo.
+            // Real-account testing found this case entirely unwired: every basic group's
+            // participant table stayed permanently empty, so ConsentCoverage.noParticipantsKnown()
+            // never had anyone to grant consent against and the chat could never leave
+            // AWAITING_CONSENT -- indistinguishable, from the operator's side, from "consent
+            // cannot be granted at all" for that group.
+            long basicGroupId = type.path("basic_group_id").asLong();
+            Map<Long, RemoteParticipant> result = new LinkedHashMap<>();
+            JsonNode info;
+            try {
+                info = this.client.request("getBasicGroupFullInfo", Map.of("basic_group_id", basicGroupId));
+            }
+            catch (TelegramPermissionException ex) {
+                // Security-audit finding SEC-02: unlike the private-chat case above, this is a
+                // source that refused to answer at all, not a confirmed-empty roster -- treating
+                // it as complete would let consent coverage look satisfied for zero participants
+                // when the truth is simply unknown.
+                return RemoteMembership.incomplete(List.of());
+            }
+            for (JsonNode member : info.path("members")) {
+                JsonNode senderId = member.path("member_id");
+                if ("messageSenderUser".equals(senderId.path("@type").asString(""))) {
+                    addParticipant(result, senderId.path("user_id").asLong());
+                }
+            }
+            return RemoteMembership.complete(List.copyOf(result.values()));
+        }
+        if (!"chatTypeSupergroup".equals(chatType)) {
+            // Any other chat type (e.g. a channel, handled separately -- see ChatSyncService)
+            // exposes no member list this method could ever verify one way or the other; a
+            // confirmed-empty, complete result for a type with no equivalent of "consent-
+            // relevant membership" at all.
             return RemoteMembership.complete(List.of());
         }
         long supergroupId = type.path("supergroup_id").asLong();
@@ -339,15 +429,34 @@ public class TdlibTelegramGateway implements TelegramGateway {
         Map<Long, RemoteParticipant> result = new LinkedHashMap<>();
         int offset = 0;
         while (result.size() < MAX_MEMBERS) {
-            JsonNode members = this.client.request("getSupergroupMembers", Map.of(
-                    "supergroup_id", supergroupId,
-                    "filter", Map.of("@type", "supergroupMembersFilterRecent"),
-                    "offset", offset,
-                    "limit", MEMBER_PAGE_SIZE));
+            JsonNode members;
+            try {
+                members = this.client.request("getSupergroupMembers", Map.of(
+                        "supergroup_id", supergroupId,
+                        "filter", Map.of("@type", "supergroupMembersFilterRecent"),
+                        "offset", offset,
+                        "limit", MEMBER_PAGE_SIZE));
+            }
+            catch (TelegramPermissionException ex) {
+                // Real-account testing found Telegram routinely refuses this call ("Member list
+                // is inaccessible", code 400) for a supergroup where the connected account
+                // lacks sufficient privilege to see membership -- a normal, common situation,
+                // not a bug. Before this fix the exception propagated all the way out of
+                // propose()/importParticipants(), crashing the entire "select this chat" action
+                // instead of leaving the participant list empty, which already surfaces as
+                // ConsentCoverage.noParticipantsKnown() and correctly blocks activation until
+                // membership is somehow known. Security-audit finding SEC-02: reported as
+                // incomplete, not complete-empty, for the same reason as the basic-group case
+                // above -- this is a refusal to answer, not a verified empty roster.
+                return RemoteMembership.incomplete(List.copyOf(result.values()));
+            }
             int pageSize = 0;
             for (JsonNode member : members.path("members")) {
                 pageSize++;
-                addParticipant(result, member);
+                JsonNode senderId = member.path("member_id");
+                if ("messageSenderUser".equals(senderId.path("@type").asString(""))) {
+                    addParticipant(result, senderId.path("user_id").asLong());
+                }
             }
             if (pageSize < MEMBER_PAGE_SIZE) {
                 // The source itself ran out of members before the safety cap did: genuinely
@@ -364,12 +473,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
         return RemoteMembership.incomplete(List.copyOf(result.values()));
     }
 
-    private void addParticipant(Map<Long, RemoteParticipant> result, JsonNode member) {
-        JsonNode senderId = member.path("member_id");
-        if (!"messageSenderUser".equals(senderId.path("@type").asString(""))) {
-            return;
-        }
-        long userId = senderId.path("user_id").asLong();
+    private void addParticipant(Map<Long, RemoteParticipant> result, long userId) {
         JsonNode user = this.client.request("getUser", Map.of("user_id", userId));
         String name = (user.path("first_name").asString("") + " " + user.path("last_name").asString("")).trim();
         boolean bot = "userTypeBot".equals(user.path("type").path("@type").asString(""));
@@ -463,15 +567,56 @@ public class TdlibTelegramGateway implements TelegramGateway {
     }
 
     /**
-     * Only textual content is in scope for the MVP: media, voice and files are neither
-     * downloaded nor transcribed, so a non-text message contributes an empty body.
+     * Media, voice and files are never downloaded, transcribed or OCR'd in this MVP -- that
+     * would need TDLib file downloads, its own storage/retention/consent handling, and likely a
+     * vision- or audio-capable model, all out of scope here (see docs/production-
+     * prerequisites.md). But real-account testing found a photo, document, voice note or other
+     * non-text message contributed a completely empty body: not "we can't read the content" but
+     * literally nothing, indistinguishable from an empty text message and invisible to Claude
+     * even as "something was shared here". A short bracketed label (with the filename, for a
+     * document, or the caption, where the message carries one) at least says a file or photo
+     * exists and roughly what kind, without claiming to have looked inside it.
      */
     static String extractText(JsonNode content) {
-        return switch (content.path("@type").asString("")) {
-            case "messageText" -> content.path("text").path("text").asString("");
-            case "messagePhoto", "messageVideo", "messageDocument", "messageAudio", "messageAnimation" ->
-                    content.path("caption").path("text").asString("");
-            default -> "";
+        String type = content.path("@type").asString("");
+        if ("messageText".equals(type)) {
+            return content.path("text").path("text").asString("");
+        }
+        String label = mediaLabel(content, type);
+        if (label == null) {
+            return "";
+        }
+        String caption = content.path("caption").path("text").asString("");
+        return caption.isEmpty() ? label : label + ": " + caption;
+    }
+
+    private static String mediaLabel(JsonNode content, String type) {
+        return switch (type) {
+            case "messagePhoto" -> "[Photo]";
+            case "messageVideo" -> "[Video]";
+            case "messageVideoNote" -> "[Video message]";
+            case "messageVoiceNote" -> "[Voice message]";
+            case "messageAnimation" -> "[GIF]";
+            case "messageSticker" -> {
+                String emoji = content.path("sticker").path("emoji").asString("");
+                yield emoji.isEmpty() ? "[Sticker]" : "[Sticker " + emoji + "]";
+            }
+            case "messageAudio" -> {
+                JsonNode audio = content.path("audio");
+                String title = audio.path("title").asString("");
+                String performer = audio.path("performer").asString("");
+                String described = String.join(" - ", java.util.stream.Stream.of(performer, title)
+                        .filter(s -> !s.isEmpty()).toList());
+                yield described.isEmpty() ? "[Audio]" : "[Audio: " + described + "]";
+            }
+            case "messageDocument" -> {
+                String fileName = content.path("document").path("file_name").asString("");
+                yield fileName.isEmpty() ? "[File]" : "[File: " + fileName + "]";
+            }
+            case "messageLocation" -> "[Location]";
+            case "messageContact" -> "[Contact]";
+            case "messagePoll" -> "[Poll]";
+            default -> null;
         };
     }
 
@@ -493,6 +638,16 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public Optional<String> messageLink(RemoteChat chat, long tgMessageId) {
+        // Real-account testing found getMessageLink answering "Message links are available only
+        // for messages in supergroups and channel chats" (code 400) for every single message
+        // synced from a private chat or a basic (non-super) group -- a doomed call, not a
+        // transient failure, per TDLib's own documented restriction on this method. The
+        // TelegramPermissionException catch below already degrades this correctly to
+        // Optional.empty(), but repeating the call and logging a WARN for every message in
+        // every such chat is pure noise once the outcome is guaranteed in advance.
+        if (!"SUPERGROUP".equals(chat.chatType()) && !"CHANNEL".equals(chat.chatType())) {
+            return Optional.empty();
+        }
         try {
             JsonNode link = this.client.request("getMessageLink", Map.of(
                     "chat_id", chat.tgChatId(),

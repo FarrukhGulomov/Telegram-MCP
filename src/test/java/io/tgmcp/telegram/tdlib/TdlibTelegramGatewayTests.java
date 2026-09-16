@@ -108,6 +108,11 @@ class TdlibTelegramGatewayTests {
 
         this.client.enqueue("""
                 {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
+        // Reaching READY also warms the runtime chat list (see TdlibTelegramGateway
+        // .warmChatList()), so this test must script that pair of calls too.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[]}""");
         this.client.pushUpdate("""
                 {"@type":"updateAuthorizationState",
                  "authorization_state":{"@type":"authorizationStateReady"}}""");
@@ -128,6 +133,11 @@ class TdlibTelegramGatewayTests {
         this.gateway.onStateChange(this.ref, notifications::add);
 
         this.client.enqueueError(500, "INTERNAL");
+        // Reaching READY also warms the runtime chat list (see TdlibTelegramGateway
+        // .warmChatList()), independently of whether the identity lookup above succeeded.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[]}""");
         this.client.pushUpdate("""
                 {"@type":"updateAuthorizationState",
                  "authorization_state":{"@type":"authorizationStateReady"}}""");
@@ -137,6 +147,32 @@ class TdlibTelegramGatewayTests {
                 .as("a failed identity lookup must not swallow the READY transition itself")
                 .isEqualTo(LoginStage.READY);
         assertThat(notifications.get(0).tgUserId()).isNull();
+    }
+
+    @Test
+    void aFailedChatListWarmUpAlsoDoesNotSwallowTheReadyTransition() {
+        // Symmetric to stillNotifiesTheListenerWhenReadyIdentityCannotBeFetched above, but for
+        // the other best-effort call reaching READY makes: warmChatList() failing must not stop
+        // the READY state itself from being recorded and notified.
+        List<LoginState> notifications = new ArrayList<>();
+        this.gateway.onStateChange(this.ref, notifications::add);
+
+        this.client.enqueue("""
+                {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
+        // loadChats succeeds, but getChats -- the one call in warmChatList() not guarded by its
+        // own catch, since only loadChats' documented "already loaded" 404 is expected -- fails.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueueError(500, "INTERNAL");
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateReady"}}""");
+
+        assertThat(notifications).hasSize(1);
+        assertThat(notifications.get(0).stage()).isEqualTo(LoginStage.READY);
+        assertThat(notifications.get(0).tgUserId())
+                .as("the identity lookup already succeeded and must not be undone by the "
+                        + "chat-list warm-up failing afterward")
+                .isEqualTo(777L);
     }
 
     @Test
@@ -197,6 +233,29 @@ class TdlibTelegramGatewayTests {
                 .isEqualTo("PRIVATE");
     }
 
+    /**
+     * Real-account testing found the "refresh chat list" button crashing every single time
+     * with a raw, uncaught 404 from loadChats. TDLib answers 404 ("Not Found") from loadChats
+     * to mean the chat list is already fully loaded -- documented behaviour, not a failure --
+     * but TdlibErrors.translate() has no specific mapping for code 404, so it falls through to
+     * TelegramTransientException, not TelegramPermissionException, which is what
+     * listAvailableChats() was catching. getChats/getChat must still run and return whatever is
+     * already loaded rather than letting that exception propagate.
+     */
+    @Test
+    void treatsLoadChatsAnsweringNotFoundAsTheChatListAlreadyBeingFullyLoaded() {
+        this.client.enqueueError(404, "Not Found");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[-100123]}""");
+        this.client.enqueue("""
+                {"@type":"chat","id":-100123,"title":"Eng",
+                 "type":{"@type":"chatTypeSupergroup","supergroup_id":9,"is_channel":false}}""");
+
+        List<RemoteChat> chats = this.gateway.listAvailableChats(this.ref);
+
+        assertThat(chats).extracting(RemoteChat::tgChatId).containsExactly(-100123L);
+    }
+
     @Test
     void mapsATextMessageIncludingTheEditTimestamp() {
         RemoteMessage message = this.gateway.toRemoteMessage(json("""
@@ -221,12 +280,26 @@ class TdlibTelegramGatewayTests {
     }
 
     @Test
-    void takesTheCaptionForMediaAndNothingForUnsupportedContent() {
+    void labelsMediaWithItsCaptionRatherThanContributingAnEmptyBody() {
+        // Media is not downloaded, transcribed or OCR'd in this MVP -- but real-account testing
+        // found that used to mean an empty body, indistinguishable from no message at all.
         assertThat(TdlibTelegramGateway.extractText(json("""
-                {"@type":"messagePhoto","caption":{"text":"a diagram"}}"""))).isEqualTo("a diagram");
-        // Media is not downloaded, transcribed or OCR'd in this MVP.
+                {"@type":"messagePhoto","caption":{"text":"a diagram"}}"""))).isEqualTo("[Photo]: a diagram");
         assertThat(TdlibTelegramGateway.extractText(json("""
-                {"@type":"messageVoiceNote"}"""))).isEmpty();
+                {"@type":"messagePhoto","caption":{"text":""}}"""))).isEqualTo("[Photo]");
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageVoiceNote"}"""))).isEqualTo("[Voice message]");
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageDocument","document":{"file_name":"report.pdf"}}""")))
+                .isEqualTo("[File: report.pdf]");
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageDocument","document":{"file_name":""},"caption":{"text":"see attached"}}""")))
+                .isEqualTo("[File]: see attached");
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageSticker","sticker":{"emoji":"😀"}}"""))).isEqualTo("[Sticker 😀]");
+        // A genuinely unhandled content type (e.g. a service message) still contributes nothing.
+        assertThat(TdlibTelegramGateway.extractText(json("""
+                {"@type":"messageChatChangeTitle","title":"New name"}"""))).isEmpty();
     }
 
     @Test
@@ -445,16 +518,109 @@ class TdlibTelegramGatewayTests {
                 + "\",\"last_name\":\"\",\"type\":{\"@type\":\"userTypeRegular\"}}";
     }
 
+    /**
+     * Real-account testing found a private (1-on-1) chat could never collect consent: its
+     * counterpart was treated as "no member list available" just like a basic group, leaving
+     * the participant table permanently empty with no row to ever record their consent
+     * against. A private chat's counterpart needs no separate members call -- it is named
+     * directly in the chat's own {@code type}.
+     */
+    @Test
+    void returnsThePrivateChatCounterpartAsItsOnlyParticipant() {
+        this.client.enqueue("""
+                {"@type":"chat","id":5,"title":"DM","type":{"@type":"chatTypePrivate","user_id":42}}""");
+        this.client.enqueue("""
+                {"@type":"user","id":42,"first_name":"Farrukh","last_name":"Gulomov",
+                 "type":{"@type":"userTypeRegular"}}""");
+
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, 5L);
+        assertThat(membership.complete()).isTrue();
+        assertThat(membership.participants()).containsExactly(new RemoteParticipant(42L, "Farrukh Gulomov", false));
+    }
+
     @Test
     void returnsNoParticipantsForChatTypesThatDoNotExposeAMemberList() {
         this.client.enqueue("""
-                {"@type":"chat","id":5,"title":"DM","type":{"@type":"chatTypePrivate","user_id":5}}""");
+                {"@type":"chat","id":9,"title":"Secret chat",
+                 "type":{"@type":"chatTypeSecret","secret_chat_id":9,"user_id":42}}""");
 
-        RemoteMembership membership = this.gateway.listParticipants(this.ref, 5L);
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, 9L);
         assertThat(membership.participants()).isEmpty();
         assertThat(membership.complete())
                 .as("confirmed empty is not the same as unverifiable, and must not be reported as such")
                 .isTrue();
+    }
+
+    /**
+     * Real-account testing found a plain (non-super) group could never collect consent either,
+     * for the same reason as the private-chat case above: basic groups fell into the same "no
+     * member list available" catch-all as truly unsupported chat types, leaving the participant
+     * table permanently empty. Unlike a supergroup, a basic group has no separate paginated
+     * members call and no size beyond Telegram's own 200-member cap for this chat type --
+     * getBasicGroupFullInfo returns the whole roster in one shot.
+     */
+    @Test
+    void returnsBasicGroupMembersViaGetBasicGroupFullInfo() {
+        this.client.enqueue("""
+                {"@type":"chat","id":9,"title":"Small group",
+                 "type":{"@type":"chatTypeBasicGroup","basic_group_id":9}}""");
+        this.client.enqueue("""
+                {"@type":"basicGroupFullInfo","members":[
+                  {"member_id":{"@type":"messageSenderUser","user_id":1}},
+                  {"member_id":{"@type":"messageSenderChat","chat_id":-9}},
+                  {"member_id":{"@type":"messageSenderUser","user_id":2}}]}""");
+        this.client.enqueue("""
+                {"@type":"user","id":1,"first_name":"Ada","last_name":"Lovelace",
+                 "type":{"@type":"userTypeRegular"}}""");
+        this.client.enqueue("""
+                {"@type":"user","id":2,"first_name":"Helper","last_name":"",
+                 "type":{"@type":"userTypeBot"}}""");
+
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, 9L);
+
+        assertThat(membership.complete()).isTrue();
+        assertThat(membership.participants()).containsExactly(
+                new RemoteParticipant(1L, "Ada Lovelace", false),
+                new RemoteParticipant(2L, "Helper", true));
+    }
+
+    /**
+     * Security-audit finding SEC-02: getBasicGroupFullInfo refusing to answer at all is a
+     * source that could not confirm the membership, not a verified empty roster -- reported as
+     * incomplete so it is never mistaken for "this group genuinely has no members".
+     */
+    @Test
+    void reportsIncompleteRatherThanThrowingWhenABasicGroupsMemberListIsInaccessible() {
+        this.client.enqueue("""
+                {"@type":"chat","id":9,"title":"Restricted small group",
+                 "type":{"@type":"chatTypeBasicGroup","basic_group_id":9}}""");
+        this.client.enqueueError(400, "Not enough rights");
+
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, 9L);
+        assertThat(membership.complete()).isFalse();
+        assertThat(membership.participants()).isEmpty();
+    }
+
+    /**
+     * Real-account testing found Telegram routinely refuses getSupergroupMembers ("Member list
+     * is inaccessible", code 400) for a supergroup the connected account cannot see the
+     * membership of -- a normal, common situation, not a bug. Before this fix the exception
+     * propagated out of listParticipants() uncaught, crashing the entire "select this chat"
+     * action (ChatActivationService.propose()) instead of leaving participants empty, which
+     * already surfaces as ConsentCoverage.noParticipantsKnown() and correctly blocks
+     * activation. Security-audit finding SEC-02: reported as incomplete rather than complete-
+     * empty, for the same reason as the basic-group case above.
+     */
+    @Test
+    void reportsIncompleteRatherThanThrowingWhenTheMemberListIsInaccessible() {
+        this.client.enqueue("""
+                {"@type":"chat","id":-100777,"title":"Restricted",
+                 "type":{"@type":"chatTypeSupergroup","supergroup_id":88,"is_channel":false}}""");
+        this.client.enqueueError(400, "Member list is inaccessible");
+
+        RemoteMembership membership = this.gateway.listParticipants(this.ref, -100777L);
+        assertThat(membership.complete()).isFalse();
+        assertThat(membership.participants()).isEmpty();
     }
 
     @Test
@@ -475,8 +641,20 @@ class TdlibTelegramGatewayTests {
     void neverFabricatesALinkWhenTelegramRefuses() {
         this.client.enqueueError(403, "CHANNEL_PRIVATE");
 
-        assertThat(this.gateway.messageLink(new RemoteChat(-1L, "x", "GROUP", null, null), 1L))
+        assertThat(this.gateway.messageLink(new RemoteChat(-100123L, "x", "SUPERGROUP", null, null), 1L))
                 .isEqualTo(Optional.empty());
+    }
+
+    @Test
+    void skipsTheCallEntirelyForChatTypesTelegramDocumentsAsNeverSupportingLinks() {
+        // Real-account testing found getMessageLink answering "Message links are available only
+        // for messages in supergroups and channel chats" for every message in a private chat or
+        // a basic group -- a doomed call repeated once per message. No response is enqueued
+        // here; ScriptedTdlibClient would throw if the gateway called TDLib at all.
+        assertThat(this.gateway.messageLink(new RemoteChat(5L, "DM", "PRIVATE", null, null), 1L))
+                .isEmpty();
+        assertThat(this.gateway.messageLink(new RemoteChat(-1L, "Basic group", "GROUP", null, null), 1L))
+                .isEmpty();
     }
 
     // --- SEC-01: shared session ownership ----------------------------------------------

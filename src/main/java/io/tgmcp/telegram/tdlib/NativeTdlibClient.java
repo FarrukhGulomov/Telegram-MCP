@@ -63,7 +63,17 @@ public class NativeTdlibClient implements TdlibClient {
 
     private final TdJsonLibrary library;
     private final ObjectMapper objectMapper;
-    private final int clientId;
+    /**
+     * Not final: real-account testing found that TDLib answers {@code logOut} with
+     * {@code authorizationStateLoggingOut} followed by {@code authorizationStateClosed} --
+     * which does not mean "logged out, ready to log back in" but "this client's actor has
+     * permanently stopped". Every request sent to a closed client's id fails immediately (in
+     * practice: an {@code error} with code 500), forever, since nothing restarts that actor.
+     * {@link #dispatch} reacts to {@code authorizationStateClosed} by minting a fresh id here
+     * so the next login attempt bootstraps a new actor exactly like the very first one after
+     * process start, instead of the adapter being permanently unusable after one disconnect.
+     */
+    private volatile int clientId;
     private final long requestTimeoutSeconds;
 
     private final Map<String, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
@@ -98,6 +108,16 @@ public class NativeTdlibClient implements TdlibClient {
         this.library = library;
         this.objectMapper = objectMapper;
         this.requestTimeoutSeconds = requestTimeoutSeconds;
+        // Real-account testing found TDLib's default verbosity (5) floods the process's stdout
+        // with FileManager/ReactionManager internals -- enough, under Railway, to hit its log
+        // ingestion rate limit and start silently DROPPING messages ("Railway rate limit
+        // reached ... Messages dropped: 380"), which could just as easily swallow a genuine
+        // error as this noise, and cannot be told apart from one after the fact. td_execute
+        // (not td_send) is TDLib's documented synchronous path for setLogVerbosityLevel: it
+        // needs no client id and is set before creating one. Level 1 keeps fatal errors and
+        // errors, dropping the info/debug chatter this codebase's own error handling never
+        // relied on reading from stdout in the first place.
+        library.td_execute("{\"@type\":\"setLogVerbosityLevel\",\"new_verbosity_level\":1}");
         this.clientId = library.td_create_client_id();
         this.listenerQueueCapacity = listenerQueueCapacity;
         this.receiveThread = new Thread(this::receiveLoop, "tdlib-receive");
@@ -139,6 +159,13 @@ public class NativeTdlibClient implements TdlibClient {
             this.library.td_send(this.clientId, this.objectMapper.writeValueAsString(payload));
             JsonNode response = future.get(this.requestTimeoutSeconds, TimeUnit.SECONDS);
             if (TdlibErrors.isError(response)) {
+                // Logged here, server-side only, rather than folded into the translated
+                // exception's own message: TdlibErrorTranslationTests deliberately asserts the
+                // raw upstream text (which can carry chat/user identifiers) never reaches
+                // callers through the exception itself. Quieting TDLib's native verbosity
+                // elsewhere in this class removed the only other way to ever see this text.
+                log.warn("TDLib request '{}' failed with code {}: {}", method,
+                        response.path("code").asInt(0), response.path("message").asString(""));
                 throw TdlibErrors.translate(response);
             }
             return response;
@@ -218,6 +245,13 @@ public class NativeTdlibClient implements TdlibClient {
                 return;
             }
         }
+        if (isClosedAuthorizationState(node)) {
+            // See the clientId javadoc: this id is now permanently dead. Done synchronously,
+            // before the update is even handed to listeners, so a beginLogin() call triggered
+            // by whatever this update causes downstream can never race a still-old clientId.
+            this.clientId = this.library.td_create_client_id();
+        }
+
         // Handed off rather than run inline: a listener is allowed to call request() itself
         // (see class javadoc, finding F11), which must not block the thread that alone can
         // ever deliver that request's response.
@@ -231,6 +265,11 @@ public class NativeTdlibClient implements TdlibClient {
                 }
             }
         });
+    }
+
+    private static boolean isClosedAuthorizationState(JsonNode node) {
+        return "updateAuthorizationState".equals(node.path("@type").asString(""))
+                && "authorizationStateClosed".equals(node.path("authorization_state").path("@type").asString(""));
     }
 
     @Override

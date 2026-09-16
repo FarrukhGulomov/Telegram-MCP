@@ -123,6 +123,26 @@ public class SyncCheckpointRepository {
                 .update();
     }
 
+    /**
+     * Clears a halted checkpoint's failure state without touching what has already been
+     * ingested (unlike {@link #reset}, which also wipes synced position and backfill progress
+     * for a full re-ingest). An operator explicitly asking to sync is exactly the human
+     * attention a halt is meant to wait for, so a manual sync clears it first rather than
+     * silently doing nothing because {@link SyncCheckpoint#dueAt} still says no.
+     */
+    public void clearHalt(UUID tenantId, UUID chatId) {
+        this.jdbc.sql("""
+                        UPDATE sync_checkpoints SET
+                            consecutive_failures = 0, next_attempt_at = NULL,
+                            last_error_code = NULL, last_error_message = NULL, halted = false,
+                            updated_at = now()
+                         WHERE tenant_id = :tenantId AND chat_id = :chatId
+                        """)
+                .param("tenantId", tenantId)
+                .param("chatId", chatId)
+                .update();
+    }
+
     public void reset(UUID tenantId, UUID chatId) {
         this.jdbc.sql("""
                         UPDATE sync_checkpoints SET

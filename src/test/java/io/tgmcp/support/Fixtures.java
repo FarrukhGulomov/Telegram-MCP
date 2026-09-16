@@ -112,8 +112,12 @@ public class Fixtures {
     }
 
     public Chat chat(Team team, long tgChatId, String title, String username) {
+        return chat(team, tgChatId, title, username, "SUPERGROUP");
+    }
+
+    public Chat chat(Team team, long tgChatId, String title, String username, String chatType) {
         Chat chat = new Chat(Ids.newId(), team.tenant().id(), team.connection().id(), tgChatId,
-                title, "SUPERGROUP", username, null, null);
+                title, chatType, username, null, null);
         this.chats.upsert(chat);
         return this.chats.findByTgId(team.tenant().id(), team.connection().id(), tgChatId).orElseThrow();
     }

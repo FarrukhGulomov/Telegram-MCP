@@ -116,4 +116,19 @@ class ConsentMethodGuardTests extends AbstractIntegrationTest {
                 "purpose", "ANTHROPIC_CLAUDE", "v1", "rev-1", ConsentMethod.SIGNED_ATTESTATION, "email dated 2026-01-01",
                 Instant.now().plus(Duration.ofDays(1)))).isNotNull();
     }
+
+    /**
+     * OPERATOR_CONFIRMED is a deliberate, informed simplification of the management UI's main
+     * consent-recording flow (a single button, no evidence field) -- unlike SELF_SERVICE_LINK
+     * it is never rejected, because it never claims the participant proved anything themselves.
+     */
+    @Test
+    void operatorConfirmedNeedsNoEvidenceReference() {
+        Fixtures.Team team = this.fixtures.team("f02-operator-confirmed");
+        Chat chat = chat(team);
+
+        assertThat(this.consentService.record(team.actor(), chat.id(), 111L, "Alice",
+                "purpose", "ANTHROPIC_CLAUDE", "v1", "rev-1", ConsentMethod.OPERATOR_CONFIRMED, null,
+                Instant.now().plus(Duration.ofDays(1)))).isNotNull();
+    }
 }

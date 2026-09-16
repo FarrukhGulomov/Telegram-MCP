@@ -118,6 +118,18 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
                 .contains("error=invalid_target");
     }
 
+    /**
+     * Real MCP clients (Claude.ai's connector, confirmed via production logs) omit {@code
+     * scope} from the authorize request entirely.
+     */
+    private static String authorizeQueryWithoutScope(String clientId) throws Exception {
+        return "/oauth2/authorize?response_type=code&client_id=" + clientId
+                + "&redirect_uri=" + REDIRECT_URI
+                + "&state=xyz&code_challenge="
+                + pkceCodeChallenge("a-fixed-test-code-verifier-value-1234567890")
+                + "&code_challenge_method=S256";
+    }
+
     private static String extractHiddenInputValue(String html, String inputName) {
         java.util.regex.Matcher matcher = java.util.regex.Pattern
                 .compile("name=\"" + inputName + "\" value=\"([^\"]*)\"")
@@ -156,6 +168,49 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
         String location = consentResult.getResponse().getHeader("Location");
         assertThat(location).as("consenting to this server's own resource must complete with a normal "
                         + "authorization code, not an error")
+                .isNotNull()
+                .startsWith(REDIRECT_URI)
+                .doesNotContain("error=")
+                .contains("code=");
+    }
+
+    /**
+     * The bug this session actually hit in production: Claude.ai's connector sends no {@code
+     * scope} parameter at all. Without a default, the (unmodified) consent page has no scope to
+     * render a checkbox for, so any submission looks exactly like an explicit denial --
+     * {@code access_denied} on every single attempt, regardless of what the user does on the
+     * page. {@link io.tgmcp.security.AuthorizationServerConfig} now falls back to the registered
+     * client's own scope when the request omits one.
+     */
+    @Test
+    void defaultsToTheRegisteredClientScopeWhenTheAuthorizeRequestOmitsScope() throws Exception {
+        String clientId = registerClient();
+        String password = "resource-test-pw-3";
+        this.fixtures.signInReadyTeam("f18-resource-3", "resource3@f18.invalid",
+                this.passwordEncoder.encode(password), "OWNER");
+        MockHttpSession session = signIn("resource3@f18.invalid", password);
+        assertThat(session).isNotNull();
+
+        MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQueryWithoutScope(clientId))
+                        .session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        String consentPage = authorizeResult.getResponse().getContentAsString();
+        assertThat(consentPage).as("must have something real to consent to even though the request omitted scope")
+                .contains("name=\"scope\"")
+                .contains("mcp:read");
+
+        String consentState = extractHiddenInputValue(consentPage, "state");
+        MvcResult consentResult = this.mockMvc.perform(post("/oauth2/authorize").session(session)
+                        .param("client_id", clientId)
+                        .param("state", consentState)
+                        .param("scope", "mcp:read"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+
+        String location = consentResult.getResponse().getHeader("Location");
+        assertThat(location).as("an authorize request that omits scope must still be completable, not "
+                        + "stuck denied forever")
                 .isNotNull()
                 .startsWith(REDIRECT_URI)
                 .doesNotContain("error=")

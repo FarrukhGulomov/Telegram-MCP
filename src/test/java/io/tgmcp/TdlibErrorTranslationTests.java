@@ -80,6 +80,19 @@ class TdlibErrorTranslationTests {
     }
 
     @Test
+    void treatsChatNotFoundAsRetryableRatherThanAPermanentPermissionFailure() {
+        // Real-account testing found getChat and getChatHistory answer exactly this message,
+        // still code 400, for a chat this TDLib session has not yet loaded into its runtime
+        // chat list -- true right after every process restart, even for a chat this app has
+        // already synced before. Warming the list (TdlibTelegramGateway.warmChatList()) and
+        // retrying succeeds, so this must never halt sync the way a truly malformed request does.
+        TelegramGatewayException ex = translate(400, "Chat not found");
+
+        assertThat(ex).isInstanceOf(TelegramTransientException.class);
+        assertThat(ex.retryable()).isTrue();
+    }
+
+    @Test
     void treatsServerSideFailuresAsRetryable() {
         TelegramGatewayException ex = translate(500, "Internal Server Error");
 

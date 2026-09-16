@@ -2,16 +2,19 @@
 <html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.connection}, ~{::section})}">
 <body>
 <section th:with="stage=${state.stage.name()}">
-  <h1 th:text="#{nav.connection}">Telegram connection</h1>
-  <p class="muted" th:text="#{connect.intro}">
-    This connects the Telegram account whose chats you want to manage. It does not by itself
-    share anything — you still choose, chat by chat, what gets read later.
-  </p>
+  <div class="page-head">
+    <h1 th:text="#{nav.connection}">Telegram connection</h1>
+    <p class="muted" th:text="#{connect.intro}">
+      This connects the Telegram account whose chats you want to manage. It does not by itself
+      share anything — you still choose, chat by chat, what gets read later.
+    </p>
+  </div>
 
   <p class="banner demo" th:if="${demoMode}">
-    <strong th:text="#{connect.demoBanner.strong}">Demo mode</strong>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <span><strong th:text="#{connect.demoBanner.strong}">Demo mode</strong>
     <span th:text="#{connect.demoBanner.text(${adapter})}">(adapter MOCK). Any code and any
-      password are accepted; nothing leaves this process.</span>
+      password are accepted; nothing leaves this process.</span></span>
   </p>
 
   <div class="status-line">

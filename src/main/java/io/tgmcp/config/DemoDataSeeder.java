@@ -26,9 +26,14 @@ import org.springframework.security.oauth2.server.authorization.settings.TokenSe
 import org.springframework.stereotype.Component;
 
 /**
- * Creates the demo tenant, its owner, and two pre-registered MCP clients.
+ * Creates the demo tenant, its owner, and two demo-only MCP clients.
  *
- * <p>Everything here is idempotent, so a restart neither duplicates nor resets anything.
+ * <p>Everything here is idempotent, so a restart neither duplicates nor resets anything. The
+ * real, non-demo client identities Claude/ChatGPT use regardless of whether synthetic demo data
+ * is seeded live separately in {@link TrustedMcpClientSeeder}; the two clients registered here
+ * ({@link #CLAUDE_DEMO_CLIENT_ID}, {@link #CHATGPT_DEMO_CLIENT_ID}) exist only for local/demo
+ * use and are exactly the ones {@link ProductionSafetyValidator} checks are gone before real
+ * account access is authorized.
  */
 @Component
 @ConditionalOnProperty(name = "tgmcp.demo.seed-synthetic-data", havingValue = "true", matchIfMissing = true)

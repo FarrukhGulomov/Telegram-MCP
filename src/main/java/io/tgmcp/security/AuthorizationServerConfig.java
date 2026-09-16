@@ -1,5 +1,8 @@
 package io.tgmcp.security;
 
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -17,6 +20,14 @@ import java.util.UUID;
 import javax.sql.DataSource;
 
 import com.nimbusds.jose.jwk.JWK;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ReadListener;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletInputStream;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
+import jakarta.servlet.http.HttpServletResponse;
+
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
@@ -37,6 +48,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.oauth2.server.authorization.OAuth2AuthorizationServerConfigurer;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
@@ -55,13 +68,19 @@ import org.springframework.security.oauth2.server.authorization.OAuth2Authorizat
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.settings.AuthorizationServerSettings;
 import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
+import org.springframework.security.oauth2.server.authorization.web.authentication.OAuth2AuthorizationCodeRequestAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.AuthenticationConverter;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.util.StringUtils;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
  * A standards-compliant OAuth 2.1 authorization server, provided by Spring Authorization
@@ -87,6 +106,7 @@ public class AuthorizationServerConfig {
         OAuth2ClientRegistrationAuthenticationToken authentication = context.getAuthentication();
         java.util.List<String> scopes = authentication.getClientRegistration().getScopes();
         if (scopes != null && scopes.stream().anyMatch(scope -> scope.startsWith(McpScopes.PROVIDER_PREFIX))) {
+            log.warn("Rejecting self-registered client declaring a provider:* scope: {}", scopes);
             throw new OAuth2AuthenticationException(new OAuth2Error("invalid_client_metadata",
                     "Dynamic client registration cannot claim a provider identity (scopes starting with '"
                             + McpScopes.PROVIDER_PREFIX + "'); that identity is reserved to clients "
@@ -120,10 +140,217 @@ public class AuthorizationServerConfig {
         }
     }
 
+    /**
+     * Root cause of the Claude.ai connector's "Authorization ... failed", confirmed by the raw
+     * request logging added below: Claude's {@code GET /oauth2/authorize} carries no
+     * {@code scope} parameter at all. RFC 6749 6.3.3 treats an omitted scope as "whatever the
+     * authorization server chooses to default it to", but Spring Authorization Server applies
+     * no such default -- {@code OAuth2AuthorizationCodeRequestAuthenticationProvider} uses the
+     * request's scopes verbatim, so "no scope requested" becomes "zero scopes to authorize".
+     * The (unmodified) default consent page renders exactly one checkbox per scope in that set,
+     * so zero requested scopes means zero checkboxes: nothing the user could ever check, and a
+     * submission with no {@code scope} value present is indistinguishable from an explicit
+     * denial to {@code OAuth2AuthorizationConsentAuthenticationProvider}, which treats an empty
+     * approved-scope set as denial -- a 100%-repeatable failure no matter what the user does on
+     * the page. Wraps the library's own converter rather than replacing request handling
+     * entirely: only the specific case of "no scope in the request" is touched, by substituting
+     * the registered client's own scope (exactly what it declared at Dynamic Client
+     * Registration time) so there is something real to render and consent to.
+     *
+     * <p>The second case this handles, confirmed from a real ChatGPT connection attempt: the
+     * connector requests every scope this server's discovery metadata advertises at all --
+     * {@code openid mcp:read provider:anthropic_claude provider:openai_chatgpt} -- rather than
+     * only the one {@code provider:*} scope it is actually entitled to, because a generic
+     * connector has no way to know in advance which one that is. Spring's own validator treats
+     * "requested scope is not a subset of the registered client's scope" as a hard
+     * {@code invalid_scope} rejection, which would make this connector (and any other equally
+     * generic one) permanently unable to connect. Rather than reject, this restricts the
+     * request to the intersection with what the client actually holds -- silently dropping
+     * {@code provider:anthropic_claude} for a client that only has {@code
+     * provider:openai_chatgpt} -- so the consent page, and the token that comes out of it, can
+     * never carry a provider scope the client was not granted (finding F09 is enforced by what
+     * the client is registered for, not by what it asked for).
+     */
+    private static AuthenticationConverter reconcileRequestedScopeWithRegisteredClientScope(
+            RegisteredClientRepository registeredClientRepository) {
+        AuthenticationConverter delegate = new OAuth2AuthorizationCodeRequestAuthenticationConverter();
+        return request -> {
+            Authentication authentication = delegate.convert(request);
+            if (!(authentication instanceof OAuth2AuthorizationCodeRequestAuthenticationToken token)) {
+                return authentication;
+            }
+            RegisteredClient registeredClient = registeredClientRepository.findByClientId(token.getClientId());
+            if (registeredClient == null || registeredClient.getScopes().isEmpty()) {
+                return authentication;
+            }
+            java.util.Set<String> requested = token.getScopes();
+            if (requested == null || requested.isEmpty()) {
+                log.info("Authorize request from client {} carried no scope; defaulting to its registered scope {}",
+                        token.getClientId(), registeredClient.getScopes());
+                return withScopes(token, registeredClient.getScopes());
+            }
+            if (registeredClient.getScopes().containsAll(requested)) {
+                return authentication;
+            }
+            java.util.Set<String> allowed = new java.util.LinkedHashSet<>(requested);
+            allowed.retainAll(registeredClient.getScopes());
+            if (allowed.isEmpty()) {
+                log.info("Authorize request from client {} requested {}, none of which it is registered for; "
+                                + "defaulting to its registered scope {}",
+                        token.getClientId(), requested, registeredClient.getScopes());
+                return withScopes(token, registeredClient.getScopes());
+            }
+            log.info("Authorize request from client {} requested {} but is only registered for {}; restricting "
+                            + "the granted scope to {}",
+                    token.getClientId(), requested, registeredClient.getScopes(), allowed);
+            return withScopes(token, allowed);
+        };
+    }
+
+    private static OAuth2AuthorizationCodeRequestAuthenticationToken withScopes(
+            OAuth2AuthorizationCodeRequestAuthenticationToken token, java.util.Set<String> scopes) {
+        return new OAuth2AuthorizationCodeRequestAuthenticationToken(token.getAuthorizationUri(),
+                token.getClientId(), (Authentication) token.getPrincipal(), token.getRedirectUri(),
+                token.getState(), scopes, token.getAdditionalParameters());
+    }
+
+    /**
+     * Temporary diagnostic: a real MCP client's authorize attempt was failing with no
+     * indication of why -- the default behaviour here is a silent redirect back to the
+     * client carrying an {@code error} query parameter, with nothing logged server-side, so
+     * every rejection (mismatched redirect_uri, PKCE, scope, the resource-parameter check
+     * above, or anything else the library's own default validator rejects) looked identical
+     * to reading Railway's HTTP access log: a bare 302 with no way to tell which case, or
+     * even that it was an error redirect rather than a successful one. Logs the exact
+     * OAuth2Error before reproducing the same redirect-with-error behaviour the library's own
+     * (not independently reusable) default handler would have performed.
+     */
+    private static void logAndRedirectAuthorizationError(HttpServletRequest request, HttpServletResponse response,
+                                                          AuthenticationException exception) throws IOException {
+        if (!(exception instanceof OAuth2AuthorizationCodeRequestAuthenticationException ex)) {
+            log.warn("OAuth2 authorize request rejected: {}", exception.toString());
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "OAuth2 authorization request failed");
+            return;
+        }
+        OAuth2Error error = ex.getError();
+        OAuth2AuthorizationCodeRequestAuthenticationToken authRequest = ex.getAuthorizationCodeRequestAuthentication();
+        log.warn("OAuth2 authorize request rejected: error={} description={} clientId={} redirectUri={}",
+                error.getErrorCode(), error.getDescription(),
+                authRequest == null ? null : authRequest.getClientId(),
+                authRequest == null ? null : authRequest.getRedirectUri());
+        String redirectUri = authRequest == null ? null : authRequest.getRedirectUri();
+        if (redirectUri == null) {
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "OAuth2 authorization request failed: "
+                    + error.getErrorCode());
+            return;
+        }
+        StringBuilder location = new StringBuilder(redirectUri)
+                .append(redirectUri.contains("?") ? '&' : '?')
+                .append("error=").append(URLEncoder.encode(error.getErrorCode(), StandardCharsets.UTF_8));
+        if (StringUtils.hasText(error.getDescription())) {
+            location.append("&error_description=")
+                    .append(URLEncoder.encode(error.getDescription(), StandardCharsets.UTF_8));
+        }
+        if (StringUtils.hasText(authRequest.getState())) {
+            location.append("&state=").append(URLEncoder.encode(authRequest.getState(), StandardCharsets.UTF_8));
+        }
+        response.sendRedirect(location.toString());
+    }
+
+    /**
+     * Temporary diagnostic: {@link #logAndRedirectAuthorizationError} showed a real client's
+     * consent submission being rejected as {@code access_denied} with an empty approved-scope
+     * set, on every attempt, regardless of what the user did on the consent page -- but that
+     * only reports Spring's own parsed interpretation of the request, after the fact. Spring's
+     * default consent page (see {@code DefaultConsentPage}) renders one {@code <input
+     * name="scope" value="...">} checkbox per scope in the authorize request; if that request
+     * carried no (or a mismatched) {@code scope} parameter, there is nothing to render a
+     * checkbox for, nothing the user could ever check, and the submitted form is
+     * indistinguishable from an explicit denial -- which would explain a 100%-repeatable
+     * failure that survives "check the checkbox". This filter logs the exact bytes a real
+     * client sent for {@code /oauth2/authorize} -- the raw query string on GET, the raw form
+     * parameters on POST -- before anything in Spring's authorization/consent machinery gets a
+     * chance to interpret them, so that hypothesis can be confirmed or ruled out directly.
+     */
+    private static final class RawOAuth2AuthorizeRequestLogger extends OncePerRequestFilter {
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+                throws ServletException, IOException {
+            if ("/oauth2/authorize".equals(request.getRequestURI())) {
+                if ("GET".equalsIgnoreCase(request.getMethod())) {
+                    log.info("Raw GET /oauth2/authorize query string: {}", request.getQueryString());
+                }
+                else if ("POST".equalsIgnoreCase(request.getMethod())) {
+                    java.util.Map<String, String> params = new java.util.LinkedHashMap<>();
+                    request.getParameterMap().forEach((key, values) -> params.put(key,
+                            java.util.Arrays.toString(values)));
+                    log.info("Raw POST /oauth2/authorize form parameters: {}", params);
+                }
+            }
+            chain.doFilter(request, response);
+        }
+    }
+
+    /**
+     * Temporary diagnostic: after correcting the connector URL to include {@code /mcp} (so the
+     * client properly discovers this server via RFC 9728 protected-resource metadata instead of
+     * probing the bare origin), Dynamic Client Registration itself started failing with a bare
+     * 400, logged nowhere. The most likely explanation: {@code .well-known/oauth-protected-
+     * resource} advertises {@code provider:anthropic_claude} as a supported scope for this
+     * resource (see {@code WebSecurityConfig}) -- which a spec-following client has every reason
+     * to request for itself once it reads that document -- while {@link
+     * #rejectSelfRegisteredProviderScope} categorically refuses any self-registered client that
+     * asks for a {@code provider:*} scope (finding F09). If that is what is happening, Claude's
+     * own registration request would show it declaring exactly that scope. Logs the raw JSON
+     * body of the registration request -- not just whatever Spring's client metadata parsing
+     * makes of it -- before anything downstream reads it, then replays those exact bytes so
+     * registration proceeds completely unaffected by having been observed.
+     */
+    private static final class RawOAuth2RegisterRequestLogger extends OncePerRequestFilter {
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+                throws ServletException, IOException {
+            if (!"/oauth2/register".equals(request.getRequestURI()) || !"POST".equalsIgnoreCase(request.getMethod())) {
+                chain.doFilter(request, response);
+                return;
+            }
+            byte[] body = org.springframework.util.StreamUtils.copyToByteArray(request.getInputStream());
+            log.info("Raw POST /oauth2/register body: {}", new String(body, StandardCharsets.UTF_8));
+            chain.doFilter(new HttpServletRequestWrapper(request) {
+                @Override
+                public ServletInputStream getInputStream() {
+                    return new ServletInputStream() {
+                        private final java.io.ByteArrayInputStream replay = new java.io.ByteArrayInputStream(body);
+
+                        @Override
+                        public boolean isFinished() {
+                            return replay.available() == 0;
+                        }
+
+                        @Override
+                        public boolean isReady() {
+                            return true;
+                        }
+
+                        @Override
+                        public void setReadListener(ReadListener readListener) {
+                        }
+
+                        @Override
+                        public int read() {
+                            return replay.read();
+                        }
+                    };
+                }
+            }, response);
+        }
+    }
+
     @Bean
     @Order(1)
     public SecurityFilterChain authorizationServerFilterChain(HttpSecurity http, AppProperties properties,
-                                                               java.time.Clock clock)
+                                                               java.time.Clock clock,
+                                                               RegisteredClientRepository registeredClientRepository)
             throws Exception {
         OAuth2AuthorizationServerConfigurer configurer = new OAuth2AuthorizationServerConfigurer();
         RequestMatcher endpoints = configurer.getEndpointsMatcher();
@@ -145,6 +372,8 @@ public class AuthorizationServerConfig {
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
 
         http.securityMatcher(endpoints)
+                .addFilterBefore(new RawOAuth2AuthorizeRequestLogger(), SecurityContextHolderFilter.class)
+                .addFilterBefore(new RawOAuth2RegisterRequestLogger(), SecurityContextHolderFilter.class)
                 .with(configurer, server -> server
                         // RFC 7591: remote MCP clients (Claude, ChatGPT) register themselves with
                         // no prior credential. Two defaults fight that:
@@ -167,7 +396,11 @@ public class AuthorizationServerConfig {
                         //    consent flow at /oauth2/authorize, walk away with a token scoped to
                         //    read content that was only ever meant for the genuine provider. A
                         //    provider:* scope must only ever reach a client that was registered
-                        //    through a trusted, non-self-service path (today: DemoDataSeeder).
+                        //    through a trusted, non-self-service path (io.tgmcp.config
+                        //    .TrustedMcpClientSeeder pre-registers "claude" and "chatgpt" this
+                        //    way; the real connectors use that client id directly -- e.g.
+                        //    Claude.ai's own "Add an OAuth Client ID" connector setting -- rather
+                        //    than registering themselves here).
                         //    mcp:read remains open to self-registration, since it grants nothing
                         //    beyond "this client may attempt MCP calls" -- chat-level access is
                         //    still gated entirely by the authenticated user's own tenant/chat data.
@@ -189,6 +422,10 @@ public class AuthorizationServerConfig {
                         // prompt) -- the no-arg validator instance already composes all of
                         // those internally.
                         .authorizationEndpoint(authorization -> authorization
+                                .authorizationRequestConverters(converters -> converters.replaceAll(converter ->
+                                        converter instanceof OAuth2AuthorizationCodeRequestAuthenticationConverter
+                                                ? reconcileRequestedScopeWithRegisteredClientScope(registeredClientRepository)
+                                                : converter))
                                 .authenticationProviders(providers -> providers.forEach(provider -> {
                                     if (provider instanceof OAuth2AuthorizationCodeRequestAuthenticationProvider p) {
                                         p.setAuthenticationValidator(
@@ -196,7 +433,8 @@ public class AuthorizationServerConfig {
                                                         .andThen(context -> rejectMismatchedResourceParameter(
                                                                 context, expectedResource)));
                                     }
-                                })))
+                                }))
+                                .errorResponseHandler(AuthorizationServerConfig::logAndRedirectAuthorizationError))
                         .oidc(Customizer.withDefaults()))
                 .authorizeHttpRequests(requests -> requests
                         // Open (anonymous) dynamic client registration: a new MCP client has no
@@ -219,7 +457,7 @@ public class AuthorizationServerConfig {
 
     @Bean
     public RegisteredClientRepository registeredClientRepository(JdbcTemplate jdbcTemplate) {
-        return new JdbcRegisteredClientRepository(jdbcTemplate);
+        return new TrustedProviderAugmentingClientRepository(new JdbcRegisteredClientRepository(jdbcTemplate));
     }
 
     @Bean
@@ -254,7 +492,17 @@ public class AuthorizationServerConfig {
                 return;
             }
             JwtClaimsSet.Builder claims = context.getClaims();
-            claims.audience(java.util.List.of(properties.mcp().resourceIdentifier()));
+            // Deliberately a plain ArrayList, not List.of(...): Spring Authorization Server
+            // persists a JWT access token's claims (including this audience list) as part of
+            // the stored OAuth2Authorization's metadata, JSON-serialized with polymorphic
+            // type info by JdbcOAuth2AuthorizationService. Confirmed from a real Railway
+            // deployment's logs: List.of(...)'s runtime type (java.util.ImmutableCollections
+            // $List12) is a JDK-internal class Spring Security's Jackson PolymorphicTypeValidator
+            // does not allow-list, so every read of that row after the first (a token refresh,
+            // a second grant) threw InvalidTypeIdException and fell through to a bare redirect
+            // -- silent from the client's point of view, but fatal to ever completing a second
+            // request. An ordinary ArrayList is a type every such allow-list already covers.
+            claims.audience(new java.util.ArrayList<>(java.util.List.of(properties.mcp().resourceIdentifier())));
             claims.claim("client_id", context.getRegisteredClient().getClientId());
 
             String principalName = context.getPrincipal().getName();
