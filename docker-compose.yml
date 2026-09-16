@@ -4,9 +4,19 @@ services:
     environment:
       POSTGRES_DB: tgmcp
       POSTGRES_USER: tgmcp
-      POSTGRES_PASSWORD: ${TGMCP_DB_PASSWORD:-tgmcp}
+      # Security-audit finding SEC-12: no development fallback here on purpose -- a
+      # database holding real Telegram content and consent evidence must never start
+      # under a well-known, guessable password. Compose refuses to start at all
+      # (rather than silently accepting a weak default) until TGMCP_DB_PASSWORD is set;
+      # copy .env.example to .env and change it there.
+      POSTGRES_PASSWORD: ${TGMCP_DB_PASSWORD:?Set TGMCP_DB_PASSWORD (see .env.example) before starting}
     ports:
-      - "${TGMCP_DB_PORT:-5432}:5432"
+      # Security-audit finding SEC-12: bound to loopback by default -- this port existing
+      # at all is a local-development convenience (so a host-side psql/GUI client can
+      # connect), not something a real deployment should expose beyond its own host.
+      # Override TGMCP_DB_BIND explicitly (e.g. to a private network address) only if you
+      # have a specific, reviewed reason a remote client needs to reach this port directly.
+      - "${TGMCP_DB_BIND:-127.0.0.1}:${TGMCP_DB_PORT:-5432}:5432"
     volumes:
       - tgmcp-db:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +33,7 @@ services:
     environment:
       TGMCP_DB_URL: jdbc:postgresql://db:5432/tgmcp
       TGMCP_DB_USER: tgmcp
-      TGMCP_DB_PASSWORD: ${TGMCP_DB_PASSWORD:-tgmcp}
+      TGMCP_DB_PASSWORD: ${TGMCP_DB_PASSWORD:?Set TGMCP_DB_PASSWORD (see .env.example) before starting}
       # Default is the fully synthetic adapter: no Telegram account is contacted.
       TGMCP_TELEGRAM_ADAPTER: ${TGMCP_TELEGRAM_ADAPTER:-MOCK}
       TGMCP_SEED_DEMO: ${TGMCP_SEED_DEMO:-true}

@@ -117,6 +117,19 @@ Also outstanding:
   volume the same as you would any other credential store.
 - **Participant notification.** Nothing here tells participants their chat is being
   processed. That is an operational obligation.
+- **Database role separation (security-audit finding SEC-12).** `docker-compose.yml` now
+  refuses to start without an explicit, non-default `TGMCP_DB_PASSWORD` and binds the
+  published Postgres port to loopback by default, but the application still connects as a
+  single Postgres role that owns the schema. Production should separate that into at least
+  three roles: one used only for bootstrap/migration (schema DDL), one used by the running
+  application for DML (the one actually configured as `TGMCP_DB_USER`), and one used only by
+  whatever writes audit records. Before going live, inspect `pg_roles` and the runtime role's
+  effective grants to confirm it is not superuser, not the database owner, and does not have
+  `BYPASSRLS`. Row-level security and composite tenant foreign keys are worth adding as
+  defense in depth, but neither is a substitute for the application's own tenant
+  authorization checks. This depends on the specific hosting provider's administrative
+  access model, so it is left as an operational task rather than a migration this codebase
+  applies for you.
 
 ## 4. Safety interlocks currently in place
 
