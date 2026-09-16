@@ -212,7 +212,7 @@ class RateLimitAndResponseCapTests extends AbstractIntegrationTest {
                 new AppProperties.Consent("2026-09-v1", true, Duration.ofDays(365)),
                 new AppProperties.Sync(Duration.ofSeconds(30), 200, 5, 2, 6,
                         Duration.ofSeconds(5), Duration.ofMinutes(10), Duration.ofHours(1), Duration.ofHours(24)),
-                new AppProperties.Secrets(null, "test", null, null),
+                new AppProperties.Secrets(null, "test", null, null, List.of()),
                 new AppProperties.Demo(false, "demo", "Demo", "a@b.invalid", "pw", List.of()),
                 null,
                 null);

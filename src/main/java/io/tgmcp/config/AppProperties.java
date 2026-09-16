@@ -107,7 +107,23 @@ public record AppProperties(@DefaultValue Telegram telegram,
                            * token on restart and gives each replica of a multi-instance
                            * deployment its own, mutually-incompatible key.
                            */
-                          String oauthRsaPrivateKey) {
+                          String oauthRsaPrivateKey,
+                          /**
+                           * Security-audit finding SEC-17: rotating {@code oauthRsaPrivateKey}
+                           * used to invalidate every already-issued, still-valid access token
+                           * immediately -- the JWK set exposed exactly one key, so a token
+                           * signed under the previous key could no longer be verified the
+                           * instant the new one took over. Each entry here is one previous
+                           * signing key's public half only (never its private key), in
+                           * {@code keyId:base64X509PublicKey} form; {@link
+                           * AuthorizationServerConfig#jwkSource} adds it to the JWK set as
+                           * verification-only, so a token signed before rotation keeps
+                           * verifying for as long as its entry stays configured, while every
+                           * new token is still signed only with the current key (a JWK with no
+                           * private key can never be selected for signing). Remove an entry
+                           * once its overlap window has passed.
+                           */
+                          @DefaultValue List<String> retiringOauthVerificationKeys) {
     }
 
     public record Demo(@DefaultValue("true") boolean seedSyntheticData,

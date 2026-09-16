@@ -155,6 +155,26 @@ Also outstanding:
   to pass before merge, which is a GitHub repository setting outside this codebase's control.
   These are real gaps in the audit's fuller remediation, left as explicit operational follow-up
   rather than pipeline steps added without anything to verify them against in this environment.
+- **Key rotation and recovery beyond OAuth token overlap (security-audit finding SEC-17).**
+  `tgmcp.secrets.retiring-oauth-verification-keys` now gives OAuth access tokens an actual
+  rotation overlap window (see section 4). Three related gaps remain unaddressed: (1)
+  `SessionCipher` still decrypts with exactly one configured key -- `sessionEncryptionKeyId`
+  is persisted alongside every encrypted session envelope specifically so it *could* select
+  among several keys, but nothing reads it back for that purpose, so
+  rotating `tgmcp.secrets.session-encryption-key` would make any previously-encrypted envelope
+  permanently unreadable; (2) the TDLib native database encryption key is derived from that
+  same root secret (finding F19), so rotating it also changes the key needed to open the
+  existing on-disk TDLib database -- there is no rekey procedure, and testing one requires the
+  actual native library and version this codebase cannot exercise in an environment without it;
+  operators must treat rotating `tgmcp.secrets.session-encryption-key` as equivalent to a full
+  TDLib re-authentication (a fresh login into a new, empty database directory), not an
+  in-place key change; (3) the PostgreSQL `session_ciphertext` envelope
+  (`TelegramConnectionService`) is a placeholder handle rather than a real backup of native
+  session state -- it is written but never read back and decrypted anywhere in this codebase,
+  so it does not currently help recovery at all. A complete fix needs a versioned keyring (not
+  just a recorded id) for `SessionCipher`, a decoupled TDLib key with its own rotation and a
+  verified native rekey procedure, and either wiring the Postgres envelope into real recovery
+  or removing it if it is not meant to be one.
 
 ## 4. Safety interlocks currently in place
 
@@ -197,6 +217,11 @@ Also outstanding:
   erased history silently re-backfilled by the next sync; only genuinely new messages are
   captured going forward. The management UI now describes this action and `Revoke` separately,
   rather than presenting both as an equally permanent "done with this chat for good" action.
+- OAuth access tokens survive a signing-key rotation (security-audit finding SEC-17):
+  `tgmcp.secrets.retiring-oauth-verification-keys` adds a previous key's public half to the JWK
+  set for verification only, so a token signed before rotation keeps validating through its
+  configured overlap window, while every new token is still signed only with the current key --
+  a verification-only entry has no private key and so can never be selected to sign.
 - `.github/workflows/ci.yml` (security-audit finding SEC-18) now runs the full test suite
   against a real PostgreSQL service container on every push and pull request, and a separate
   job builds the release Docker image only once that suite has passed. Dependabot

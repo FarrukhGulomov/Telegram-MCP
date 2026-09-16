@@ -47,7 +47,7 @@ class CursorCodecTests {
                 mcpDefaults(),
                 new AppProperties.Consent("2026-09-v1", true, Duration.ofDays(365)),
                 syncDefaults(),
-                new AppProperties.Secrets(null, "test", base64Key, null),
+                new AppProperties.Secrets(null, "test", base64Key, null, List.of()),
                 new AppProperties.Demo(false, "demo", "Demo", "a@b.invalid", "pw", List.of()),
                 null,
                 null);

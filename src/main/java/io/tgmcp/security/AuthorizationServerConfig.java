@@ -8,11 +8,15 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 
 import javax.sql.DataSource;
 
+import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
@@ -264,23 +268,67 @@ public class AuthorizationServerConfig {
     }
 
     /**
-     * Signing key for issued tokens.
+     * Signing key for issued tokens, plus any retiring keys kept around for verification only.
      *
      * <p>Security-audit finding F18: an ephemeral key used to be generated unconditionally.
      * That is still the fallback so local development needs no secret, but it invalidates
      * every outstanding token on restart and gives each replica of a multi-instance
      * deployment its own, mutually incompatible key -- neither of which is acceptable once
      * {@code tgmcp.secrets.oauth-rsa-private-key} is configured with a real, shared key.
+     *
+     * <p>Security-audit finding SEC-17: that single key was also the *only* one ever
+     * considered valid, so rotating it invalidated every still-live token the instant the new
+     * key took over -- "recording a key ID is not sufficient when no old-key lookup/rekey
+     * protocol exists". {@code tgmcp.secrets.retiring-oauth-verification-keys} adds previous
+     * keys' public halves to this same set for verification, giving rotation an actual overlap
+     * window; a verification-only entry (no private key) can never be selected to sign a new
+     * token, so this cannot accidentally un-rotate signing.
      */
     @Bean
     public JWKSource<SecurityContext> jwkSource(
             @Value("${tgmcp.oauth.rsa-key-id:tgmcp-dev}") String keyId,
             AppProperties properties) {
         String configuredKey = properties.secrets().oauthRsaPrivateKey();
-        RSAKey rsaKey = KeyMaterial.isConfigured(configuredKey)
+        RSAKey currentKey = KeyMaterial.isConfigured(configuredKey)
                 ? loadPersistentRsaKey(configuredKey, keyId)
                 : generateEphemeralRsaKey(keyId);
-        return new ImmutableJWKSet<>(new JWKSet(rsaKey));
+        List<JWK> keys = new ArrayList<>();
+        keys.add(currentKey);
+        for (String entry : properties.secrets().retiringOauthVerificationKeys()) {
+            RSAKey retiring = loadRetiringVerificationKey(entry);
+            if (retiring.getKeyID().equals(currentKey.getKeyID())) {
+                throw new IllegalStateException("tgmcp.secrets.retiring-oauth-verification-keys names key id '"
+                        + retiring.getKeyID() + "', which is also the current signing key id (tgmcp.oauth.rsa-key-id"
+                        + "). Retiring entries must use the key id they were originally issued under.");
+            }
+            keys.add(retiring);
+        }
+        return new ImmutableJWKSet<>(new JWKSet(keys));
+    }
+
+    /**
+     * Parses one {@code keyId:base64X509PublicKey} entry into a verification-only {@link
+     * RSAKey} -- deliberately built with no private key, so Spring Authorization Server's
+     * signer (which requires one) can never pick it to sign a new token.
+     */
+    static RSAKey loadRetiringVerificationKey(String entry) {
+        int separator = entry.indexOf(':');
+        if (separator <= 0 || separator == entry.length() - 1) {
+            throw new IllegalStateException("tgmcp.secrets.retiring-oauth-verification-keys entry '" + entry
+                    + "' is not in 'keyId:base64X509PublicKey' form");
+        }
+        String retiringKeyId = entry.substring(0, separator).trim();
+        String base64PublicKey = entry.substring(separator + 1).trim();
+        try {
+            byte[] der = Base64.getDecoder().decode(base64PublicKey);
+            KeyFactory factory = KeyFactory.getInstance("RSA");
+            RSAPublicKey publicKey = (RSAPublicKey) factory.generatePublic(new X509EncodedKeySpec(der));
+            return new RSAKey.Builder(publicKey).keyID(retiringKeyId).build();
+        }
+        catch (RuntimeException | java.security.GeneralSecurityException ex) {
+            throw new IllegalStateException("tgmcp.secrets.retiring-oauth-verification-keys entry for key id '"
+                    + retiringKeyId + "' could not be loaded as a base64-encoded X.509 RSA public key", ex);
+        }
     }
 
     RSAKey loadPersistentRsaKey(String base64Pkcs8PrivateKey, String keyId) {

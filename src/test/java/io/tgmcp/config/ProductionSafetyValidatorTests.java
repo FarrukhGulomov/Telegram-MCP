@@ -101,7 +101,7 @@ class ProductionSafetyValidatorTests {
                 "1", "hash", "./tdlib-data", realAccountAccessAuthorized,
                 acknowledgeMissingEditDeletionPipeline);
         AppProperties.Secrets secrets = new AppProperties.Secrets(sessionEncryptionKey, "key-id", cursorSigningKey,
-                oauthRsaPrivateKey);
+                oauthRsaPrivateKey, List.of());
         AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo", "owner@demo.invalid",
                 "pw", List.of());
         AppProperties.ForwardedHeaders forwardedHeaders = new AppProperties.ForwardedHeaders(trustedForwardedHosts);
