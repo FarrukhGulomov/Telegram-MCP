@@ -74,7 +74,7 @@ public class DemoDataSeeder implements ApplicationRunner {
 
         if (this.users.findByEmail(demo.ownerEmail()).isEmpty()) {
             this.users.insert(new AppUser(Ids.newId(), tenantId, demo.ownerEmail(),
-                    this.passwordEncoder.encode(demo.ownerPassword()), "Demo Owner", "OWNER", true));
+                    this.passwordEncoder.encode(demo.ownerPassword()), "Demo Owner", "OWNER", true, null));
             // Security-audit finding SEC-11: the password itself must never reach the log,
             // even a synthetic demo one -- log readers should not be handed a reusable
             // credential. The value is whatever tgmcp.demo.owner-password is configured to.
@@ -88,7 +88,7 @@ public class DemoDataSeeder implements ApplicationRunner {
             UUID otherId = Ids.newId();
             this.tenants.insert(new Tenant(otherId, "other", "Second Synthetic Tenant", true, null));
             this.users.insert(new AppUser(Ids.newId(), otherId, "owner@other.invalid",
-                    this.passwordEncoder.encode(demo.ownerPassword()), "Other Owner", "OWNER", true));
+                    this.passwordEncoder.encode(demo.ownerPassword()), "Other Owner", "OWNER", true, null));
             return this.tenants.findBySlug("other").orElseThrow();
         });
 

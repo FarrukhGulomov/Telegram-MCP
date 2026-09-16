@@ -163,6 +163,7 @@ tgmcp:
     oauth-token-requests-per-minute-per-ip: 20
     oauth-registrations-per-hour-per-ip: 5
     connect-actions-per-minute-per-user: 30
+    self-registrations-per-hour-per-ip: 5
 
   # Security-audit finding SEC-13: empty by default, matching server.forward-headers-strategy
   # trusting forwarded headers unconditionally -- correct for local development and for a
@@ -177,3 +178,11 @@ tgmcp:
   oauth:
     issuer: ${TGMCP_OAUTH_ISSUER:http://localhost:8080}
     public-base-url: ${TGMCP_PUBLIC_BASE_URL:http://localhost:8080}
+
+  # "Sign in with Telegram": empty by default, matching tgmcp.telegram.api-id/api-hash above --
+  # the login link stays hidden until both are set. Create a bot with @BotFather, then register
+  # this deployment's exact public domain against it with the bot's /setdomain command (the
+  # oauth.telegram.org redirect refuses to complete for an unregistered domain).
+  telegram-login:
+    bot-token: ${TGMCP_TELEGRAM_LOGIN_BOT_TOKEN:}
+    bot-username: ${TGMCP_TELEGRAM_LOGIN_BOT_USERNAME:}

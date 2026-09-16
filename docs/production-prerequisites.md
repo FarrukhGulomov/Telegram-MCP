@@ -175,6 +175,24 @@ Also outstanding:
   just a recorded id) for `SessionCipher`, a decoupled TDLib key with its own rotation and a
   verified native rekey procedure, and either wiring the Postgres envelope into real recovery
   or removing it if it is not meant to be one.
+- **Self-service sign-up (email/password registration, and "Sign in with Telegram") has no
+  account-recovery or account-linking story.** `/register` and `TelegramLoginController` let a
+  new team create its own tenant without an operator, but: there is no "forgot password" flow,
+  so a lost password on a self-registered account has no recovery path short of direct database
+  access; a Telegram-provisioned account has no password at all (a random, never-surfaced value
+  satisfies `password_hash NOT NULL`) and no email address that can receive anything (a
+  synthetic `telegram-<id>@users.tgmcp.invalid` address), so losing access to that Telegram
+  account permanently loses the tenant; and there is no way to link an existing password
+  account to a Telegram identity or vice versa -- each is a wholly separate front door that
+  provisions its own tenant, never merges with one that already exists. `TelegramLoginController`
+  itself also depends on the operator having registered this deployment's exact public domain
+  with the login bot via BotFather's `/setdomain`; nothing in this codebase can verify that
+  registration is in place beyond `tgmcp.telegram-login.bot-token`/`bot-username` being
+  non-blank; and self-registration's abuse control
+  (`tgmcp.abuse-controls.self-registrations-per-hour-per-ip`) is the same best-effort,
+  IP-keyed, proxy-boundary-dependent limiter security-audit finding SEC-10 already flagged for
+  login and OAuth token issuance -- not a substitute for a real CAPTCHA or email-verification
+  step if this is exposed to the open internet.
 
 ## 4. Safety interlocks currently in place
 
@@ -226,3 +244,16 @@ Also outstanding:
   against a real PostgreSQL service container on every push and pull request, and a separate
   job builds the release Docker image only once that suite has passed. Dependabot
   (`.github/dependabot.yml`) watches Maven, Docker base image, and Action dependencies weekly.
+- "Sign in with Telegram" (`TelegramLoginController`) stays hidden -- the link is not rendered
+  on the sign-in or sign-up page -- until both `tgmcp.telegram-login.bot-token` and
+  `bot-username` are configured, the same off-by-default posture the `TDLIB` Telegram adapter
+  itself uses. The callback verifies Telegram's HMAC-SHA-256 signature over the exact
+  data-check-string Telegram's login-widget specification defines, using a constant-time
+  comparison, and separately rejects a callback whose `auth_date` is more than ten minutes old
+  so a captured callback URL cannot be replayed indefinitely. It never embeds Telegram's login
+  widget JavaScript -- only a plain redirect to `oauth.telegram.org` and back -- so the
+  management UI's `script-src 'self'` Content-Security-Policy is unchanged by this feature.
+  Self-registration and the Telegram callback each sit behind their own IP-keyed rate limiter
+  (`tgmcp.abuse-controls.self-registrations-per-hour-per-ip`, and the existing
+  `login-attempts-per-minute-per-ip` for the callback), on the same footing as sign-in and
+  OAuth token issuance (security-audit finding SEC-10).

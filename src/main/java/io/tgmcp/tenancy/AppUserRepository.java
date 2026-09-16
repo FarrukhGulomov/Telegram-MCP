@@ -10,7 +10,7 @@ import org.springframework.stereotype.Repository;
 public class AppUserRepository {
 
     private static final String COLUMNS =
-            "id, tenant_id, email, password_hash, display_name, role, enabled";
+            "id, tenant_id, email, password_hash, display_name, role, enabled, telegram_user_id";
 
     private final JdbcClient jdbc;
 
@@ -32,10 +32,20 @@ public class AppUserRepository {
                 .optional();
     }
 
+    /** Used by "Sign in with Telegram" to resolve a verified Telegram identity back to its account. */
+    public Optional<AppUser> findByTelegramUserId(long telegramUserId) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM app_users WHERE telegram_user_id = :telegramUserId")
+                .param("telegramUserId", telegramUserId)
+                .query(AppUser.class)
+                .optional();
+    }
+
     public void insert(AppUser user) {
         jdbc.sql("""
-                        INSERT INTO app_users (id, tenant_id, email, password_hash, display_name, role, enabled)
-                        VALUES (:id, :tenantId, :email, :passwordHash, :displayName, :role, :enabled)
+                        INSERT INTO app_users (id, tenant_id, email, password_hash, display_name, role, enabled,
+                                               telegram_user_id)
+                        VALUES (:id, :tenantId, :email, :passwordHash, :displayName, :role, :enabled,
+                                :telegramUserId)
                         """)
                 .param("id", user.id())
                 .param("tenantId", user.tenantId())
@@ -44,6 +54,7 @@ public class AppUserRepository {
                 .param("displayName", user.displayName())
                 .param("role", user.role())
                 .param("enabled", user.enabled())
+                .param("telegramUserId", user.telegramUserId())
                 .update();
     }
 }

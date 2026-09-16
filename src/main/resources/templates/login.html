@@ -22,7 +22,9 @@
   </p>
 
   <div class="flash err" th:if="${param.error}" th:text="#{login.error}">Sign-in failed. Check your email and password.</div>
+  <div class="flash err" th:if="${param.telegramError}" th:text="#{login.telegramError}">Telegram sign-in failed or was cancelled.</div>
   <div class="flash ok" th:if="${param.loggedOut}" th:text="#{login.loggedOut}">Signed out.</div>
+  <div class="flash ok" th:if="${param.registered}" th:text="#{login.registered}">Account created.</div>
 
   <form th:action="@{/login}" method="post" data-guard-resubmit>
     <label for="username" th:text="#{login.email}">Email</label>
@@ -34,6 +36,14 @@
 
     <button type="submit" th:text="#{login.signIn}">Sign in</button>
   </form>
+
+  <div class="card ok step-card" th:if="${telegramLoginEnabled}" style="margin-top:16px">
+    <p class="muted" th:text="#{register.orDivider}">Or</p>
+    <a class="link" th:href="@{/login/telegram}" th:text="#{login.continueWithTelegram}">Continue with Telegram</a>
+    <p class="hint" th:text="#{login.telegramHint}">Uses your Telegram identity to sign in -- no password needed.
+      If you don't have an account yet, one is created automatically.</p>
+  </div>
+
   <script src="/js/forms.js" defer></script>
   <script src="/js/lang.js" defer></script>
 
@@ -41,6 +51,11 @@
     <span th:text="#{login.demoPasswordHint}">The demo password is printed in the server log at
       startup and defaults to:</span>
     <code>demo-password</code>
+  </p>
+
+  <p class="muted">
+    <span th:text="#{login.createAccount}">Need an account?</span>
+    <a th:href="@{/register}" th:text="#{login.registerLink}">Create one</a>
   </p>
 </main>
 </body>

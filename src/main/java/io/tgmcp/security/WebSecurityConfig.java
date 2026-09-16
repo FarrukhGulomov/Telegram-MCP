@@ -29,6 +29,8 @@ import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 
 /**
@@ -93,7 +95,9 @@ public class WebSecurityConfig {
     @Bean
     @Order(3)
     public SecurityFilterChain managementUiFilterChain(HttpSecurity http, AppProperties properties,
-                                                        java.time.Clock clock) throws Exception {
+                                                        java.time.Clock clock,
+                                                        SecurityContextRepository securityContextRepository)
+            throws Exception {
         // Security-audit finding SEC-10: a login attempt is unauthenticated by definition, so
         // it shares no budget with anything else in this application; IP-keyed and placed
         // before every other Spring Security filter so a caller who has spent it is turned
@@ -102,8 +106,22 @@ public class WebSecurityConfig {
                 properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login", loginLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
+        // Self-service account creation (email/password registration, and a first-time
+        // Telegram identity provisioning its own account) is reachable without any prior
+        // authentication and creates a durable tenant + user row per success -- its own,
+        // separately configured budget, same reasoning and placement as loginLimiter above.
+        io.tgmcp.ratelimit.RateLimiter registrationLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().selfRegistrationsPerHourPerIp(), java.time.Duration.ofHours(1), clock);
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/register", registrationLimiter),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
+        io.tgmcp.ratelimit.RateLimiter telegramLoginLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
+        http.addFilterBefore(new PreAuthRateLimitFilter("GET", "/login/telegram/callback", telegramLoginLimiter),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
+        http.securityContext(context -> context.securityContextRepository(securityContextRepository));
         http.authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/login", "/css/**", "/js/**", "/actuator/health").permitAll()
+                        .requestMatchers("/login", "/login/telegram", "/login/telegram/callback", "/register",
+                                "/css/**", "/js/**", "/actuator/health").permitAll()
                         // Security-audit finding F17: AppUser carries an OWNER/ADMIN/MEMBER
                         // role, and DatabaseUserDetailsService already turns it into a granted
                         // ROLE_* authority -- but nothing here ever checked it, so any signed-in
@@ -162,6 +180,18 @@ public class WebSecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+    }
+
+    /**
+     * Shared with {@link io.tgmcp.ui.TelegramLoginController} (via {@code managementUiFilterChain}'s
+     * explicit {@code .securityContext(...)} wiring below) so that a Telegram sign-in, which has
+     * no password to hand {@code AuthenticationManager} and must establish the session's {@link
+     * SecurityContext} directly, persists it exactly the way this same filter chain reads it
+     * back on every later request.
+     */
+    @Bean
+    public SecurityContextRepository securityContextRepository() {
+        return new HttpSessionSecurityContextRepository();
     }
 
     /** Session cookies are SameSite=Lax; {@code server.servlet.session.cookie.*} sets the rest. */

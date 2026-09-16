@@ -20,6 +20,7 @@ public class LoginController {
         model.addAttribute("demoMode", this.properties.demo().seedSyntheticData());
         model.addAttribute("adapter", this.properties.telegram().adapter().name());
         model.addAttribute("demoEmail", this.properties.demo().ownerEmail());
+        model.addAttribute("telegramLoginEnabled", this.properties.telegramLogin().enabled());
         return "login";
     }
 }
