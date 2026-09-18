@@ -273,7 +273,10 @@ public class TdlibTelegramGateway implements TelegramGateway {
         }
         this.loginState.set(mapped);
         if ("authorizationStateWaitTdlibParameters".equals(state.path("@type").asString(""))) {
-            sendTdlibParameters();
+            // A fresh epoch (cold start, or right after a logout) that needs parameters sent
+            // again, regardless of whether a previous epoch already sent them.
+            this.tdlibParametersPending = true;
+            ensureTdlibParametersSent();
         }
         Consumer<LoginState> listener = this.stateListener;
         if (listener != null) {
@@ -316,6 +319,30 @@ public class TdlibTelegramGateway implements TelegramGateway {
         };
     }
 
+    /**
+     * Confirmed from live production logs: {@code authorizationStateWaitTdlibParameters} (seen
+     * after every cold start, and again after every logout/re-init) triggers {@link
+     * #sendTdlibParameters} asynchronously from the update-listener-dispatch thread (SEC-14).
+     * {@link #beginLogin} runs on an unrelated HTTP request thread and could reach TDLib with
+     * its own login-specific request before that dispatch had actually run, which TDLib
+     * correctly rejected with "Initialization parameters are needed: call setTdlibParameters
+     * first" -- surfacing to the operator as an unhandled error on an ordinary reconnect attempt
+     * right after clicking Disconnect. Both call sites now go through this guarded,
+     * at-most-once-per-epoch send instead of calling {@link #sendTdlibParameters} directly:
+     * whichever of them runs first actually sends the parameters, and the other is a no-op.
+     * {@code synchronized} rather than a lock-free compare-and-set because {@link
+     * #sendTdlibParameters} itself blocks on a real TDLib round trip -- the second caller must
+     * wait for that round trip to finish (and see {@code pending=false}), not race past it.
+     */
+    private volatile boolean tdlibParametersPending = true;
+
+    private synchronized void ensureTdlibParametersSent() {
+        if (this.tdlibParametersPending) {
+            sendTdlibParameters();
+            this.tdlibParametersPending = false;
+        }
+    }
+
     private void sendTdlibParameters() {
         requireRealAccessAuthorized();
         Map<String, Object> params = new LinkedHashMap<>();
@@ -345,6 +372,11 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // other of the two calls TelegramConnectionService.beginLogin makes to establish a
         // brand new, already-verified owner.
         this.currentOwner = ref;
+        // See ensureTdlibParametersSent's own doc: closes the race where the request just below
+        // could otherwise reach TDLib before the async listener path has sent
+        // setTdlibParameters for the current epoch (a fresh process, or a login attempted right
+        // after disconnecting).
+        ensureTdlibParametersSent();
         if (method == LoginMethod.QR_CODE) {
             this.client.request("requestQrCodeAuthentication", Map.of("other_user_ids", List.of()));
         }
