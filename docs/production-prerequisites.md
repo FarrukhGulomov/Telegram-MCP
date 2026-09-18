@@ -272,3 +272,13 @@ Also outstanding:
   (`tgmcp.abuse-controls.self-registrations-per-hour-per-ip`, and the existing
   `login-attempts-per-minute-per-ip` for the callback), on the same footing as sign-in and
   OAuth token issuance (security-audit finding SEC-10).
+- A database that ran with `tgmcp.demo.seed-synthetic-data=true` before being promoted to
+  real-account use keeps whatever demo tenant(s) and the two fixed demo OAuth client ids
+  (`claude-demo`, `chatgpt-demo`) that earlier run created -- `ProductionSafetyValidator`
+  refuses to start against them (security-audit finding SEC-11), and disabling
+  `seed-synthetic-data` alone does not delete rows a previous run already inserted.
+  `DemoDataCleanupRunner`, gated by `tgmcp.demo.cleanup-legacy-demo-data` (off by default), runs
+  the one-time removal on the next startup, ordered strictly before the safety check so the same
+  deploy that authorizes real-account access can also clear this blocking condition instead of
+  requiring a second restart. Turn the flag back off once the startup log confirms the cleanup
+  ran.

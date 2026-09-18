@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.stereotype.Component;
 
@@ -27,8 +28,14 @@ import org.springframework.stereotype.Component;
  * <p>Constructed eagerly during context refresh (a plain {@code @Component}, not a lazy bean),
  * so an unsafe combination fails the deployment immediately rather than surfacing later as a
  * data leak or a demo fixture polluting a real account's chats.
+ *
+ * <p>{@code @DependsOn(DemoDataCleanupRunner)}: if a deploy both authorizes real-account access
+ * and turns on {@code tgmcp.demo.cleanup-legacy-demo-data} to clear leftover demo tenants/OAuth
+ * clients, the cleanup must actually run before this check inspects the database, or the two
+ * settings together would still fail to start on their very first, cleanup-carrying deploy.
  */
 @Component
+@DependsOn("demoDataCleanupRunner")
 public class ProductionSafetyValidator {
 
     private static final Logger log = LoggerFactory.getLogger(ProductionSafetyValidator.class);

@@ -135,7 +135,16 @@ public record AppProperties(@DefaultValue Telegram telegram,
                        @DefaultValue("Synthetic Demo Team") String tenantName,
                        @DefaultValue("owner@demo.invalid") String ownerEmail,
                        @DefaultValue("demo-password") String ownerPassword,
-                       @DefaultValue List<String> extraUsers) {
+                       @DefaultValue List<String> extraUsers,
+                       /**
+                        * Security-audit finding SEC-11's remediation: a database promoted to
+                        * real-account use can still carry demo tenants/OAuth clients a previous
+                        * run seeded, which disabling {@link #seedSyntheticData} alone does not
+                        * delete. Setting this to {@code true} makes {@link
+                        * DemoDataCleanupRunner} remove them once, on the next startup. Off by
+                        * default; turn it back off once the log confirms the cleanup ran.
+                        */
+                       @DefaultValue("false") boolean cleanupLegacyDemoData) {
     }
 
     /**

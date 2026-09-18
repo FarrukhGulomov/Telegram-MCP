@@ -154,6 +154,10 @@ tgmcp:
     tenant-name: Synthetic Demo Team
     owner-email: ${TGMCP_DEMO_EMAIL:owner@demo.invalid}
     owner-password: ${TGMCP_DEMO_PASSWORD:demo-password}
+    # Security-audit finding SEC-11's remediation: off by default. See DemoDataCleanupRunner --
+    # turns on a one-time removal of demo tenants/OAuth clients a previous run left behind, for
+    # a database now promoted to real-account use. Turn back off once the log confirms it ran.
+    cleanup-legacy-demo-data: ${TGMCP_CLEANUP_LEGACY_DEMO_DATA:false}
 
   # Security-audit finding SEC-10: separate, smaller budgets for endpoints reachable before
   # or without MCP authentication. Keyed by client IP for login/OAuth, by tenant+user for
