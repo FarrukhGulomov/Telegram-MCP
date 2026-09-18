@@ -165,6 +165,51 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
     }
 
     /**
+     * Confirmed from live production logs: disconnect() had the exact same restart-resilience
+     * gap status() did -- gateway.disconnect(ref) threw "not the current owner" for a ref no
+     * one had reclaimed since the last restart, aborting the whole disconnect (including the
+     * local DB cleanup) for a real, previously-connected account the operator most needs to be
+     * able to sign out of. Verifies the fix's call order rather than a thrown-and-recovered
+     * exception, since MockTelegramGateway's own disconnect() never enforces ownership at all
+     * (only the real TDLib adapter does) -- what matters here is that TelegramConnectionService
+     * always reclaims first.
+     */
+    @Test
+    void disconnectReclaimsOwnershipFirstSoItWorksEvenIfNothingHasReclaimedItSinceARestart() {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = team("disconnect-after-restart");
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+        this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        Mockito.clearInvocations(this.gateway);
+
+        this.connectionService.disconnect(team.actor());
+
+        org.mockito.InOrder order = Mockito.inOrder(this.gateway);
+        order.verify(this.gateway).onStateChange(ArgumentMatchers.any(), ArgumentMatchers.any());
+        order.verify(this.gateway).disconnect(ArgumentMatchers.any());
+        assertThat(this.connectionService.find(team.actor()).orElseThrow().ready()).isFalse();
+    }
+
+    /**
+     * The security boundary the reclaim must not cross: SEC-01 exists specifically so a tenant
+     * who merely visited /connect (a still-DISCONNECTED row, no real login ever attempted) can
+     * never disconnect whatever real account a different, legitimate tenant is using. Since
+     * reclaiming is unconditional once called, it must only ever be called for a connection
+     * whose own persisted row proves a real login happened.
+     */
+    @Test
+    void disconnectDoesNotReclaimOwnershipForAConnectionThatNeverEngagedInALogin() {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = team("disconnect-never-connected");
+        this.connectionService.getOrCreate(team.actor());
+
+        this.connectionService.disconnect(team.actor());
+
+        Mockito.verify(this.gateway, Mockito.never()).onStateChange(ArgumentMatchers.any(), ArgumentMatchers.any());
+    }
+
+    /**
      * Simulates the in-memory ownership claim being gone (a fresh process after a restart)
      * without touching whatever is persisted -- exactly what {@code TdlibTelegramGateway}'s
      * volatile, never-persisted {@code currentOwner} field looks like right after a restart.

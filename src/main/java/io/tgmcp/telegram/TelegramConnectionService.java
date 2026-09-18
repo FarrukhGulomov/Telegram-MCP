@@ -174,12 +174,35 @@ public class TelegramConnectionService {
     @Transactional
     public void disconnect(AuthenticatedActor actor) {
         find(actor).ifPresent(connection -> {
+            reclaimOwnershipIfPersistedAsOwner(connection);
             this.gateway.disconnect(connection.ref());
             this.connectionRepository.clearSession(actor.tenantId(), connection.id());
             int pausedChats = pauseActiveChatsForConnection(actor, connection, "Telegram connection disconnected");
             this.auditService.record(actor, AuditAction.TELEGRAM_DISCONNECTED, null, AuditService.ALLOWED,
                     Map.of("adapter", connection.adapter().name(), "chatsPaused", pausedChats));
         });
+    }
+
+    /**
+     * Confirmed from live production logs: the same restart-resilience gap {@link #status}
+     * already closes also broke disconnect() -- gateway.disconnect(ref) throws {@link
+     * TelegramAuthException} ("not the current owner") for a ref no one has reclaimed since the
+     * last restart, aborting the whole disconnect (including the local cleanup below) for the
+     * one action an operator most needs to work on a real, previously-connected account.
+     *
+     * <p>Reclaims ownership for this ref only when its own persisted row proves it previously
+     * engaged in a real login (anything but {@code DISCONNECTED}) -- never unconditionally,
+     * which would let a tenant who merely visited {@code /connect} (a still-{@code
+     * DISCONNECTED} row) disconnect whatever real account another tenant is legitimately using,
+     * exactly the multi-tenant-bleed finding SEC-01 exists to prevent.
+     * TelegramConnectionService#beginLogin's own {@code requireNoOtherActiveOwner} already
+     * guarantees at most one connection is ever persisted past {@code DISCONNECTED} at a time,
+     * so this reclaim can never conflict with a different, currently-legitimate owner.
+     */
+    private void reclaimOwnershipIfPersistedAsOwner(TelegramConnection connection) {
+        if (connection.status() != LoginStage.DISCONNECTED) {
+            this.gateway.onStateChange(connection.ref(), state -> { });
+        }
     }
 
     /**
