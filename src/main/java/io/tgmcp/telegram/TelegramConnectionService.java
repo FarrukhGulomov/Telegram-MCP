@@ -143,7 +143,18 @@ public class TelegramConnectionService {
 
     public LoginState status(AuthenticatedActor actor) {
         return find(actor)
-                .map(connection -> this.gateway.currentState(connection.ref()))
+                .map(connection -> connection.ready()
+                        // Mirrors beginLogin's own restart-resilience shortcut above: a
+                        // container restart resets TdlibTelegramGateway's in-memory ownership
+                        // claim to null (currentOwner is volatile, process-local, never
+                        // persisted) while TDLib silently restores its own already-authorized
+                        // session from disk. Before this fix, every GET /connect view -- not
+                        // just a login resubmission -- called gateway.currentState(ref) and hit
+                        // TelegramAuthException ("not the current owner") for the very account
+                        // that actually is connected, on every single restart, until the next
+                        // explicit beginLogin call happened to reclaim it.
+                        ? LoginState.of(LoginStage.READY, "login.tdlib.ready")
+                        : this.gateway.currentState(connection.ref()))
                 .orElse(LoginState.of(LoginStage.DISCONNECTED, null));
     }
 

@@ -120,4 +120,36 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         Mockito.verify(this.gateway, Mockito.never())
                 .beginLogin(ArgumentMatchers.any(), Mockito.eq(LoginMethod.PHONE_NUMBER), ArgumentMatchers.any());
     }
+
+    /**
+     * The same restart scenario as {@link #beginLoginOnAnAlreadyReadyConnectionReturnsReadyInsteadOfErroring},
+     * but for {@code status()} -- the call every plain {@code GET /connect} page view makes, not
+     * only a login resubmission. Confirmed against a real production incident: after a restart,
+     * {@code gateway.currentState(ref)} throws {@code TelegramAuthException} ("not the current
+     * owner") for a ref no one has reclaimed yet, and status() must not let that propagate for an
+     * account the database already knows is connected.
+     */
+    @Test
+    void statusOnAnAlreadyReadyConnectionReturnsReadyEvenIfNothingHasReclaimedOwnershipYet() {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = team("status-after-restart");
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+        this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+
+        // Simulates the in-memory ownership claim being gone (a fresh process after a restart)
+        // without touching the persisted READY row -- exactly what TdlibTelegramGateway's
+        // volatile, never-persisted currentOwner field looks like right after a restart.
+        // doThrow(...).when(spy)... rather than when(spy...).thenThrow(...): this.gateway is a
+        // spy over the real MockTelegramGateway, and the latter form calls the real method with
+        // the matcher's null placeholder argument before the stub is even registered.
+        Mockito.doThrow(new io.tgmcp.telegram.gateway.TelegramAuthException(
+                        "This connection is not the current owner of the shared Telegram session"))
+                .when(this.gateway).currentState(ArgumentMatchers.any());
+
+        LoginState state = this.connectionService.status(team.actor());
+
+        assertThat(state.stage()).isEqualTo(LoginStage.READY);
+        Mockito.verify(this.gateway, Mockito.never()).currentState(ArgumentMatchers.any());
+    }
 }
