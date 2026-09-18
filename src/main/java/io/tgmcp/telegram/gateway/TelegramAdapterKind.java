@@ -7,13 +7,14 @@ public enum TelegramAdapterKind {
     TDLIB;
 
     /**
-     * Whether this adapter can propagate upstream edits and deletions into {@code
-     * TelegramGateway#fetchRevisions}. Security-audit findings F08/SEC-07: {@code TDLIB}
+     * Whether this adapter's edit/deletion pipeline into {@code TelegramGateway#fetchRevisions}
+     * is considered production-verified. Security-audit findings F08/SEC-07: {@code TDLIB}
      * delivers edits and deletions as pushed {@code updateMessageContent} / {@code
-     * updateDeleteMessages} events that nothing in this codebase currently turns into
-     * revisions, so {@code fetchRevisions()} always reports zero for it -- not because
-     * nothing changed, but because this adapter cannot see it. That is a structural,
-     * adapter-wide gap, not a per-chat toggle, and {@link
+     * updateDeleteMessages} events; {@link io.tgmcp.telegram.tdlib.TdlibTelegramGateway} now
+     * listens for both and buffers them for {@code fetchRevisions()} to drain, so this is no
+     * longer "nothing implemented" -- but that pipeline has never been exercised against a real
+     * Telegram account (see docs/production-prerequisites.md), and this flag exists to gate
+     * real-account access on an explicit, informed decision, not to claim it is proven. {@link
      * io.tgmcp.config.ProductionSafetyValidator} refuses to authorize real-account access
      * against an adapter reporting {@code false} here unless the operator has explicitly
      * acknowledged it (see {@code tgmcp.telegram.acknowledge-missing-edit-deletion-pipeline}).

@@ -63,22 +63,37 @@ the adapter as unproven until you have run it end to end. Specifically untested:
 `td_receive` loop under load, TDLib's authorization state machine in real time, and
 `updateMessageContent` / `updateDeleteMessages` handling.
 
-**Blocking gap: the TDLIB adapter has no live edit/deletion pipeline.** `fetchRevisions()`
-always returns an empty list for this adapter — not because nothing changed, but because
-edits and deletions arrive from TDLib as pushed `updateMessageContent` / `updateDeleteMessages`
-events rather than as a queryable history, and nothing in this codebase currently listens for
-those events and turns them into revisions. A message edited or deleted on Telegram after
-this service has ingested it will silently keep showing its original, stale content and will
-never be marked deleted. The application logs a warning to this effect every time the TDLIB
-adapter starts (see `TelegramConfiguration`). Building that pipeline means routing
-`td_receive()` updates into the sync worker under the adapter's per-connection locking — the
-same locking this security pass added for finding F01. Security-audit finding F11 fixed a
-prerequisite for that work (the receive loop used to dispatch updates inline on the same
-thread that read responses, so a listener calling back into the client could deadlock it
-against itself — see `NativeTdlibClient`) but did not build the pipeline itself, which remains
-a distinct, larger piece of work and is explicitly out of scope here. **Do not deploy the
-TDLIB adapter for any chat where stale edits or undetected deletions are a real risk until
-this is built.**
+**Edit/deletion pipeline exists but is unverified against a real account.** `fetchRevisions()`
+used to unconditionally return an empty list for the TDLIB adapter. It no longer does:
+`TdlibTelegramGateway` now listens for TDLib's pushed `updateMessageContent` /
+`updateDeleteMessages` events, translates each into a `RemoteMessage` (re-fetching the full
+message via `getMessage` for an edit; a message id alone is enough for a deletion), and
+buffers it per chat, keyed the same way the rest of this class enforces single-owner locking
+(security-audit finding F08). `fetchRevisions()` drains that buffer on each sync tick,
+bridging TDLib's push model onto `ChatSyncService`'s pull-based contract without changing that
+contract, `TelegramGateway`, or `RemoteMessage` — the same contract the MOCK adapter's own real
+`fetchRevisions()` implementation already proves is generic enough.
+
+Two things this does **not** yet close, both still tracked by
+`tgmcp.telegram.acknowledge-missing-edit-deletion-pipeline` and
+`TelegramAdapterKind.supportsLiveRevisions()` returning `false` for TDLIB:
+
+1. **Unverified against a real Telegram account.** The JSON shapes this pipeline expects for
+   `updateMessageContent`/`updateDeleteMessages` are taken from TDLib's own documented
+   `td_api.tl`, covered by unit tests against a scripted client, but — like the rest of the
+   TDLIB adapter — never exercised against `td_receive()` output from a live account. Treat
+   edit/delete sync as unproven until that E2E run has happened (see the acceptance criteria in
+   `docs/competitive-gap-analysis.md`).
+2. **In-memory buffering only.** A revision buffered between the moment TDLib pushes it and the
+   next sync draining it does not survive a process restart in that window — an accepted,
+   narrower gap than "no pipeline at all," but still a gap: a restart at the wrong moment can
+   silently lose one pending edit or deletion. A durable (database-backed) buffer would close
+   this if it ever proves to matter in practice; it is not built pre-emptively here.
+
+The application still logs a warning every time the TDLIB adapter starts, now describing this
+narrower, unverified-not-missing state (see `TelegramConfiguration`). **Do not deploy the TDLIB
+adapter for any chat where stale edits or undetected deletions are a real risk until a real
+account has exercised this pipeline end to end.**
 
 **Verified against live Claude or ChatGPT: no.** The MCP server is driven end to end by the
 official MCP Java SDK client in the test suite (initialize, tools/list, tools/call, and the

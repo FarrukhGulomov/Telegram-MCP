@@ -687,6 +687,8 @@ class TdlibTelegramGatewayTests {
         assertThatThrownBy(() -> this.gateway.fetchMessages(this.foreignRef,
                 -100123L, new MessageWindow(Instant.EPOCH, Instant.now(), null, null, 10)))
                 .isInstanceOf(TelegramAuthException.class);
+        assertThatThrownBy(() -> this.gateway.fetchRevisions(this.foreignRef, -100123L, Instant.EPOCH, 10))
+                .isInstanceOf(TelegramAuthException.class);
     }
 
     @Test
@@ -717,6 +719,91 @@ class TdlibTelegramGatewayTests {
         assertThatThrownBy(() -> this.gateway.currentState(this.ref))
                 .as("even the owner that just disconnected must not keep working against a cleared claim")
                 .isInstanceOf(TelegramAuthException.class);
+    }
+
+    // --- F08: edit/delete revision pipeline ----------------------------------------------
+
+    @Test
+    void anEditedMessageIsBufferedAndReturnedByFetchRevisions() {
+        this.client.enqueue("""
+                {"@type":"message","id":42,"date":1700000000,"edit_date":1700000100,
+                 "sender_id":{"@type":"messageSenderUser","user_id":7},
+                 "content":{"@type":"messageText","text":{"text":"edited body"}}}""");
+
+        this.client.pushUpdate("""
+                {"@type":"updateMessageContent","chat_id":-100123,"message_id":42,
+                 "new_content":{"@type":"messageText","text":{"text":"edited body"}}}""");
+
+        List<RemoteMessage> revisions = this.gateway.fetchRevisions(this.ref, -100123L, Instant.EPOCH, 50);
+
+        assertThat(revisions).hasSize(1);
+        RemoteMessage revision = revisions.get(0);
+        assertThat(revision.messageId()).isEqualTo(42L);
+        assertThat(revision.deleted()).isFalse();
+        assertThat(revision.text()).isEqualTo("edited body");
+        assertThat(revision.senderTgUserId()).isEqualTo(7L);
+        assertThat(revision.editedAt()).isEqualTo(Instant.ofEpochSecond(1700000100));
+    }
+
+    @Test
+    void deletedMessagesAreBufferedAndReturnedByFetchRevisions() {
+        this.client.pushUpdate("""
+                {"@type":"updateDeleteMessages","chat_id":-100123,"message_ids":[10,11],
+                 "is_permanent":true,"from_cache":false}""");
+
+        List<RemoteMessage> revisions = this.gateway.fetchRevisions(this.ref, -100123L, Instant.EPOCH, 50);
+
+        assertThat(revisions).hasSize(2);
+        assertThat(revisions).allSatisfy(r -> assertThat(r.deleted()).isTrue());
+        assertThat(revisions).extracting(RemoteMessage::messageId).containsExactlyInAnyOrder(10L, 11L);
+    }
+
+    @Test
+    void fetchRevisionsDrainsOnlyUpToTheRequestedLimitLeavingTheRestQueued() {
+        this.client.pushUpdate("""
+                {"@type":"updateDeleteMessages","chat_id":-100123,"message_ids":[1,2,3],
+                 "is_permanent":true,"from_cache":false}""");
+
+        List<RemoteMessage> firstBatch = this.gateway.fetchRevisions(this.ref, -100123L, Instant.EPOCH, 2);
+        assertThat(firstBatch).extracting(RemoteMessage::messageId).containsExactly(1L, 2L);
+
+        List<RemoteMessage> secondBatch = this.gateway.fetchRevisions(this.ref, -100123L, Instant.EPOCH, 2);
+        assertThat(secondBatch).extracting(RemoteMessage::messageId).containsExactly(3L);
+    }
+
+    @Test
+    void fetchRevisionsReturnsEmptyForAChatWithNoBufferedActivity() {
+        assertThat(this.gateway.fetchRevisions(this.ref, -999L, Instant.EPOCH, 10)).isEmpty();
+    }
+
+    /**
+     * The follow-up getMessage() call after an edit push can itself fail (e.g. the message was
+     * deleted moments later); this must be swallowed on the update-dispatch path, not thrown,
+     * since nothing calls fetchRevisions() from there to catch it.
+     */
+    @Test
+    void aFailedFollowUpFetchAfterAnEditIsSwallowedRatherThanPropagated() {
+        this.client.enqueueError(400, "MESSAGE_ID_INVALID");
+
+        this.client.pushUpdate("""
+                {"@type":"updateMessageContent","chat_id":-100123,"message_id":999,
+                 "new_content":{"@type":"messageText","text":{"text":"x"}}}""");
+
+        assertThat(this.gateway.fetchRevisions(this.ref, -100123L, Instant.EPOCH, 10)).isEmpty();
+    }
+
+    @Test
+    void disconnectClearsAnyBufferedRevisionsSoALaterLoginDoesNotInheritThem() {
+        this.client.pushUpdate("""
+                {"@type":"updateDeleteMessages","chat_id":-100123,"message_ids":[1],
+                 "is_permanent":true,"from_cache":false}""");
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.gateway.disconnect(this.ref);
+
+        ConnectionRef newOwner = new ConnectionRef(UUID.randomUUID(), UUID.randomUUID());
+        this.gateway.onStateChange(newOwner, state -> { });
+
+        assertThat(this.gateway.fetchRevisions(newOwner, -100123L, Instant.EPOCH, 10)).isEmpty();
     }
 
     /** Replays canned TDLib responses in order; records what was sent. */

@@ -89,11 +89,12 @@ public class ProductionSafetyValidator {
         // depending on someone having read the log.
         if (!properties.telegram().adapter().supportsLiveRevisions()
                 && !properties.telegram().acknowledgeMissingEditDeletionPipeline()) {
-            problems.add("The " + properties.telegram().adapter() + " adapter has no live "
-                    + "edit/deletion pipeline: a message edited or deleted on Telegram after ingestion "
-                    + "will not be reflected here (see docs/production-prerequisites.md). Set "
+            problems.add("The " + properties.telegram().adapter() + " adapter's edit/deletion pipeline "
+                    + "has never been verified against a real Telegram account (see "
+                    + "docs/production-prerequisites.md). Set "
                     + "tgmcp.telegram.acknowledge-missing-edit-deletion-pipeline=true only once you have "
-                    + "confirmed this gap is acceptable for every chat you plan to activate.");
+                    + "confirmed relying on unverified edit/delete sync is acceptable for every chat you "
+                    + "plan to activate.");
         }
         // Security-audit finding SEC-11: disabling tgmcp.demo.seed-synthetic-data stops new
         // demo records from being created, but does not delete ones a previous run already

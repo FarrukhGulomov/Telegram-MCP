@@ -205,7 +205,7 @@ class ProductionSafetyValidatorTests {
     }
 
     /**
-     * Security-audit finding SEC-07: F08 only ever logged the TDLIB adapter's missing
+     * Security-audit finding SEC-07: F08 only ever logged the TDLIB adapter's unverified
      * edit/deletion pipeline as a warning -- a deployment could authorize real-account access
      * against it and start anyway. This must now refuse to start unless the operator has
      * explicitly acknowledged the gap.
@@ -217,7 +217,7 @@ class ProductionSafetyValidatorTests {
         assertThatThrownBy(() -> validator(properties,
                 "https://mcp.example.com", "https://mcp.example.com", true))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("no live edit/deletion pipeline")
+                .hasMessageContaining("has never been verified against a real Telegram account")
                 .hasMessageContaining("acknowledge-missing-edit-deletion-pipeline");
     }
 

@@ -100,9 +100,10 @@ UI says this on the disconnect action.
 
 ## Known gaps
 
-`fetchRevisions` returns an empty list for the TDLib adapter. TDLib delivers edits and
-deletions as pushed `updateMessageContent` / `updateDeleteMessages` updates rather than as a
-queryable history, and routing those into the sync worker is not finished. Until it is, the
-TDLib adapter will not notice an upstream edit or deletion of a message it has already
-stored. The mock adapter does implement revisions, and the sync worker's handling of them is
-tested against it.
+`fetchRevisions` now buffers real edits/deletions for the TDLib adapter: `TdlibTelegramGateway`
+listens for TDLib's pushed `updateMessageContent` / `updateDeleteMessages` updates and queues
+them per chat until the sync worker next drains them. This has never been exercised against a
+real account, and the buffer is in-memory only (a process restart between a push and the next
+drain loses whatever was still queued) — see `docs/production-prerequisites.md` for both
+caveats in full. The mock adapter's own real `fetchRevisions` implementation is what the sync
+worker's revision-handling tests run against.

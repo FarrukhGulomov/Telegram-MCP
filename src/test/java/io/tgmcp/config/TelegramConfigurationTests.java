@@ -17,16 +17,17 @@ import ch.qos.logback.core.read.ListAppender;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Security-audit finding F08: the TDLIB adapter has no live edit/deletion pipeline, and a
- * production operator must be told this loudly at the moment it becomes relevant -- not left
- * to discover it from a source comment. These tests exercise only the config bean method
- * directly (no Spring context, no native library), since starting the real adapter needs a
- * libtdjson binary this environment does not have.
+ * Security-audit finding F08: the TDLIB adapter's edit/deletion pipeline has never been
+ * verified against a real Telegram account, and a production operator must be told this
+ * loudly at the moment it becomes relevant -- not left to discover it from a source comment.
+ * These tests exercise only the config bean method directly (no Spring context, no native
+ * library), since starting the real adapter needs a libtdjson binary this environment does
+ * not have.
  */
 class TelegramConfigurationTests {
 
     @Test
-    void warnsLoudlyAboutTheMissingEditDeletePipelineBeforeAttemptingToLoadTheNativeLibrary() {
+    void warnsLoudlyAboutTheUnverifiedEditDeletePipelineBeforeAttemptingToLoadTheNativeLibrary() {
         Logger logbackLogger = (Logger) LoggerFactory.getLogger(TelegramConfiguration.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
@@ -52,9 +53,10 @@ class TelegramConfigurationTests {
         List<String> messages = appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
         assertThat(messages).anyMatch(m -> m.contains("connects a real Telegram account"));
         assertThat(messages)
-                .as("must call out the missing edit/deletion pipeline, not just that a real account is in play")
-                .anyMatch(m -> m.contains("NO live edit/deletion pipeline")
-                        && m.contains("fetchRevisions")
-                        && m.contains("blocking gap"));
+                .as("must call out that the edit/deletion pipeline is unverified, not just that a real "
+                        + "account is in play")
+                .anyMatch(m -> m.contains("edit/deletion pipeline")
+                        && m.contains("never been verified against a real Telegram account")
+                        && m.contains("unproven"));
     }
 }

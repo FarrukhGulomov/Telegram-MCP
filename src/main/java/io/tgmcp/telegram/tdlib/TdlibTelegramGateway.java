@@ -3,10 +3,13 @@ package io.tgmcp.telegram.tdlib;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -108,6 +111,21 @@ public class TdlibTelegramGateway implements TelegramGateway {
      * key {@link io.tgmcp.telegram.session.SessionCipher} derives from the same root secret.
      */
     private final String databaseEncryptionKey;
+    /**
+     * Security-audit finding F08: TDLib delivers edits and deletions as pushed {@code
+     * updateMessageContent} / {@code updateDeleteMessages} events, not as a query this class
+     * could answer "what changed since X" with the way {@code MockTelegramGateway}'s real
+     * {@code fetchRevisions} implementation does. This buffers each pushed revision, keyed by
+     * the chat it belongs to, until the next {@link #fetchRevisions} call drains it -- bridging
+     * TDLib's push model onto {@code ChatSyncService}'s pull-based contract without changing
+     * that contract, {@link TelegramGateway}, or {@link RemoteMessage} at all. In-memory only:
+     * a revision buffered here does not survive a process restart before the next sync drains
+     * it. That is an accepted, narrower gap than "no pipeline exists at all" -- see
+     * docs/production-prerequisites.md.
+     */
+    private final Map<Long, Deque<RemoteMessage>> pendingRevisions = new ConcurrentHashMap<>();
+    /** Caps memory if a chat accumulates edits/deletions faster than it is ever synced. */
+    private static final int MAX_PENDING_REVISIONS_PER_CHAT = 500;
 
     public TdlibTelegramGateway(TdlibClient client, AppProperties.Telegram config, String sessionEncryptionKey) {
         this.client = client;
@@ -155,9 +173,64 @@ public class TdlibTelegramGateway implements TelegramGateway {
     // --- authorization ----------------------------------------------------------------
 
     private void handleUpdate(JsonNode update) {
-        if (!"updateAuthorizationState".equals(update.path("@type").asString(""))) {
-            return;
+        switch (update.path("@type").asString("")) {
+            case "updateMessageContent" -> handleMessageContentUpdate(update);
+            case "updateDeleteMessages" -> handleDeleteMessagesUpdate(update);
+            case "updateAuthorizationState" -> handleAuthorizationStateUpdate(update);
+            default -> { }
         }
+    }
+
+    /**
+     * Security-audit finding F08: the edit half of the revision pipeline. {@code
+     * updateMessageContent} carries only the new content inline; re-fetching the full message
+     * via {@code getMessage} keeps the mapping identical to every other {@link RemoteMessage}
+     * this class produces ({@link #toRemoteMessage}) instead of hand-assembling a partial one
+     * from the push event's own fields.
+     */
+    private void handleMessageContentUpdate(JsonNode update) {
+        long chatId = update.path("chat_id").asLong();
+        long messageId = update.path("message_id").asLong();
+        try {
+            JsonNode message = this.client.request("getMessage", Map.of("chat_id", chatId, "message_id", messageId));
+            bufferRevision(chatId, toRemoteMessage(message));
+        }
+        catch (RuntimeException ex) {
+            // Best-effort: the edited message may already be gone by the time this follow-up
+            // request runs (e.g. it was deleted moments later) -- the corresponding
+            // updateDeleteMessages event, which carries no such race, still captures that case.
+            log.warn("Could not fetch edited message {} in chat {} after updateMessageContent: {}",
+                    messageId, chatId, ex.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * Security-audit finding F08: the delete half of the revision pipeline. A deleted message
+     * carries no retrievable content, and {@code ChatSyncService.applyRevisions}/{@code store}
+     * route a {@code deleted()} revision straight to {@code MessageRepository.markDeleted}
+     * without reading any other field of it, so the placeholder fields here are never read.
+     */
+    private void handleDeleteMessagesUpdate(JsonNode update) {
+        long chatId = update.path("chat_id").asLong();
+        for (JsonNode idNode : update.path("message_ids")) {
+            bufferRevision(chatId, new RemoteMessage(idNode.asLong(), null, null, Instant.EPOCH, null, true, "",
+                    null));
+        }
+    }
+
+    private void bufferRevision(long tgChatId, RemoteMessage revision) {
+        Deque<RemoteMessage> queue = this.pendingRevisions.computeIfAbsent(tgChatId,
+                id -> new ConcurrentLinkedDeque<>());
+        queue.addLast(revision);
+        RemoteMessage dropped;
+        while (queue.size() > MAX_PENDING_REVISIONS_PER_CHAT && (dropped = queue.pollFirst()) != null) {
+            log.warn("Dropped a buffered revision for chat {} (message {}): more than {} edits/deletions "
+                            + "accumulated without a sync draining them",
+                    tgChatId, dropped.messageId(), MAX_PENDING_REVISIONS_PER_CHAT);
+        }
+    }
+
+    private void handleAuthorizationStateUpdate(JsonNode update) {
         JsonNode state = update.path("authorization_state");
         // Real-account testing found that quieting TDLib's own very noisy native logging
         // (necessary -- see NativeTdlibClient -- since it was flooding Railway's log pipe past
@@ -313,6 +386,10 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // beginLogin/onStateChange starts from a clean slate rather than this stale ref lingering
         // as "current" until someone else's login happens to overwrite it.
         this.currentOwner = null;
+        // Security-audit finding F08: a revision buffered before this disconnect belongs to
+        // whatever account was just signed out of; a future login (the same account signing
+        // back in, or a different one) must not have it silently applied on its behalf.
+        this.pendingRevisions.clear();
     }
 
     // --- read-only data ---------------------------------------------------------------
@@ -622,18 +699,23 @@ public class TdlibTelegramGateway implements TelegramGateway {
 
     @Override
     public List<RemoteMessage> fetchRevisions(ConnectionRef ref, long tgChatId, Instant changedSince, int limit) {
-        // Security-audit finding F08: TDLib delivers edits and deletions as pushed
-        // updateMessageContent / updateDeleteMessages events, not as a pollable history query,
-        // so there is no request this method can make to answer "what changed since X" the way
-        // the MOCK adapter's fetchRevisions does. Nothing in this class currently listens for
-        // those update types and turns them into RemoteMessage revisions (that is a distinct,
-        // larger piece of work -- routing td_receive() updates into the sync worker under the
-        // adapter's per-connection locking, see security-audit finding F11 -- and out of scope
-        // for this pass). Returning an empty list here is therefore not "nothing changed": it is
-        // an honest "this adapter cannot see edits or deletions yet". See the startup warning in
-        // TelegramConfiguration and docs/production-prerequisites.md, both of which call this out
-        // as a blocking gap for any real deployment.
-        return List.of();
+        requireCurrentOwner(ref);
+        // Security-audit finding F08: drains the buffer handleMessageContentUpdate /
+        // handleDeleteMessagesUpdate filled from TDLib's own pushed updates -- see the
+        // pendingRevisions field javadoc. changedSince is unused here on purpose: unlike the
+        // mock adapter's query-a-log implementation, this buffer only ever holds revisions
+        // pushed since the last successful drain, so anything in it is already "since last
+        // sync" by construction; there is nothing older left to filter out.
+        Deque<RemoteMessage> queue = this.pendingRevisions.get(tgChatId);
+        if (queue == null) {
+            return List.of();
+        }
+        List<RemoteMessage> drained = new ArrayList<>();
+        RemoteMessage next;
+        while (drained.size() < limit && (next = queue.pollFirst()) != null) {
+            drained.add(next);
+        }
+        return List.copyOf(drained);
     }
 
     @Override

@@ -35,12 +35,15 @@ public record AppProperties(@DefaultValue Telegram telegram,
                            /**
                             * Security-audit findings F08/SEC-07: {@link
                             * TelegramAdapterKind#supportsLiveRevisions} is {@code false} for
-                            * TDLIB -- edits and deletions made on Telegram after ingestion are
-                            * silently not reflected here, with no pipeline built to change that.
-                            * {@link ProductionSafetyValidator} refuses real-account access
-                            * against such an adapter unless this is explicitly set, so that gap
-                            * is a deliberate, acknowledged choice rather than a discovered
-                            * surprise.
+                            * TDLIB -- a pipeline that turns TDLib's pushed {@code
+                            * updateMessageContent}/{@code updateDeleteMessages} events into
+                            * revisions now exists ({@link
+                            * io.tgmcp.telegram.tdlib.TdlibTelegramGateway}), but it has never
+                            * been verified against a real Telegram account. {@link
+                            * ProductionSafetyValidator} refuses real-account access against such
+                            * an adapter unless this is explicitly set, so relying on unverified
+                            * edit/delete sync is a deliberate, acknowledged choice rather than a
+                            * discovered surprise.
                             */
                            @DefaultValue("false") boolean acknowledgeMissingEditDeletionPipeline) {
     }
