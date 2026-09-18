@@ -21,6 +21,7 @@ import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.RemoteChat;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
+import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.session.SessionCipher;
 
@@ -143,19 +144,31 @@ public class TelegramConnectionService {
 
     public LoginState status(AuthenticatedActor actor) {
         return find(actor)
-                .map(connection -> connection.ready()
-                        // Mirrors beginLogin's own restart-resilience shortcut above: a
-                        // container restart resets TdlibTelegramGateway's in-memory ownership
-                        // claim to null (currentOwner is volatile, process-local, never
-                        // persisted) while TDLib silently restores its own already-authorized
-                        // session from disk. Before this fix, every GET /connect view -- not
-                        // just a login resubmission -- called gateway.currentState(ref) and hit
-                        // TelegramAuthException ("not the current owner") for the very account
-                        // that actually is connected, on every single restart, until the next
-                        // explicit beginLogin call happened to reclaim it.
-                        ? LoginState.of(LoginStage.READY, "login.tdlib.ready")
-                        : this.gateway.currentState(connection.ref()))
+                .map(this::liveOrPersistedState)
                 .orElse(LoginState.of(LoginStage.DISCONNECTED, null));
+    }
+
+    /**
+     * {@code gateway.currentState(ref)} can only ever answer for whichever ref currently owns
+     * the one shared TDLib session (finding SEC-01); every ref that is not the current owner --
+     * not just an unrelated tenant, but this exact same connection after any process restart,
+     * since {@code TdlibTelegramGateway.currentOwner} is a volatile, never-persisted field reset
+     * to null on every startup -- gets {@link TelegramAuthException} instead of an answer.
+     * {@code beginLogin} already special-cased its own version of this (a container restart
+     * silently restores TDLib's already-authorized session from disk with no login needed); this
+     * is the same fix for the read-only path every plain page view takes. The persisted stage is
+     * the best information available once ownership cannot be asserted -- only a currently-owned
+     * gateway can offer anything more (a not-yet-persisted transition, a live QR link) -- so this
+     * falls back to it for any stage, not just READY, rather than letting the exception surface
+     * as an unhandled error for an account whose actual connection state is known and fine.
+     */
+    private LoginState liveOrPersistedState(TelegramConnection connection) {
+        try {
+            return this.gateway.currentState(connection.ref());
+        }
+        catch (TelegramAuthException notCurrentOwner) {
+            return LoginState.of(connection.status(), null);
+        }
     }
 
     @Transactional

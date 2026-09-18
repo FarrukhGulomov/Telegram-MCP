@@ -136,20 +136,46 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         Consumer<LoginState> deliverToListener = captureRegisteredListener();
         this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
         deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
-
-        // Simulates the in-memory ownership claim being gone (a fresh process after a restart)
-        // without touching the persisted READY row -- exactly what TdlibTelegramGateway's
-        // volatile, never-persisted currentOwner field looks like right after a restart.
-        // doThrow(...).when(spy)... rather than when(spy...).thenThrow(...): this.gateway is a
-        // spy over the real MockTelegramGateway, and the latter form calls the real method with
-        // the matcher's null placeholder argument before the stub is even registered.
-        Mockito.doThrow(new io.tgmcp.telegram.gateway.TelegramAuthException(
-                        "This connection is not the current owner of the shared Telegram session"))
-                .when(this.gateway).currentState(ArgumentMatchers.any());
+        stubCurrentStateToThrowNotCurrentOwner();
 
         LoginState state = this.connectionService.status(team.actor());
 
         assertThat(state.stage()).isEqualTo(LoginStage.READY);
-        Mockito.verify(this.gateway, Mockito.never()).currentState(ArgumentMatchers.any());
+    }
+
+    /**
+     * The same restart-resilience gap as above, but for a connection that never reached READY at
+     * all -- the actual shape of the reported incident: a tenant whose only prior visit to
+     * {@code /connect} created a plain {@code DISCONNECTED} row (via {@code getOrCreate}, before
+     * any login was ever attempted), which is enough on its own to make {@code find(actor)}
+     * return a row and route through {@code gateway.currentState(ref)}. The fix must fall back to
+     * the persisted stage for every stage, not only READY, or this exact non-READY case still
+     * throws.
+     */
+    @Test
+    void statusOnAConnectionThatNeverReachedReadyFallsBackToItsPersistedStageInsteadOfErroring() {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = team("status-never-ready-after-restart");
+        this.connectionService.getOrCreate(team.actor());
+        stubCurrentStateToThrowNotCurrentOwner();
+
+        LoginState state = this.connectionService.status(team.actor());
+
+        assertThat(state.stage()).isEqualTo(LoginStage.DISCONNECTED);
+    }
+
+    /**
+     * Simulates the in-memory ownership claim being gone (a fresh process after a restart)
+     * without touching whatever is persisted -- exactly what {@code TdlibTelegramGateway}'s
+     * volatile, never-persisted {@code currentOwner} field looks like right after a restart.
+     * {@code doThrow(...).when(spy)...} rather than {@code when(spy...).thenThrow(...)}: {@code
+     * this.gateway} is a spy over the real {@code MockTelegramGateway}, and the latter form
+     * calls the real method with the matcher's null placeholder argument before the stub is even
+     * registered.
+     */
+    private void stubCurrentStateToThrowNotCurrentOwner() {
+        Mockito.doThrow(new io.tgmcp.telegram.gateway.TelegramAuthException(
+                        "This connection is not the current owner of the shared Telegram session"))
+                .when(this.gateway).currentState(ArgumentMatchers.any());
     }
 }
