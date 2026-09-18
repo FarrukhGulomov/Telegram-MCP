@@ -49,10 +49,9 @@
         <tr th:if="${view.lastErrorCode != null}"><th th:text="#{chat.coverage.lastError}">Last error</th>
             <td class="err" th:text="${view.lastErrorCode}"></td></tr>
       </table>
-      <form th:action="@{'/chats/' + ${view.chat.id} + '/sync'}" method="post" data-guard-resubmit class="inline"
-            th:if="${view.selected}">
-        <button type="submit" th:text="#{chat.coverage.syncNow}">Sync now</button>
-      </form>
+      <p class="muted" th:if="${view.selected}" th:text="#{chat.coverage.autoSync}">
+        This chat is kept up to date automatically — no manual step is needed.
+      </p>
     </div>
 
     <div class="card">
