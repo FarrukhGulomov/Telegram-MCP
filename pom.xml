@@ -125,6 +125,20 @@
       <version>${jna.version}</version>
     </dependency>
 
+    <!-- Renders the QR login link as an actual scannable image (see ConnectionController and
+         connect.html) instead of showing the raw link as plain text: generated server-side so
+         nothing needs an external QR-rendering script, matching this app's self-hosted-only CSP. -->
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>core</artifactId>
+      <version>3.5.3</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>javase</artifactId>
+      <version>3.5.3</version>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>

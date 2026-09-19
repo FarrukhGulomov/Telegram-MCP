@@ -396,8 +396,28 @@ code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
   word-break: break-all; background: var(--bg-sunken); padding: 2px 6px; border-radius: 5px;
 }
-.qr { text-align: center; }
-.qr code { display: block; padding: 12px; background: var(--bg-sunken); border-radius: var(--radius-md); margin: 10px 0; }
+/* Fixed white background regardless of theme: a QR code needs guaranteed light-on-dark
+   contrast to stay scannable, which var(--bg-elevated) cannot promise in dark mode. */
+.qr-frame {
+  display: flex; justify-content: center; padding: 16px; margin: 4px 0 12px;
+  background: #ffffff; border-radius: var(--radius-md); border: 1px solid var(--border);
+}
+.qr-frame img { display: block; width: 100%; max-width: 220px; height: auto; }
+
+.qr-fallback { margin: 4px 0 14px; }
+.qr-fallback summary {
+  cursor: pointer; color: var(--fg-muted); font-size: 13.5px; font-weight: 600;
+}
+.qr-fallback code { display: block; margin-top: 8px; }
+
+/* The "Disconnect" card collapses behind its own summary (details/summary) so it does not
+   compete for attention with whichever step the operator is actually on. */
+.disconnect-card summary {
+  cursor: pointer; font-size: 17px; font-weight: 700; letter-spacing: -0.005em;
+  color: var(--danger);
+}
+.disconnect-card[open] summary { margin-bottom: 12px; }
+.disconnect-card form { margin-top: 10px; }
 
 @media (max-width: 480px) {
   form.inline { display: grid; grid-auto-flow: row; width: 100%; }

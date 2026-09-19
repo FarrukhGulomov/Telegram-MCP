@@ -4,10 +4,7 @@
 <section th:with="stage=${state.stage.name()}">
   <div class="page-head">
     <h1 th:text="#{nav.connection}">Telegram connection</h1>
-    <p class="muted" th:text="#{connect.intro}">
-      This connects the Telegram account whose chats you want to manage. It does not by itself
-      share anything — you still choose, chat by chat, what gets read later.
-    </p>
+    <p class="muted" th:text="#{connect.intro}">Connect the Telegram account you want to manage.</p>
   </div>
 
   <p class="banner demo" th:if="${demoMode}">
@@ -18,11 +15,10 @@
   </p>
 
   <div class="status-line">
-    <span th:text="#{connect.status.stage}">Stage:</span>
     <span class="pill" th:classappend="${stage == 'READY'} ? 'ok' : (${stage == 'ERROR'} ? 'warn' : '')"
           th:text="#{${'loginStage.' + state.stage}}">DISCONNECTED</span>
     <span th:if="${state.tgUsername}" class="muted">
-      · <span th:text="#{connect.status.signedInAs}">Signed in as</span> <code th:text="${state.tgUsername}"></code>
+      <code th:text="${state.tgUsername}"></code>
     </span>
   </div>
   <p th:if="${statusMessage}" th:text="${statusMessage}" class="muted"></p>
@@ -34,41 +30,43 @@
        script, so a stale or manipulated client state can never show the wrong step. -->
 
   <div class="card step-card" th:if="${stage == 'DISCONNECTED' or stage == 'ERROR'}">
-    <h2 th:text="#{connect.step1.title}">Connect your Telegram account</h2>
-    <p class="muted" th:text="#{connect.step1.hint}">Pick QR code (easiest: scan with your phone) or phone number.</p>
+    <h2 th:text="#{connect.step1.title}">Connect Telegram</h2>
     <form th:action="@{/connect/start}" method="post" data-guard-resubmit>
       <label for="method" th:text="#{connect.method.label}">Method</label>
       <select id="method" name="method" data-method-select>
-        <option value="QR_CODE" th:text="#{connect.method.qr}">QR code (recommended)</option>
+        <option value="QR_CODE" th:text="#{connect.method.qr}">QR code</option>
         <option value="PHONE_NUMBER" th:text="#{connect.method.phone}">Phone number</option>
       </select>
       <div data-phone-group hidden>
         <label for="phoneNumber" th:text="#{connect.phoneNumber.label}">Phone number</label>
-        <input id="phoneNumber" name="phoneNumber" type="tel" autocomplete="off" inputmode="tel">
+        <input id="phoneNumber" name="phoneNumber" type="tel" autocomplete="off" inputmode="tel"
+               placeholder="+1 555 000 0000">
       </div>
       <button type="submit" th:text="#{connect.start.button}">Continue</button>
     </form>
   </div>
 
   <div class="card step-card" th:if="${stage == 'WAIT_QR_SCAN'}">
-    <h2 th:text="#{connect.qrStep.title}">Scan with Telegram</h2>
-    <p class="muted" th:text="#{connect.qr.instructions}">Open this link from a Telegram app that is already signed in:</p>
-    <div class="qr" th:if="${state.qrLoginLink}">
-      <code th:text="${state.qrLoginLink}"></code>
+    <h2 th:text="#{connect.qrStep.title}">Scan to connect</h2>
+    <div class="qr-frame" th:if="${qrCodeImage}">
+      <img th:src="${qrCodeImage}" width="280" height="280" alt="QR code">
     </div>
-    <p class="hint" th:text="#{connect.qr.hint}">This QR token is shown only on this protected page. It is never logged and
-       is not reachable from any MCP tool.</p>
-    <p class="muted" th:text="#{connect.qrStep.waiting}">Waiting for the scan — this page will update once Telegram confirms it.</p>
+    <p class="muted" th:text="#{connect.qr.instructions}">Telegram → Settings → Devices → Scan QR code</p>
+    <p class="hint" th:text="#{connect.qrStep.waiting}">Waiting for scan…</p>
+    <details class="qr-fallback" th:if="${state.qrLoginLink}">
+      <summary th:text="#{connect.qr.fallback}">Can't scan? Use this link instead</summary>
+      <code th:text="${state.qrLoginLink}"></code>
+    </details>
     <form th:action="@{/connect/disconnect}" method="post" data-guard-resubmit>
-      <button type="submit" class="link" th:text="#{connect.qrStep.startOver}">Use a different method instead</button>
+      <button type="submit" class="link" th:text="#{connect.qrStep.startOver}">Try another way</button>
     </form>
   </div>
 
   <div class="card step-card" th:if="${stage == 'WAIT_CODE'}">
     <h2 th:text="#{connect.step2.title}">Enter the code</h2>
-    <p class="muted" th:text="#{connect.step2.hint}">Telegram just sent this code to your app — type it in exactly as shown.</p>
+    <p class="muted" th:text="#{connect.step2.hint}">Telegram just sent it to you.</p>
     <form th:action="@{/connect/code}" method="post" data-guard-resubmit>
-      <label for="code" th:text="#{connect.code.label}">Code from Telegram</label>
+      <label for="code" th:text="#{connect.code.label}">Code</label>
       <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code"
              autofocus required>
       <button type="submit" th:text="#{connect.code.button}">Continue</button>
@@ -76,9 +74,8 @@
   </div>
 
   <div class="card step-card" th:if="${stage == 'WAIT_PASSWORD'}">
-    <h2 th:text="#{connect.step3.title}">Enter your two-factor password</h2>
-    <p class="muted" th:text="#{connect.step3.hint}">Only your own Telegram account can have turned this on. Skip this if
-       you never set a Telegram password.</p>
+    <h2 th:text="#{connect.step3.title}">Two-factor password</h2>
+    <p class="muted" th:text="#{connect.step3.hint}">Only if you've set one on Telegram.</p>
     <form th:action="@{/connect/password}" method="post" data-guard-resubmit>
       <label for="password" th:text="#{connect.password.label}">Password</label>
       <input id="password" name="password" type="password" autocomplete="off" autofocus required>
@@ -88,25 +85,21 @@
 
   <div class="card step-card ok" th:if="${stage == 'READY'}">
     <h2 th:text="#{connect.readyStep.title}">Connected</h2>
-    <p class="muted" th:text="#{connect.readyStep.hint}">Your Telegram account is connected. Discover its chats, then
-       choose, chat by chat, what gets read and shared later.</p>
+    <p class="muted" th:text="#{connect.readyStep.hint}">Discover chats to get started.</p>
     <form th:action="@{/connect/discover}" method="post" data-guard-resubmit>
       <button type="submit" th:text="#{connect.discover.button}">Discover chats</button>
     </form>
   </div>
 
-  <div class="card danger" th:if="${stage != 'DISCONNECTED'}">
-    <h2 th:text="#{connect.disconnect.title}">Disconnect</h2>
-    <p>
-      <span th:text="#{connect.disconnect.text1}">Removing the connection here destroys the local session material. It does not by itself
-      revoke the session inside Telegram. To do that, open Telegram →</span>
-      <em th:text="#{connect.disconnect.emphasis}">Settings → Devices → Active sessions</em>
-      <span th:text="#{connect.disconnect.text2}">and terminate this session.</span>
+  <details class="card danger disconnect-card" th:if="${stage != 'DISCONNECTED'}">
+    <summary th:text="#{connect.disconnect.title}">Disconnect</summary>
+    <p class="muted" th:text="#{connect.disconnect.hint}">
+      Removes the local session only. To fully sign out, end it from Telegram itself.
     </p>
     <form th:action="@{/connect/disconnect}" method="post" data-guard-resubmit>
       <button type="submit" class="danger" th:text="#{connect.disconnect.button}">Disconnect</button>
     </form>
-  </div>
+  </details>
 
   <script th:src="@{/js/connect.js}" defer></script>
 </section>

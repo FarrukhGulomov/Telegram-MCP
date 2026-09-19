@@ -34,6 +34,7 @@ public class ConnectionController {
     private final TelegramConnectionService connectionService;
     private final AppProperties properties;
     private final MessageSource messages;
+    private final QrCodeRenderer qrCodeRenderer;
     /**
      * Security-audit finding SEC-10: onboarding actions can trigger real, costly native TDLib
      * work (a login attempt, a full chat discovery pass). They previously shared no budget
@@ -46,11 +47,13 @@ public class ConnectionController {
                                 TelegramConnectionService connectionService,
                                 AppProperties properties,
                                 MessageSource messages,
+                                QrCodeRenderer qrCodeRenderer,
                                 Clock clock) {
         this.currentActor = currentActor;
         this.connectionService = connectionService;
         this.properties = properties;
         this.messages = messages;
+        this.qrCodeRenderer = qrCodeRenderer;
         this.connectLimiter = new RateLimiter(properties.abuseControls().connectActionsPerMinutePerUser(),
                 Duration.ofMinutes(1), clock);
     }
@@ -74,6 +77,9 @@ public class ConnectionController {
         // never has to know the difference between a translated status and a flash message.
         model.addAttribute("statusMessage",
                 state.message() == null ? null : Messages.text(this.messages, state.message()));
+        if (state.qrLoginLink() != null) {
+            model.addAttribute("qrCodeImage", this.qrCodeRenderer.toDataUri(state.qrLoginLink()));
+        }
         model.addAttribute("adapter", this.properties.telegram().adapter().name());
         model.addAttribute("demoMode", this.properties.telegram().adapter() == TelegramAdapterKind.MOCK);
         return "connect";
