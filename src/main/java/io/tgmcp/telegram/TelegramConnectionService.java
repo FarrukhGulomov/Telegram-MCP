@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import io.tgmcp.audit.AuditAction;
@@ -14,6 +15,7 @@ import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivationService;
 import io.tgmcp.chat.ChatRepository;
 import io.tgmcp.common.Ids;
+import io.tgmcp.tenancy.ActorType;
 import io.tgmcp.tenancy.AuthenticatedActor;
 import io.tgmcp.telegram.gateway.ConnectionRef;
 import io.tgmcp.telegram.gateway.LoginMethod;
@@ -25,6 +27,8 @@ import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.session.SessionCipher;
 
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -124,6 +128,37 @@ public class TelegramConnectionService {
      */
     public void applyAsyncStateChange(AuthenticatedActor actor, TelegramConnection connection, LoginState state) {
         this.transactionTemplate.executeWithoutResult(status -> persist(actor, connection, state));
+    }
+
+    /**
+     * Confirmed from live production logs: {@code TdlibTelegramGateway.currentOwner} is a
+     * volatile, in-memory field reset to {@code null} on every process restart, but every
+     * gateway method except {@code beginLogin}/{@code onStateChange} requires it to match --
+     * {@link #status} and {@link #disconnect} each closed this gap reactively for themselves,
+     * but every other method a page load can reach (in practice, {@code
+     * ChatActivationService.importParticipants} calling {@code listParticipants} the moment an
+     * operator merely opens a chat page) had no such fallback and threw {@link
+     * TelegramAuthException} instead, an unhandled error bouncing the operator back to the
+     * dashboard. Reclaiming ownership once here, right after startup, for whichever connection's
+     * own persisted row proves it previously reached a real {@code READY} login, means none of
+     * those other call sites need their own copy of this fix -- by the time the first request
+     * arrives, ownership is already exactly what it was before the restart.
+     *
+     * <p>Registers the same real listener {@link #beginLogin} would (routed through a
+     * synthesized {@link ActorType#SYSTEM} actor, since no authenticated request exists yet at
+     * startup) rather than a no-op, so an async state change TDLib pushes before any operator
+     * revisits the connect page -- a remote logout or ban -- still reaches {@link
+     * #applyAsyncStateChange} and pauses this connection's active chats (security-audit finding
+     * SEC-06), instead of silently going nowhere.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void reclaimOwnershipOnStartup() {
+        for (TelegramConnection connection : this.connectionRepository.findAllReady()) {
+            AuthenticatedActor systemActor = new AuthenticatedActor(connection.tenantId(),
+                    connection.ownerUserId(), "system", ActorType.SYSTEM, Set.of(), null);
+            this.gateway.onStateChange(connection.ref(),
+                    asyncState -> applyAsyncStateChange(systemActor, connection, asyncState));
+        }
     }
 
     @Transactional

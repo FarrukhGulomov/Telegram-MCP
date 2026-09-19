@@ -210,6 +210,48 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
     }
 
     /**
+     * Confirmed from live production logs, a third call site with the exact same restart gap
+     * status()/disconnect() already closed: {@code ChatActivationService.importParticipants}
+     * (reached simply by opening a chat's page) called {@code gateway.listParticipants}, which
+     * has no reactive fallback of its own and threw straight through to an unhandled UI error.
+     * Rather than adding yet another per-call-site patch, {@link
+     * TelegramConnectionService#reclaimOwnershipOnStartup} reclaims once for every persisted
+     * READY connection, so every gateway method works again from the very first request after a
+     * restart. Verifies it registers a real, actored listener (not a no-op) by delivering an
+     * async state through it afterward and checking the DB actually updates -- a no-op listener
+     * would silently drop that transition and regress the SEC-06 protection {@link
+     * #anAsynchronousLogoutTransitionIsAlsoPersisted} covers for the normal login path.
+     */
+    @Test
+    void reclaimOwnershipOnStartupRegistersARealListenerForEveryReadyConnection() {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = team("startup-reclaim");
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+        this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        Mockito.clearInvocations(this.gateway);
+        Consumer<LoginState> deliverAfterRestart = captureRegisteredListener();
+
+        this.connectionService.reclaimOwnershipOnStartup();
+
+        Mockito.verify(this.gateway).onStateChange(ArgumentMatchers.any(), ArgumentMatchers.any());
+        deliverAfterRestart.accept(LoginState.of(LoginStage.DISCONNECTED, "login.tdlib.disconnected"));
+        assertThat(this.connectionService.find(team.actor()).orElseThrow().ready()).isFalse();
+    }
+
+    /** A connection that never reached READY has nothing to reclaim -- no live session survives. */
+    @Test
+    void reclaimOwnershipOnStartupSkipsAConnectionThatNeverReachedReady() {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = team("startup-reclaim-never-ready");
+        this.connectionService.getOrCreate(team.actor());
+
+        this.connectionService.reclaimOwnershipOnStartup();
+
+        Mockito.verify(this.gateway, Mockito.never()).onStateChange(ArgumentMatchers.any(), ArgumentMatchers.any());
+    }
+
+    /**
      * Simulates the in-memory ownership claim being gone (a fresh process after a restart)
      * without touching whatever is persisted -- exactly what {@code TdlibTelegramGateway}'s
      * volatile, never-persisted {@code currentOwner} field looks like right after a restart.
