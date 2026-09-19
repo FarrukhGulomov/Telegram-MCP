@@ -49,7 +49,7 @@
         <tr th:if="${view.lastErrorCode != null}"><th th:text="#{chat.coverage.lastError}">Last error</th>
             <td class="err" th:text="${view.lastErrorCode}"></td></tr>
       </table>
-      <p class="muted" th:if="${view.selected}" th:text="#{chat.coverage.autoSync}">
+      <p class="muted" th:if="${view.active}" th:text="#{chat.coverage.autoSync}">
         This chat is kept up to date automatically — no manual step is needed.
       </p>
     </div>
@@ -130,51 +130,53 @@
     </div>
 
     <!-- One shared form for every participant's consent, submitted by the single button below
-         the table -- each row keeps its own method/evidence inputs (bound here via the form=
-         attribute rather than DOM nesting, since a <form> cannot legally contain another) so
-         evidence still names the specific person it is about, but recording is one action for
-         everyone instead of one click per row. -->
+         the table -- each row's inputs are genuine children of this <form> (not associated via
+         the HTML5 form= attribute, which some mobile browsers fail to honor for elements outside
+         the <form> tag -- confirmed in production: that gap left the evidence/method fields out
+         of the submission entirely, crashing this action). The per-row "Revoke" button lives in
+         this same form and points at a different endpoint via formaction/formmethod instead of
+         its own nested <form>, since a <form> cannot legally contain another; a submit button's
+         own name/value pair is only sent when that button is the one clicked, so it never
+         collides with the bulk-consent fields above it. -->
     <form id="consent-all-form" th:action="@{'/chats/' + ${view.chat.id} + '/consent/all'}" method="post"
-          data-guard-resubmit></form>
-
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
-          <th th:text="#{chat.participantsTable.telegramId}">Telegram id</th>
-          <th th:text="#{chat.participantsTable.recordConsent}">Consent evidence</th><th></th></tr></thead>
-        <tbody>
-        <tr th:each="p : ${participants}">
-          <td th:text="${p.displayName}"></td>
-          <td><code th:text="${p.tgUserId}"></code></td>
-          <td>
-            <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}" form="consent-all-form">
-            <input type="hidden" name="participantDisplayName" th:value="${p.displayName}" form="consent-all-form">
-            <select name="method" form="consent-all-form">
-              <option value="SIGNED_ATTESTATION" th:text="#{chat.consentMethod.evidence}">Recorded from evidence</option>
-              <option th:if="${demoMode}" value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
-            </select>
-            <input name="evidenceRef" th:placeholder="#{chat.evidenceRef.placeholder}" maxlength="300"
-                   form="consent-all-form">
-          </td>
-          <td>
-            <form th:action="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" method="post" data-guard-resubmit class="inline">
+          data-guard-resubmit>
+      <div class="table-wrap">
+        <table class="table-wide">
+          <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
+            <th th:text="#{chat.participantsTable.telegramId}">Telegram id</th>
+            <th th:text="#{chat.participantsTable.recordConsent}">Consent evidence</th><th></th></tr></thead>
+          <tbody>
+          <tr th:each="p : ${participants}">
+            <td th:text="${p.displayName}"></td>
+            <td><code th:text="${p.tgUserId}"></code></td>
+            <td>
               <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
-              <button type="submit" class="danger secondary" th:text="#{chat.revoke.button}">Revoke</button>
-            </form>
-          </td>
-        </tr>
-        <tr th:if="${#lists.isEmpty(participants)}">
-          <td colspan="4" class="muted" th:text="#{chat.participantsTable.empty}">No participants known yet.</td>
-        </tr>
-        </tbody>
-      </table>
-    </div>
-    <button type="submit" form="consent-all-form" th:if="${!#lists.isEmpty(participants)}"
-            th:text="#{chat.consentAll.button}">Record consent for everyone</button>
+              <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
+              <select name="method">
+                <option value="SIGNED_ATTESTATION" th:text="#{chat.consentMethod.evidence}">Recorded from evidence</option>
+                <option th:if="${demoMode}" value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
+              </select>
+              <input name="evidenceRef" th:placeholder="#{chat.evidenceRef.placeholder}" maxlength="300">
+            </td>
+            <td>
+              <button type="submit" class="danger secondary" th:text="#{chat.revoke.button}"
+                      th:formaction="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" formmethod="post"
+                      name="revokeTgUserId" th:value="${p.tgUserId}">Revoke</button>
+            </td>
+          </tr>
+          <tr th:if="${#lists.isEmpty(participants)}">
+            <td colspan="4" class="muted" th:text="#{chat.participantsTable.empty}">No participants known yet.</td>
+          </tr>
+          </tbody>
+        </table>
+      </div>
+      <button type="submit" th:if="${!#lists.isEmpty(participants)}"
+              th:text="#{chat.consentAll.button}">Record consent for everyone</button>
+    </form>
 
     <h3 th:text="#{chat.recordedConsents.title}">Recorded consents</h3>
     <div class="table-wrap">
-      <table>
+      <table class="table-wide">
         <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
           <th th:text="#{chat.recordedConsents.version}">Version</th>
           <th th:text="#{chat.recordedConsents.providers}">Providers</th>

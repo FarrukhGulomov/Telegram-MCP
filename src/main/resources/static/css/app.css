@@ -283,6 +283,11 @@ tbody tr:hover { background: var(--bg-sunken); }
 table.kv { border: none; }
 table.kv th { width: 42%; background: none; text-transform: none; letter-spacing: normal; font-size: 14px; }
 table.kv tr:hover { background: none; }
+/* A table whose cells hold real form controls (selects, text inputs) has no room to shrink --
+   without this, narrow viewports squeeze those controls down to a sliver instead of scrolling
+   the .table-wrap that already wraps them, cutting off everything but a few characters of any
+   placeholder or option text. */
+table.table-wide { min-width: 640px; }
 
 /* ---------------------------------------------------------------------------------------
    Status pills / badges

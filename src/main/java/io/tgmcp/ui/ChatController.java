@@ -147,12 +147,15 @@ public class ChatController {
     /**
      * Records consent for every participant in one submission, instead of requiring an
      * administrator to press a separate button per row. Each participant still carries its own
-     * {@code method}/{@code evidenceRef} (the form renders one input pair per row, all bound to
-     * this single {@code id="consent-all-form"} via the HTML5 {@code form} attribute rather than
-     * DOM nesting) -- this only removes the per-row *button*, not the per-participant evidence
-     * that {@link ConsentService#record} still requires for {@code SIGNED_ATTESTATION}. The four
-     * parameter lists are aligned by list index, which Spring binds correctly as long as the
-     * template renders all four inputs from the same {@code th:each} iteration in the same order.
+     * {@code method}/{@code evidenceRef} (the form renders one input group per row, all genuine
+     * descendants of the single {@code id="consent-all-form"} element -- the per-row "Revoke"
+     * button lives in the same form too, pointed at a different endpoint via {@code formaction},
+     * since a real {@code <form>} cannot legally nest another) -- this only removes the per-row
+     * consent *button*, not the per-participant evidence that {@link ConsentService#record} still
+     * requires for {@code SIGNED_ATTESTATION}. The four parameter lists are aligned by list index,
+     * which Spring binds correctly as long as the template renders all four inputs from the same
+     * {@code th:each} iteration in the same order; {@link #safeGet} guards that alignment anyway,
+     * since nothing stops a hand-crafted or malformed request from sending mismatched lengths.
      */
     @PostMapping("/chats/{chatId}/consent/all")
     public String consentAll(@PathVariable UUID chatId,
@@ -174,11 +177,17 @@ public class ChatController {
         int recorded = 0;
         List<String> failures = new ArrayList<>();
         for (int i = 0; i < tgUserIds.size(); i++) {
-            String displayName = participantDisplayName.get(i);
+            String displayName = safeGet(participantDisplayName, i);
+            String evidence = safeGet(evidenceRef, i);
+            ConsentMethod consentMethod = i < (method == null ? 0 : method.size()) ? method.get(i) : null;
+            if (displayName == null || evidence == null || consentMethod == null) {
+                failures.add(Messages.text(this.messages, "error.malformedForm"));
+                continue;
+            }
             try {
                 this.consentService.record(actor, chatId, tgUserIds.get(i), displayName,
                         activation.purpose(), activation.providerScope(), activation.consentVersion(),
-                        activation.contextRevision(), method.get(i), evidenceRef.get(i),
+                        activation.contextRevision(), consentMethod, evidence,
                         Instant.now().plus(this.properties.consent().defaultValidity()));
                 recorded++;
             }
@@ -199,10 +208,10 @@ public class ChatController {
 
     @PostMapping("/chats/{chatId}/consent/revoke")
     public String revokeConsent(@PathVariable UUID chatId,
-                                @RequestParam long participantTgUserId,
+                                @RequestParam long revokeTgUserId,
                                 RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = this.currentActor.requireAdmin();
-        this.consentService.revokeParticipant(actor, chatId, participantTgUserId, "Revoked from management UI");
+        this.consentService.revokeParticipant(actor, chatId, revokeTgUserId, "Revoked from management UI");
         this.activationService.pause(actor, chatId, "A participant withdrew consent");
         redirectAttributes.addFlashAttribute("message",
                 Messages.text(this.messages, "chat.consentRevoke.success"));
@@ -264,6 +273,11 @@ public class ChatController {
      */
     private static List<String> providersOrEmpty(List<String> providers) {
         return providers == null ? List.of() : providers;
+    }
+
+    /** {@code null} rather than throwing when a parallel list is missing or short at index {@code i}. */
+    private static String safeGet(List<String> values, int i) {
+        return values != null && i < values.size() ? values.get(i) : null;
     }
 
     private static Instant startOfDay(String isoDate) {
