@@ -287,6 +287,38 @@ class TdlibTelegramGatewayTests {
         assertThat(this.client.timesSent("setTdlibParameters")).isEqualTo(2);
     }
 
+    /**
+     * Confirmed from live production logs: a real disconnect followed shortly by a reconnect
+     * attempt still failed with "Initialization parameters are needed" even after the earlier
+     * fix, because {@code logOut} does not synchronously push {@code
+     * authorizationStateWaitTdlibParameters} -- TDLib only announces that state once something
+     * later prompts it to, which can arrive after the next beginLogin's own request already
+     * went out. disconnect() now marks a fresh epoch itself, at the one moment this class can be
+     * certain one has begun, rather than waiting for a push that may be too late.
+     */
+    @Test
+    void reconnectingRightAfterDisconnectSendsTdlibParametersAgainWithoutWaitingForAPush() {
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.gateway.beginLogin(this.ref, io.tgmcp.telegram.gateway.LoginMethod.QR_CODE, null);
+        assertThat(this.client.timesSent("setTdlibParameters")).isEqualTo(1);
+
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.gateway.disconnect(this.ref);
+
+        // No pushUpdate for authorizationStateWaitTdlibParameters here -- exactly the gap
+        // confirmed in production, where that push had not arrived yet by the time the next
+        // login was attempted.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.gateway.beginLogin(this.ref, io.tgmcp.telegram.gateway.LoginMethod.QR_CODE, null);
+
+        assertThat(this.client.timesSent("setTdlibParameters"))
+                .as("the second beginLogin must resend parameters for the new epoch disconnect() started")
+                .isEqualTo(2);
+        assertThat(this.client.timesSent("requestQrCodeAuthentication")).isEqualTo(2);
+    }
+
     @Test
     void mapsChatTypes() {
         assertThat(this.gateway.toRemoteChat(json("""

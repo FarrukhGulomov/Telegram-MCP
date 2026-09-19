@@ -422,6 +422,17 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // whatever account was just signed out of; a future login (the same account signing
         // back in, or a different one) must not have it silently applied on its behalf.
         this.pendingRevisions.clear();
+        // Confirmed from live production logs: logOut does not synchronously push
+        // authorizationStateWaitTdlibParameters -- TDLib only announces that state once
+        // something (the next request) actually prompts it to, well after this method
+        // returns. ensureTdlibParametersSent's own guard was still seeing the *previous*
+        // epoch's tdlibParametersPending=false at that point, so a login attempted right after
+        // this disconnect skipped resending parameters and reached TDLib as
+        // requestQrCodeAuthentication/setAuthenticationPhoneNumber, which TDLib correctly
+        // rejected with "Initialization parameters are needed". Setting this here, at the one
+        // moment this class can be certain a fresh epoch has begun, closes that gap without
+        // waiting for a push that may arrive too late.
+        this.tdlibParametersPending = true;
     }
 
     // --- read-only data ---------------------------------------------------------------
