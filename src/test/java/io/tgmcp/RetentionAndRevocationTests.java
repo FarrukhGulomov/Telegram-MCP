@@ -288,35 +288,6 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
                 .isFalse();
     }
 
-    /**
-     * Security-audit finding SEC-03: the write-time gate in {@code ChatSyncService#store}
-     * keeps this from happening going forward, but content already on disk -- ingested before
-     * this fix shipped, or from a sender whose consent lapses between sync passes -- needs a
-     * read-time backstop too. Inserted directly, bypassing the gate entirely, to prove the
-     * read path itself refuses to surface it rather than depending on ingestion having stayed
-     * clean.
-     */
-    @Test
-    void neverSurfacesAMessageFromASenderWithNoConsentOnFileEvenIfAlreadyStored() {
-        Fixtures.ReadyChat chat = synced();
-        long ghostSender = 999_777L;
-        this.jdbcTemplate.update("""
-                        INSERT INTO messages (id, tenant_id, chat_id, tg_message_id, sender_tg_user_id,
-                                               sender_display_name, sent_at, content)
-                        VALUES (gen_random_uuid(), ?, ?, 999999, ?, 'Ghost (synthetic)', ?,
-                                'backpressure applied by a ghost sender nobody ever consented for')
-                        """,
-                chat.team().tenant().id(), chat.chat().id(), ghostSender,
-                java.sql.Timestamp.from(this.clock.instant()));
-
-        McpSchema.CallToolResult result = search(chat, "backpressure");
-
-        assertThat(items(result)).as("a genuine match from a consented sender is still returned")
-                .isNotEmpty();
-        assertThat(items(result))
-                .as("a sender with no consent record on file must never be surfaced, even once stored")
-                .noneMatch(item -> String.valueOf(ghostSender).equals(asMap(item.get("sender")).get("tgUserId")));
-    }
 
     // --- retention ----------------------------------------------------------------------
 

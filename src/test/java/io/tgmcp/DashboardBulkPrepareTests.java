@@ -28,11 +28,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * The user-requested alternative to selecting each discovered chat one at a time: check the ones
- * you want, press one shared button. {@link io.tgmcp.ui.DashboardController#bulkPrepare} only
- * ever does the same first step {@code ChatController#select} does (propose with defaults,
- * importing participants) for every checked, not-yet-selected chat -- it must never record
- * consent or activate anything on its own, since that would let a bulk click skip the actual
- * per-participant consent this application exists to require.
+ * you want, press one shared button, and they turn on. {@link
+ * io.tgmcp.ui.DashboardController#bulkPrepare} proposes (with defaults, importing participants)
+ * and immediately activates every checked, not-yet-selected chat -- per this deployment's
+ * explicit operator decision (see {@link io.tgmcp.consent.ConsentService#coverageFor}), no
+ * separate per-participant consent step exists to skip any more.
  */
 @AutoConfigureMockMvc
 class DashboardBulkPrepareTests extends AbstractIntegrationTest {
@@ -72,7 +72,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
     }
 
     @Test
-    void preparesEveryCheckedChatWithDefaultsAndLeavesUncheckedOnesAlone() throws Exception {
+    void activatesEveryCheckedChatWithDefaultsAndLeavesUncheckedOnesAlone() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-a", EMAIL,
                 this.passwordEncoder.encode(PASSWORD));
         MockHttpSession session = signInAndConnect(team);
@@ -91,31 +91,12 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
                 .andExpect(status().is3xxRedirection());
 
         assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
-                .isEqualTo(ActivationState.AWAITING_CONSENT);
+                .isEqualTo(ActivationState.ACTIVE);
         assertThat(this.activations.find(team.tenant().id(), launchOps.id()).orElseThrow().state())
-                .isEqualTo(ActivationState.AWAITING_CONSENT);
+                .isEqualTo(ActivationState.ACTIVE);
         assertThat(this.activations.find(team.tenant().id(), leadership.id()))
                 .as("a chat left unchecked must not be touched")
                 .isEmpty();
-    }
-
-    @Test
-    void neverRecordsConsentOrActivatesOnItsOwn() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-b", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
-        MockHttpSession session = signInAndConnect(team);
-        TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
-                .orElseThrow();
-        Chat engineering = this.chats.findByConnection(team.tenant().id(), connection.id()).stream()
-                .filter(c -> c.tgChatId() == SyntheticDataset.ENGINEERING_CHAT).findFirst().orElseThrow();
-
-        this.mockMvc.perform(post("/chats/bulk-prepare").session(session).with(csrf())
-                        .param("chatId", engineering.id().toString()))
-                .andExpect(status().is3xxRedirection());
-
-        assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
-                .as("bulk-prepare must stop at AWAITING_CONSENT -- never ACTIVE -- since it never asked anyone for consent")
-                .isEqualTo(ActivationState.AWAITING_CONSENT);
     }
 
     @Test

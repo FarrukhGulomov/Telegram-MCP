@@ -108,110 +108,14 @@
     </div>
   </div>
 
-  <div class="card" th:if="${view.selected}">
-    <h2 class="step-title"><span class="step-num" aria-hidden="true">2</span>
-      <span th:text="#{chat.consentStep.title}">Get everyone's consent</span></h2>
-    <p class="muted" th:text="#{chat.consentStep.hint}">
-      Every person listed below must agree before this chat can be turned on. Ask them, then
-      press the button next to their name.
-    </p>
-
-    <div class="flash err" th:if="${view.coverage != null and !view.consentComplete}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
-      <span>
-        <strong th:text="#{chat.consentGap.title}">Consent coverage is incomplete.</strong>
-        <span th:text="#{chat.consentGap.blocked}">MCP access stays blocked.</span>
-        <ul>
-          <li th:each="g : ${view.coverage.gaps}">
-            <span th:text="${g.displayName}"></span> — <span th:text="${g.reason}"></span>
-          </li>
-        </ul>
-      </span>
-    </div>
-
-    <!-- One shared form for every participant's consent, submitted by the single button below
-         the table -- each row's inputs are genuine children of this <form> (not associated via
-         the HTML5 form= attribute, which some mobile browsers fail to honor for elements outside
-         the <form> tag -- confirmed in production: that gap left the evidence/method fields out
-         of the submission entirely, crashing this action). The per-row "Revoke" button lives in
-         this same form and points at a different endpoint via formaction/formmethod instead of
-         its own nested <form>, since a <form> cannot legally contain another; a submit button's
-         own name/value pair is only sent when that button is the one clicked, so it never
-         collides with the bulk-consent fields above it. -->
-    <form id="consent-all-form" th:action="@{'/chats/' + ${view.chat.id} + '/consent/all'}" method="post"
-          data-guard-resubmit>
-      <div class="table-wrap">
-        <table class="table-wide">
-          <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
-            <th th:text="#{chat.participantsTable.telegramId}">Telegram id</th>
-            <th th:text="#{chat.participantsTable.recordConsent}">Consent evidence</th><th></th></tr></thead>
-          <tbody>
-          <tr th:each="p : ${participants}">
-            <td th:text="${p.displayName}"></td>
-            <td><code th:text="${p.tgUserId}"></code></td>
-            <td>
-              <input type="hidden" name="participantTgUserId" th:value="${p.tgUserId}">
-              <input type="hidden" name="participantDisplayName" th:value="${p.displayName}">
-              <select name="method">
-                <option value="SIGNED_ATTESTATION" th:text="#{chat.consentMethod.evidence}">Recorded from evidence</option>
-                <option th:if="${demoMode}" value="DEMO_SYNTHETIC" th:text="#{chat.consentMethod.demo}">Synthetic demo consent</option>
-              </select>
-              <input name="evidenceRef" th:placeholder="#{chat.evidenceRef.placeholder}" maxlength="300">
-            </td>
-            <td>
-              <button type="submit" class="danger secondary" th:text="#{chat.revoke.button}"
-                      th:formaction="@{'/chats/' + ${view.chat.id} + '/consent/revoke'}" formmethod="post"
-                      name="revokeTgUserId" th:value="${p.tgUserId}">Revoke</button>
-            </td>
-          </tr>
-          <tr th:if="${#lists.isEmpty(participants)}">
-            <td colspan="4" class="muted" th:text="#{chat.participantsTable.empty}">No participants known yet.</td>
-          </tr>
-          </tbody>
-        </table>
-      </div>
-      <button type="submit" th:if="${!#lists.isEmpty(participants)}"
-              th:text="#{chat.consentAll.button}">Record consent for everyone</button>
-    </form>
-
-    <h3 th:text="#{chat.recordedConsents.title}">Recorded consents</h3>
-    <div class="table-wrap">
-      <table class="table-wide">
-        <thead><tr><th th:text="#{chat.participantsTable.participant}">Participant</th>
-          <th th:text="#{chat.recordedConsents.version}">Version</th>
-          <th th:text="#{chat.recordedConsents.providers}">Providers</th>
-          <th th:text="#{chat.recordedConsents.method}">Method</th>
-          <th th:text="#{chat.recordedConsents.granted}">Granted</th>
-          <th th:text="#{chat.recordedConsents.expires}">Expires</th>
-          <th th:text="#{chat.recordedConsents.revoked}">Revoked</th></tr></thead>
-        <tbody>
-        <tr th:each="c : ${consents}">
-          <td th:text="${c.participantDisplayName}"></td>
-          <td th:text="${c.consentVersion}"></td>
-          <td>
-            <span th:each="p, iter : ${#strings.arraySplit(c.providerScope, ',')}">
-              <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
-            </span>
-          </td>
-          <td th:text="#{${'consentMethod.' + c.method}}"></td>
-          <td th:text="${c.grantedAt}"></td>
-          <td th:text="${c.expiresAt} ?: '—'"></td>
-          <td th:text="${c.revokedAt} ?: '—'"></td>
-        </tr>
-        <tr th:if="${#lists.isEmpty(consents)}"><td colspan="7" class="muted" th:text="#{chat.recordedConsents.empty}">No consent recorded yet.</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
   <div class="card danger" th:if="${view.selected}">
-    <h2 class="step-title"><span class="step-num" aria-hidden="true">3</span>
+    <h2 class="step-title"><span class="step-num" aria-hidden="true">2</span>
       <span th:text="#{chat.accessControls.title}">Turn access on or off</span></h2>
     <p class="muted" th:utext="#{chat.accessControls.hint}">
-      <strong>Activate</strong> turns on reading for this chat (only once every participant has
-      consented above). <strong>Pause</strong> blocks access instantly but keeps everything else
-      as-is, so you can resume later. <strong>Revoke</strong> and <strong>Delete stored data</strong>
-      are permanent — use them when you're done with this chat for good.
+      <strong>Activate</strong> turns on reading for this chat. <strong>Pause</strong> blocks
+      access instantly but keeps everything else as-is, so you can resume later.
+      <strong>Revoke</strong> and <strong>Delete stored data</strong> are permanent — use them
+      when you're done with this chat for good.
     </p>
     <div class="actions-row">
       <form th:action="@{'/chats/' + ${view.chat.id} + '/activate'}" method="post" data-guard-resubmit class="inline">

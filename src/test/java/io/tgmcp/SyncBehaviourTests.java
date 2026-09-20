@@ -261,96 +261,23 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
     }
 
     /**
-     * Security-audit finding SEC-03: message storage used to be gated on nothing but the
-     * approved date window, regardless of who sent a message. A message from a sender this
-     * application has never captured in {@code chat_participants} at all -- someone who left
-     * before onboarding ever ran, or simply was never seen -- must be rejected rather than
-     * automatically accepted, as the audit's own remediation text requires for an unknown
-     * author.
-     */
-    @Test
-    void quarantinesAMessageFromASenderNeverSeenAsAParticipant() {
-        sync();
-        long before = storedCount();
-        long ghostSender = 999_555L;
-
-        mockGateway().appendMessage(SyntheticDataset.ENGINEERING_CHAT, ghostSender,
-                "Ghost (synthetic)", "Nobody ever consented for me.");
-        SyncOutcome outcome = sync();
-
-        assertThat(outcome.messagesIngested())
-                .as("a message from an unknown sender is not counted as ingested")
-                .isZero();
-        assertThat(storedCount()).as("the unknown sender's message must never reach storage")
-                .isEqualTo(before);
-        long stored = this.jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM messages WHERE chat_id = ? AND sender_tg_user_id = ?",
-                Long.class, ready().chat().id(), ghostSender);
-        assertThat(stored).isZero();
-    }
-
-    /**
-     * Security-audit finding SEC-03: F05 only ever re-checked a participant's consent at the
-     * instant they were detected as newly departed, so someone who never leaves but whose
-     * consent record simply expires could keep their already-stored messages indefinitely.
-     * Reconciliation now runs against every known participant -- not only fresh departures --
-     * on every successful membership refresh, so an expiry with no departure event to hang it
-     * on is still caught.
-     */
-    @Test
-    void purgesAnActiveParticipantsMessagesOnceTheirConsentExpiresEvenWithoutLeaving() {
-        sync();
-        long before = storedCount();
-        long botMessages = this.jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM messages m JOIN chat_participants p "
-                        + "ON p.tenant_id = m.tenant_id AND p.chat_id = m.chat_id "
-                        + "AND p.tg_user_id = m.sender_tg_user_id "
-                        + "WHERE m.chat_id = ? AND p.is_bot = true",
-                Long.class, ready().chat().id());
-        assertThat(before).isGreaterThan(botMessages);
-
-        // The fixture grants consent expiring 300 days out; nobody leaves.
-        this.mutableClock().advance(Duration.ofDays(301));
-        SyncOutcome outcome = sync();
-
-        assertThat(outcome.status()).isEqualTo(SyncOutcome.Status.PAUSED_CONSENT);
-        assertThat(storedCount())
-                .as("every non-bot author's messages are purged once their consent expires, "
-                        + "leaving only messages from senders that never needed consent (bots)")
-                .isEqualTo(botMessages);
-    }
-
-    @Test
-    void pausesTheChatWhenConsentCoverageLapses() {
-        sync();
-        this.jdbcTemplate.update("UPDATE consent_records SET revoked_at = now() WHERE chat_id = ?",
-                ready().chat().id());
-
-        SyncOutcome outcome = sync();
-
-        assertThat(outcome.status()).isEqualTo(SyncOutcome.Status.PAUSED_CONSENT);
-        assertThat(this.activations.find(ready().team().tenant().id(), ready().chat().id())
-                .orElseThrow().state()).isEqualTo(ActivationState.PAUSED);
-    }
-
-    /**
      * Security-audit finding F06: PAUSED.mayRetainContent() is true (a pause keeps what a
      * chat already has), which previously also let sync() keep fetching and storing *new*
      * content for a PAUSED chat -- reachable through the UI's manual "Sync now" button with no
-     * separate check of its own -- even though the chat was paused specifically because
-     * consent coverage was no longer trustworthy. Only ACTIVE chats may ingest new content now.
+     * separate check of its own. Only ACTIVE chats may ingest new content now. Paused directly
+     * via the activation state (an operator's own Pause action) rather than through consent
+     * lapsing, which per this deployment's explicit operator decision (see {@link
+     * io.tgmcp.consent.ConsentService#coverageFor}) no longer pauses anything on its own.
      */
     @Test
     void manuallySyncingAPausedChatDoesNotIngestNewContent() {
         sync();
-        this.jdbcTemplate.update("UPDATE consent_records SET revoked_at = now() WHERE chat_id = ?",
-                ready().chat().id());
-        SyncOutcome pausingOutcome = sync();
-        assertThat(pausingOutcome.status()).isEqualTo(SyncOutcome.Status.PAUSED_CONSENT);
         long storedWhilePausing = storedCount();
+        this.activations.updateState(ready().team().tenant().id(), ready().chat().id(),
+                ActivationState.PAUSED, "test");
 
         mockGateway().appendMessage(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.ALICE,
-                "Alice Nakamura (synthetic)", "Posted while the chat is paused for consent review.");
+                "Alice Nakamura (synthetic)", "Posted while the chat is paused.");
         SyncOutcome manualSyncWhilePaused = sync();
 
         assertThat(manualSyncWhilePaused.status()).isNotEqualTo(SyncOutcome.Status.SYNCED);

@@ -57,71 +57,65 @@
     </div>
   </div>
 
-  <!-- One shared form for bulk-preparing every checked, not-yet-selected chat at once (see
-       DashboardController#bulkPrepare) -- each row's checkbox is bound here via the HTML5
-       form= attribute rather than DOM nesting, since a <table> row cannot legally contain a
-       <form> of its own around a shared submit button. -->
-  <form id="bulk-prepare-form" th:action="@{/chats/bulk-prepare}" method="post" data-guard-resubmit></form>
+  <!-- One shared form for bulk-turning-on every checked, not-yet-selected chat at once (see
+       DashboardController#bulkPrepare) -- the checkboxes are genuine children of this <form>
+       rather than bound via the HTML5 form= attribute, which some mobile browsers fail to
+       honor for elements outside the <form> tag (see chat.html's consent-all-form, fixed for
+       the same reason after a confirmed production crash on that page). -->
+  <form id="bulk-prepare-form" th:action="@{/chats/bulk-prepare}" method="post" data-guard-resubmit>
+    <div class="table-wrap">
+      <table>
+        <thead>
+        <tr>
+          <th></th>
+          <th th:text="#{dashboard.table.chat}">Chat</th><th th:text="#{dashboard.table.type}">Type</th>
+          <th th:text="#{dashboard.table.state}">State</th>
+          <th th:text="#{dashboard.table.providers}">Providers</th>
+          <th th:text="#{dashboard.table.stored}">Stored</th><th th:text="#{dashboard.table.sync}">Sync</th><th></th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="c : ${chats}">
+          <td>
+            <input type="checkbox" name="chatId" th:value="${c.chat.id}"
+                   th:if="${c.coverage == null}" th:title="#{dashboard.table.selectCheckbox}">
+          </td>
+          <td th:text="${c.chat.title}">chat</td>
+          <td th:text="#{${'chatType.' + c.chat.chatType}}">SUPERGROUP</td>
+          <td><span class="pill" th:classappend="${c.active} ? 'ok' : 'warn'"
+                    th:text="#{${'state.' + c.stateLabel}}">INACTIVE</span></td>
+          <td>
+            <span th:each="p, iter : ${c.providers}">
+              <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
+            </span>
+          </td>
+          <td th:text="${c.stored.storedMessageCount}">0</td>
+          <td>
+            <span th:text="#{${'syncState.' + c.syncState}}">NEVER_STARTED</span>
+            <span class="warn" th:if="${c.selected and c.partialHistory}" th:title="#{dashboard.table.partialTitle}"
+                  th:text="#{dashboard.table.partialLabel}">partial</span>
+            <span class="err" th:if="${c.lastErrorCode != null}" th:text="${c.lastErrorCode}"></span>
+          </td>
+          <td><a th:href="@{'/chats/' + ${c.chat.id}}" th:text="#{dashboard.table.manage}">Manage</a></td>
+        </tr>
+        <tr th:if="${#lists.isEmpty(chats)}">
+          <td colspan="8">
+            <div class="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span th:text="#{dashboard.table.empty}">No chats discovered yet. Connect Telegram, then refresh the chat list.</span>
+            </div>
+          </td>
+        </tr>
+        </tbody>
+      </table>
+    </div>
 
-  <div class="table-wrap">
-    <table>
-      <thead>
-      <tr>
-        <th></th>
-        <th th:text="#{dashboard.table.chat}">Chat</th><th th:text="#{dashboard.table.type}">Type</th>
-        <th th:text="#{dashboard.table.state}">State</th><th th:text="#{dashboard.table.consent}">Consent</th>
-        <th th:text="#{dashboard.table.providers}">Providers</th>
-        <th th:text="#{dashboard.table.stored}">Stored</th><th th:text="#{dashboard.table.sync}">Sync</th><th></th>
-      </tr>
-      </thead>
-      <tbody>
-      <tr th:each="c : ${chats}">
-        <td>
-          <input type="checkbox" name="chatId" th:value="${c.chat.id}" form="bulk-prepare-form"
-                 th:if="${c.coverage == null}" th:title="#{dashboard.table.selectCheckbox}">
-        </td>
-        <td th:text="${c.chat.title}">chat</td>
-        <td th:text="#{${'chatType.' + c.chat.chatType}}">SUPERGROUP</td>
-        <td><span class="pill" th:classappend="${c.active} ? 'ok' : 'warn'"
-                  th:text="#{${'state.' + c.stateLabel}}">INACTIVE</span></td>
-        <td>
-          <span th:if="${c.coverage == null}" class="muted" th:text="#{dashboard.table.notSelected}">not selected</span>
-          <span th:if="${c.coverage != null and c.consentComplete}" class="ok"
-                th:text="${c.coverage.coveredParticipants} + '/' + ${c.coverage.requiredParticipants}">0/0</span>
-          <span th:if="${c.coverage != null and !c.consentComplete}" class="warn"
-                th:text="${c.coverage.coveredParticipants} + '/' + ${c.coverage.requiredParticipants}">0/0</span>
-        </td>
-        <td>
-          <span th:each="p, iter : ${c.providers}">
-            <span th:text="#{${'provider.' + p}}"></span><span th:if="${!iter.last}">, </span>
-          </span>
-        </td>
-        <td th:text="${c.stored.storedMessageCount}">0</td>
-        <td>
-          <span th:text="#{${'syncState.' + c.syncState}}">NEVER_STARTED</span>
-          <span class="warn" th:if="${c.selected and c.partialHistory}" th:title="#{dashboard.table.partialTitle}"
-                th:text="#{dashboard.table.partialLabel}">partial</span>
-          <span class="err" th:if="${c.lastErrorCode != null}" th:text="${c.lastErrorCode}"></span>
-        </td>
-        <td><a th:href="@{'/chats/' + ${c.chat.id}}" th:text="#{dashboard.table.manage}">Manage</a></td>
-      </tr>
-      <tr th:if="${#lists.isEmpty(chats)}">
-        <td colspan="9">
-          <div class="empty-state">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            <span th:text="#{dashboard.table.empty}">No chats discovered yet. Connect Telegram, then refresh the chat list.</span>
-          </div>
-        </td>
-      </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <p class="hint" th:if="${!#lists.isEmpty(chats)}" th:text="#{dashboard.bulkPrepare.recommendation}">
-    Recommended: get consent from a chat's participants before preparing and activating it.
-  </p>
-  <button type="submit" form="bulk-prepare-form" th:if="${!#lists.isEmpty(chats)}"
-          th:text="#{dashboard.bulkPrepare.button}">Prepare selected chats</button>
+    <p class="hint" th:if="${!#lists.isEmpty(chats)}" th:text="#{dashboard.bulkPrepare.recommendation}">
+      Selected chats sync automatically every 30 seconds once turned on.
+    </p>
+    <button type="submit" th:if="${!#lists.isEmpty(chats)}"
+            th:text="#{dashboard.bulkPrepare.button}">Turn on selected chats</button>
+  </form>
 </section>
 </body>
 </html>

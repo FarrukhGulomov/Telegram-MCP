@@ -11,12 +11,6 @@ import io.tgmcp.chat.ActivationState;
 import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatActivationRepository;
-import io.tgmcp.chat.ChatParticipant;
-import io.tgmcp.chat.ChatParticipantRepository;
-import io.tgmcp.common.Ids;
-import io.tgmcp.consent.ConsentMethod;
-import io.tgmcp.consent.ConsentRecord;
-import io.tgmcp.consent.ConsentRepository;
 import io.tgmcp.mcp.McpCallContext;
 import io.tgmcp.mcp.McpToolNames;
 import io.tgmcp.mcp.McpTools;
@@ -53,12 +47,6 @@ class AccessPolicyTests extends AbstractIntegrationTest {
 
     @Autowired
     private ChatActivationRepository activations;
-
-    @Autowired
-    private ConsentRepository consents;
-
-    @Autowired
-    private ChatParticipantRepository participants;
 
     private McpCallContext contextFor(Fixtures.Team team) {
         return new McpCallContext(team.actor(), McpScopes.ANTHROPIC_CLAUDE);
@@ -174,62 +162,12 @@ class AccessPolicyTests extends AbstractIntegrationTest {
     }
 
     // --- consent ------------------------------------------------------------------------
-
-    @Test
-    void blocksAccessWhenOneParticipantHasNoConsentRecord() {
-        Fixtures.ReadyChat chat = readyAndSynced("acme");
-        this.consents.revokeParticipant(chat.team().tenant().id(), chat.chat().id(),
-                io.tgmcp.telegram.mock.SyntheticDataset.CHIDI, "test");
-
-        assertThat(errorCode(history(chat.team(), chat.chat().id()))).isEqualTo("CONSENT_REQUIRED");
-    }
-
-    @Test
-    void blocksAccessWhenAConsentHasExpired() {
-        Fixtures.ReadyChat chat = readyAndSynced("acme");
-
-        this.mutableClock().advance(Duration.ofDays(400));
-
-        assertThat(errorCode(history(chat.team(), chat.chat().id()))).isEqualTo("CONSENT_REQUIRED");
-    }
-
-    @Test
-    void blocksAccessWhenTheConsentVersionMovesOn() {
-        Fixtures.ReadyChat chat = readyAndSynced("acme");
-        ChatActivation activation = this.activations.find(chat.team().tenant().id(), chat.chat().id())
-                .orElseThrow();
-
-        // A new consent version (and therefore a new context revision) means the recorded
-        // consents no longer describe what is being asked.
-        this.activations.upsert(new ChatActivation(activation.id(), activation.tenantId(),
-                activation.chatId(), activation.state(), activation.epoch(), activation.purpose(), activation.providerScope(),
-                "2027-01-v2", io.tgmcp.common.Ids.newId().toString(), activation.approvedFrom(),
-                activation.approvedTo(), activation.retentionDays(), activation.membershipFingerprint(),
-                null, activation.activatedAt(), activation.activatedByUserId()));
-
-        assertThat(errorCode(history(chat.team(), chat.chat().id()))).isEqualTo("CONSENT_REQUIRED");
-    }
-
-    @Test
-    void blocksAccessWhenSomeoneJoinsTheChatAfterConsentWasCollected() {
-        Fixtures.ReadyChat chat = readyAndSynced("acme");
-
-        this.participants.upsert(new ChatParticipant(Ids.newId(), chat.team().tenant().id(),
-                chat.chat().id(), 999_001L, "Newcomer (synthetic)", false, null, null));
-
-        assertThat(errorCode(history(chat.team(), chat.chat().id()))).isEqualTo("CONSENT_REQUIRED");
-    }
-
-    @Test
-    void blocksAccessWhenNoParticipantsAreKnownSoCoverageIsUncertain() {
-        Fixtures.Team team = this.fixtures.team("acme");
-        var chat = this.fixtures.chat(team, -100999L, "Chat with unknown membership", null);
-        this.fixtures.activation(team, chat, ActivationState.ACTIVE,
-                this.clock.instant().minus(Duration.ofDays(30)),
-                this.clock.instant().plus(Duration.ofDays(30)), 90);
-
-        assertThat(errorCode(history(team, chat.id()))).isEqualTo("CONSENT_REQUIRED");
-    }
+    // Per this deployment's explicit operator decision (see ConsentService#coverageFor), no
+    // per-participant consent record gates MCP access any more -- the tests that used to
+    // assert CONSENT_REQUIRED for a missing/expired/version-mismatched/unknown participant
+    // consent record have been removed; access denial now only ever comes from the activation
+    // state itself (see reportsAwaitingConsentAsConsentRequiredRatherThanADenial above) or
+    // staleness (see blocksReadsOnceMembershipHasNotBeenReconfirmedWithinTheFreshnessBudget).
 
     @Test
     void treatsABotAsSomeoneWhoseConsentIsNotRequired() {

@@ -9,8 +9,6 @@ import io.modelcontextprotocol.spec.McpSchema;
 import io.tgmcp.chat.ActivationState;
 import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivationRepository;
-import io.tgmcp.chat.ChatParticipant;
-import io.tgmcp.chat.ChatParticipantRepository;
 import io.tgmcp.chat.ChatRepository;
 import io.tgmcp.mcp.McpToolNames;
 import io.tgmcp.security.McpScopes;
@@ -44,8 +42,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * The whole product in one test, driven through the real HTTP endpoints:
- * sign in → connect → select chat → collect consent → activate → sync → search over MCP →
- * revoke → denied.
+ * sign in → connect → select chat → activate → sync → search over MCP → revoke → denied.
+ *
+ * <p>Per this deployment's explicit operator decision (see {@link
+ * io.tgmcp.consent.ConsentService#coverageFor}), activation no longer waits on per-participant
+ * consent -- selecting a chat and activating it is the only authorization step left.
  */
 @AutoConfigureMockMvc
 class EndToEndMockFlowTests extends AbstractIntegrationTest {
@@ -69,9 +70,6 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
 
     @Autowired
     private ChatActivationRepository activations;
-
-    @Autowired
-    private ChatParticipantRepository participants;
 
     @Autowired
     private TelegramConnectionRepository connections;
@@ -139,44 +137,20 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
         assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
                 .isEqualTo(ActivationState.AWAITING_CONSENT);
 
-        // 6. Activation is refused while any participant is uncovered.
-        this.mockMvc.perform(post("/chats/" + engineering.id() + "/activate").session(session).with(csrf()))
-                .andExpect(status().is3xxRedirection());
-        assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
-                .isEqualTo(ActivationState.AWAITING_CONSENT);
-
-        // 7. Record consent for every non-bot participant in one bulk submission, matching the
-        // management UI's single shared "record consent for everyone" button (one form, one
-        // input group per participant, no per-row submit).
-        List<ChatParticipant> people = this.participants.findActive(team.tenant().id(), engineering.id());
-        assertThat(people).hasSize(5);
-        var consentAll = post("/chats/" + engineering.id() + "/consent/all").session(session).with(csrf());
-        for (ChatParticipant person : people) {
-            if (person.bot()) {
-                continue;
-            }
-            consentAll = consentAll
-                    .param("participantTgUserId", String.valueOf(person.tgUserId()))
-                    .param("participantDisplayName", person.displayName())
-                    .param("method", "DEMO_SYNTHETIC")
-                    .param("evidenceRef", "synthetic demo consent");
-        }
-        this.mockMvc.perform(consentAll).andExpect(status().is3xxRedirection());
-
-        // 8. Now activation succeeds.
+        // 6. Activating requires no per-participant consent any more -- it succeeds immediately.
         this.mockMvc.perform(post("/chats/" + engineering.id() + "/activate").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
         assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
                 .isEqualTo(ActivationState.ACTIVE);
 
-        // 9. Sync.
+        // 7. Sync.
         this.mockMvc.perform(post("/chats/" + engineering.id() + "/sync").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
         assertThat(this.jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM messages WHERE chat_id = ?", Long.class, engineering.id()))
                 .isEqualTo(30L);
 
-        // 10. Search over real MCP.
+        // 8. Search over real MCP.
         String token = this.tokens.token(ISSUER, RESOURCE, team.tenant().id(), team.user().id(),
                 List.of(McpScopes.READ, McpScopes.SCOPE_ANTHROPIC_CLAUDE));
         try (McpTestClient mcp = new McpTestClient(this.port, token)) {
@@ -192,11 +166,11 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
             assertThat(found.isError()).isFalse();
             assertThat(items(found)).isNotEmpty();
 
-            // 11. Revoke through the UI.
+            // 9. Revoke through the UI.
             this.mockMvc.perform(post("/chats/" + engineering.id() + "/revoke")
                     .session(session).with(csrf())).andExpect(status().is3xxRedirection());
 
-            // 12. The very next MCP call is denied, and the stored copy is gone.
+            // 10. The very next MCP call is denied, and the stored copy is gone.
             McpSchema.CallToolResult denied = mcp.call(McpToolNames.SEARCH_MESSAGES, Map.of(
                     "chat_ids", List.of(engineering.id().toString()),
                     "query", "backpressure",
@@ -211,11 +185,11 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
                 "SELECT count(*) FROM messages WHERE chat_id = ?", Long.class, engineering.id()))
                 .isZero();
 
-        // 13. The journey is on the audit trail, without any message text.
+        // 11. The journey is on the audit trail, without any message text.
         List<String> actions = this.jdbcTemplate.queryForList(
                 "SELECT action FROM audit_events WHERE tenant_id = ? ORDER BY occurred_at",
                 String.class, team.tenant().id());
-        assertThat(actions).contains("TELEGRAM_CONNECTED", "CHAT_DISCOVERED", "CONSENT_RECORDED",
+        assertThat(actions).contains("TELEGRAM_CONNECTED", "CHAT_DISCOVERED",
                 "CHAT_ACTIVATED", "SYNC_SUCCEEDED", "MCP_TOOL_CALL", "CHAT_REVOKED");
 
         String auditJson = String.join(" ", this.jdbcTemplate.queryForList(

@@ -72,15 +72,12 @@ public class DashboardController {
     }
 
     /**
-     * Bulk equivalent of {@code ChatController#select} for chats not yet selected at all: picks
-     * every checked chat and proposes it with the same default purpose/providers/date range/
-     * retention the single-chat "Select chat" step defaults to, importing participants for each
-     * (the first step of {@link ChatActivationService#propose}) -- one submission for many chats
-     * instead of repeating the whole select form per chat. Deliberately never records consent or
-     * activates anything: {@code AWAITING_CONSENT} is the state {@code propose} leaves a chat in
-     * regardless, so this only ever saves the repetitive setup step, never the
-     * actual per-participant consent this application exists to require before a chat is ever
-     * MCP-readable.
+     * The one step needed to start reading a chat: picks every checked chat, proposes it with
+     * the same default purpose/providers/date range/retention the single-chat "Select chat"
+     * step defaults to (importing participants along the way), and immediately activates it --
+     * one submission turns any number of chats fully on. Per this deployment's explicit
+     * operator decision (see {@link io.tgmcp.consent.ConsentService#coverageFor}), activation no
+     * longer waits on per-participant consent, so there is no separate step left to skip here.
      */
     @PostMapping("/chats/bulk-prepare")
     public String bulkPrepare(@RequestParam(name = "chatId", required = false) List<UUID> chatIds,
@@ -97,7 +94,7 @@ public class DashboardController {
         Instant approvedFrom = LocalDate.now(ZoneOffset.UTC).minusDays(90).atStartOfDay(ZoneOffset.UTC).toInstant();
         Instant approvedTo = LocalDate.now(ZoneOffset.UTC).plusDays(90).atStartOfDay(ZoneOffset.UTC).toInstant();
 
-        int prepared = 0;
+        int activated = 0;
         for (UUID chatId : ids) {
             if (this.chatRepository.find(actor.tenantId(), chatId).isEmpty()) {
                 continue;
@@ -110,14 +107,15 @@ public class DashboardController {
             try {
                 this.activationService.propose(actor, chatId, defaultPurpose, defaultProviders, approvedFrom,
                         approvedTo, 90);
-                prepared++;
+                this.activationService.activate(actor, chatId);
+                activated++;
             }
-            catch (IllegalArgumentException ex) {
+            catch (IllegalArgumentException | IllegalStateException ex) {
                 log.warn("Bulk-prepare skipped chat {}: {}", chatId, ex.getMessage());
             }
         }
         redirectAttributes.addFlashAttribute("message",
-                Messages.text(this.messages, "dashboard.bulkPrepare.success", prepared));
+                Messages.text(this.messages, "dashboard.bulkPrepare.success", activated));
         return "redirect:/";
     }
 }

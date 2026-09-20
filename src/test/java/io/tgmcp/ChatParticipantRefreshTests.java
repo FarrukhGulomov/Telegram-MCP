@@ -3,6 +3,7 @@ package io.tgmcp;
 import java.util.List;
 
 import io.tgmcp.chat.Chat;
+import io.tgmcp.chat.ChatParticipantRepository;
 import io.tgmcp.security.McpScopes;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
@@ -22,11 +23,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.containsString;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -49,6 +48,9 @@ class ChatParticipantRefreshTests extends AbstractIntegrationTest {
     /** Spied only to control listParticipants(); everything else still runs the real mock logic. */
     @MockitoSpyBean
     private TelegramGateway gateway;
+
+    @Autowired
+    private ChatParticipantRepository participantRepository;
 
     @Test
     void reopeningAnAwaitingConsentChatPicksUpParticipantsMissedAtSelectTime() throws Exception {
@@ -77,11 +79,13 @@ class ChatParticipantRefreshTests extends AbstractIntegrationTest {
                         .param("retentionDays", "365"))
                 .andExpect(status().is3xxRedirection());
 
-        // Simply reopening the page re-imports and shows the participant select() missed.
+        // Simply reopening the page re-imports the participant select() missed.
         this.mockMvc.perform(get("/chats/" + chat.id()).session(session))
-                .andExpect(status().isOk())
-                .andExpect(content().string(containsString("Farrukh Gulomov")));
+                .andExpect(status().isOk());
 
+        assertThat(this.participantRepository.findActive(team.tenant().id(), chat.id()))
+                .extracting(io.tgmcp.chat.ChatParticipant::displayName)
+                .contains("Farrukh Gulomov");
         Mockito.verify(this.gateway, Mockito.times(2))
                 .listParticipants(Mockito.any(), Mockito.eq(SyntheticDataset.ENGINEERING_CHAT));
     }
@@ -122,7 +126,10 @@ class ChatParticipantRefreshTests extends AbstractIntegrationTest {
                 .andExpect(status().is3xxRedirection());
 
         this.mockMvc.perform(get("/chats/" + chat.id()).session(session))
-                .andExpect(status().isOk())
-                .andExpect(content().string(containsString("Farrukh Gulomov")));
+                .andExpect(status().isOk());
+
+        assertThat(this.participantRepository.findActive(team.tenant().id(), chat.id()))
+                .extracting(io.tgmcp.chat.ChatParticipant::displayName)
+                .contains("Farrukh Gulomov");
     }
 }

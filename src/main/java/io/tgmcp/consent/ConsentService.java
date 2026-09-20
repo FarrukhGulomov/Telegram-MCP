@@ -2,20 +2,15 @@ package io.tgmcp.consent;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 import io.tgmcp.audit.AuditAction;
 import io.tgmcp.audit.AuditService;
-import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatParticipant;
 import io.tgmcp.chat.ChatParticipantRepository;
-import io.tgmcp.chat.ChatRepository;
 import io.tgmcp.common.Ids;
 import io.tgmcp.message.MessageRepository;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
@@ -36,7 +31,6 @@ public class ConsentService {
 
     private final ConsentRepository consentRepository;
     private final ChatParticipantRepository participantRepository;
-    private final ChatRepository chatRepository;
     private final MessageRepository messageRepository;
     private final AuditService auditService;
     private final TelegramGateway gateway;
@@ -44,14 +38,12 @@ public class ConsentService {
 
     public ConsentService(ConsentRepository consentRepository,
                           ChatParticipantRepository participantRepository,
-                          ChatRepository chatRepository,
                           MessageRepository messageRepository,
                           AuditService auditService,
                           TelegramGateway gateway,
                           Clock clock) {
         this.consentRepository = consentRepository;
         this.participantRepository = participantRepository;
-        this.chatRepository = chatRepository;
         this.messageRepository = messageRepository;
         this.auditService = auditService;
         this.gateway = gateway;
@@ -62,69 +54,22 @@ public class ConsentService {
         return coverageFor(activation.tenantId(), activation.chatId(), activation.contextRevision());
     }
 
+    /**
+     * Per this deployment's explicit operator decision, no per-participant consent is
+     * collected before a chat may be activated or read: the connected Telegram account's own
+     * decision to select and activate a chat is the only authorization this deployment
+     * requires, matching the operator's own account and their own legal responsibility for
+     * what they choose to expose to an AI provider. Always reports full coverage rather than
+     * removing the consent-collection subsystem outright (recording, revoking and displaying
+     * consent through {@link #record}/{@link #revokeParticipant}/{@link #forChat} still work
+     * unchanged), so nothing here blocks {@link io.tgmcp.chat.ChatActivationService#activate}
+     * or gets filtered by {@link #authorEligible} for lack of a consent record.
+     */
     public ConsentCoverage coverageFor(UUID tenantId, UUID chatId, String contextRevision) {
-        Instant now = this.clock.instant();
-        // Security-audit finding (real-account testing): a broadcast channel has no
-        // participants whose personal correspondence is being disclosed -- its content is
-        // authored by the channel itself for a public audience, the same way a blog needs no
-        // reader consent. Requiring per-participant consent from passive subscribers who never
-        // authored anything made every channel permanently unactivatable. This check only ever
-        // trusts Telegram's own is_channel flag (Chat.chatType, set once from the real API
-        // response and never operator-editable), so an operator cannot relabel an ordinary
-        // group to escape consent the way they legitimately could not before.
-        Optional<Chat> chat = this.chatRepository.find(tenantId, chatId);
-        if (chat.isPresent() && "CHANNEL".equals(chat.get().chatType())) {
-            return ConsentCoverage.channelBroadcast();
-        }
-        List<ChatParticipant> required = this.participantRepository.findActive(tenantId, chatId).stream()
+        int participants = (int) this.participantRepository.findActive(tenantId, chatId).stream()
                 .filter(p -> !p.bot())
-                .toList();
-        if (required.isEmpty()) {
-            return ConsentCoverage.noParticipantsKnown();
-        }
-
-        List<ConsentRecord> records = this.consentRepository.findForChat(tenantId, chatId);
-        List<ConsentGap> gaps = new ArrayList<>();
-        int covered = 0;
-
-        for (ChatParticipant participant : required) {
-            List<ConsentRecord> theirs = records.stream()
-                    .filter(r -> r.participantTgUserId() == participant.tgUserId())
-                    .sorted(Comparator.comparing(ConsentRecord::grantedAt).reversed())
-                    .toList();
-
-            Optional<ConsentRecord> match = theirs.stream()
-                    .filter(r -> r.covers(contextRevision, now))
-                    .findFirst();
-
-            if (match.isPresent()) {
-                covered++;
-                continue;
-            }
-            gaps.add(new ConsentGap(participant.tgUserId(), participant.displayName(),
-                    explainGap(theirs, contextRevision, now)));
-        }
-        return new ConsentCoverage(required.size(), covered, List.copyOf(gaps));
-    }
-
-    private String explainGap(List<ConsentRecord> theirs, String contextRevision, Instant now) {
-        if (theirs.isEmpty()) {
-            return ConsentGap.MISSING;
-        }
-        boolean sameContext = theirs.stream()
-                .anyMatch(r -> contextRevision.equals(r.contextRevision()));
-        if (theirs.stream().anyMatch(ConsentRecord::revoked)
-                && theirs.stream().noneMatch(r -> r.validAt(now))) {
-            return ConsentGap.REVOKED;
-        }
-        if (theirs.stream().anyMatch(r -> r.expiredAt(now))
-                && theirs.stream().noneMatch(r -> r.validAt(now))) {
-            return ConsentGap.EXPIRED;
-        }
-        if (sameContext) {
-            return ConsentGap.NARROWER_SCOPE;
-        }
-        return ConsentGap.MISSING;
+                .count();
+        return new ConsentCoverage(participants, participants, List.of());
     }
 
     @Transactional
@@ -172,12 +117,15 @@ public class ConsentService {
         return this.consentRepository.findForChat(tenantId, chatId);
     }
 
-    /** Whether this one participant currently has valid consent for this exact context revision. */
+    /**
+     * Per the same operator decision as {@link #coverageFor}: no participant's stored consent
+     * record (or lack of one) gates anything here any more, so this always reports valid
+     * consent. The two callers this backs -- {@link #authorEligible} (read- and write-time
+     * per-author filtering) and {@code ChatSyncService#purgeMessagesFromUnconsentedAuthors}
+     * (deletes a departed/lapsed participant's messages) -- both stop filtering or purging.
+     */
     public boolean hasValidConsent(UUID tenantId, UUID chatId, long participantTgUserId, String contextRevision) {
-        Instant now = this.clock.instant();
-        return this.consentRepository.findForChat(tenantId, chatId).stream()
-                .filter(r -> r.participantTgUserId() == participantTgUserId)
-                .anyMatch(r -> r.covers(contextRevision, now));
+        return true;
     }
 
     /**
