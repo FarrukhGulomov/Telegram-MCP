@@ -24,8 +24,14 @@ public record SyncCheckpoint(UUID id,
                              String lastErrorMessage,
                              boolean halted) {
 
+    /**
+     * "Halted" is purely a status label for the UI/audit trail now -- every automatic retry
+     * decision, halted or not, is driven by {@code nextAttemptAt} alone, so a chat can never get
+     * permanently stuck waiting on a human to notice and intervene (see {@code
+     * ChatSyncService#handleGatewayFailure}).
+     */
     public boolean dueAt(Instant now) {
-        return !this.halted && (this.nextAttemptAt == null || !now.isBefore(this.nextAttemptAt));
+        return this.nextAttemptAt == null || !now.isBefore(this.nextAttemptAt);
     }
 
     public boolean everSucceeded() {

@@ -336,11 +336,15 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
         mockGateway().failNextCall(new TelegramTransientException("network blip"));
         assertThat(sync().status()).isEqualTo(SyncOutcome.Status.HALTED);
         assertThat(checkpoint().halted()).isTrue();
-        assertThat(checkpoint().nextAttemptAt()).isNull();
+        assertThat(checkpoint().nextAttemptAt())
+                .as("halted is a status label now, not a permanent stop -- it still schedules an "
+                        + "automatic retry, just at the slow max-backoff cadence (1 minute in this profile) "
+                        + "rather than the fast exponential ramp")
+                .isEqualTo(this.clock.instant().plus(Duration.ofMinutes(1)));
     }
 
     @Test
-    void haltsImmediatelyOnAnAuthenticationFailureRatherThanRetrying() {
+    void haltsImmediatelyOnAnAuthenticationFailureButStillSchedulesAnAutomaticRetry() {
         mockGateway().failNextCall(new TelegramAuthException("session revoked"));
 
         assertThat(sync().status()).isEqualTo(SyncOutcome.Status.HALTED);
@@ -348,6 +352,10 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
         assertThat(checkpoint.halted()).isTrue();
         assertThat(checkpoint.consecutiveFailures()).isEqualTo(1);
         assertThat(checkpoint.lastErrorCode()).isEqualTo("AUTH_FAILED");
+        assertThat(checkpoint.nextAttemptAt())
+                .as("no operator action is possible or expected anywhere in this application, so even an "
+                        + "auth failure must retry on its own eventually rather than wait for a human")
+                .isEqualTo(this.clock.instant().plus(Duration.ofMinutes(1)));
     }
 
     @Test
@@ -358,27 +366,43 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
         assertThat(checkpoint().lastErrorCode()).isEqualTo("PERMISSION_DENIED");
     }
 
+    /**
+     * The scheduler runs unattended forever with no UI control to nudge it, so a halt can never
+     * be a dead end: once its max-backoff window elapses, the very next automatic 30-second tick
+     * retries on its own and recovers, exactly as if whatever caused the failure (a since-fixed
+     * bug, a since-restored permission, a boot-time ownership race that resolved itself moments
+     * later) had never happened -- no button, no operator, no manual step anywhere.
+     */
     @Test
-    void makesNoFurtherTelegramCallsOnceHalted() {
+    void automaticallyRecoversOnceMaxBackoffElapsesEvenThoughItWasHalted() {
         mockGateway().failNextCall(new TelegramAuthException("session revoked"));
-        sync();
+        assertThat(sync().status()).isEqualTo(SyncOutcome.Status.HALTED);
         long callsWhenHalted = mockGateway().callCount();
 
-        this.mutableClock().advance(Duration.ofHours(6));
-        sync();
-
+        this.mutableClock().advance(Duration.ofSeconds(30));
+        assertThat(sync().status())
+                .as("still inside the 1-minute max-backoff window -- no Telegram call yet")
+                .isEqualTo(SyncOutcome.Status.SKIPPED_NOT_ACTIVE);
         assertThat(mockGateway().callCount()).isEqualTo(callsWhenHalted);
+
+        this.mutableClock().advance(Duration.ofSeconds(31));
+        SyncOutcome retried = sync();
+
+        assertThat(retried.status())
+                .as("halted must not mean stuck forever -- it retries automatically, no operator action needed")
+                .isEqualTo(SyncOutcome.Status.SYNCED);
+        assertThat(mockGateway().callCount()).isGreaterThan(callsWhenHalted);
+        assertThat(checkpoint().halted()).isFalse();
     }
 
     /**
-     * A halted checkpoint has no automatic way back -- by design, so the scheduler never
-     * hammers Telegram after what looked like a permanent failure -- but that must not mean
-     * ingestion is stuck forever with no recovery at all once whatever caused it is gone. An
-     * operator explicitly asking to sync (the "Sync now" button, {@link ChatSyncService
-     * #syncNow}) is exactly the human attention a halt exists to wait for.
+     * {@link ChatSyncService#syncNow} is not needed for eventual recovery any more (see {@link
+     * #automaticallyRecoversOnceMaxBackoffElapsesEvenThoughItWasHalted}) -- it just skips the
+     * remainder of the current backoff window, useful for an operator verifying a fix without
+     * waiting.
      */
     @Test
-    void syncNowClearsAHaltAndResumesIngestion() {
+    void syncNowSkipsTheRemainingBackoffAndResumesImmediately() {
         mockGateway().failNextCall(new TelegramAuthException("session revoked"));
         assertThat(sync().status()).isEqualTo(SyncOutcome.Status.HALTED);
         assertThat(checkpoint().halted()).isTrue();

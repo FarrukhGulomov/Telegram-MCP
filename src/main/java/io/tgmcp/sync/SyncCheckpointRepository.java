@@ -126,9 +126,9 @@ public class SyncCheckpointRepository {
     /**
      * Clears a halted checkpoint's failure state without touching what has already been
      * ingested (unlike {@link #reset}, which also wipes synced position and backfill progress
-     * for a full re-ingest). An operator explicitly asking to sync is exactly the human
-     * attention a halt is meant to wait for, so a manual sync clears it first rather than
-     * silently doing nothing because {@link SyncCheckpoint#dueAt} still says no.
+     * for a full re-ingest). Not required for eventual recovery -- a halted checkpoint already
+     * retries on its own once its {@code next_attempt_at} (set to the slow maxBackoff cadence)
+     * elapses -- this only skips the remainder of that wait.
      */
     public void clearHalt(UUID tenantId, UUID chatId) {
         this.jdbc.sql("""

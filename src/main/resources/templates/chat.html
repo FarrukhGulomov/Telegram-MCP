@@ -52,13 +52,6 @@
       <p class="muted" th:if="${view.active}" th:text="#{chat.coverage.autoSync}">
         This chat is kept up to date automatically — no manual step is needed.
       </p>
-      <form th:if="${view.selected}" th:action="@{'/chats/' + ${view.chat.id} + '/sync'}" method="post"
-            data-guard-resubmit class="inline">
-        <button type="submit" class="secondary" th:text="#{chat.sync.button}">Sync now</button>
-      </form>
-      <p class="hint" th:if="${view.selected}" th:text="#{chat.sync.hint}">
-        Also clears a stalled sync so the automatic 30-second cycle can resume on its own.
-      </p>
     </div>
 
     <div class="card">

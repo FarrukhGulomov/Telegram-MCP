@@ -92,13 +92,11 @@ public class ChatSyncService {
     }
 
     /**
-     * Entry point for an operator explicitly asking to sync right now (the "Sync now" button).
-     * A halted checkpoint (see {@link #handleGatewayFailure}) deliberately stops the scheduler
-     * from silently hammering Telegram after what looked like a permanent failure -- but that
-     * also means, unless something clears it, ingestion stays stuck forever with no way back
-     * even once whatever caused it is gone (a since-fixed bug, a since-restored permission, or
-     * simply a TDLib hiccup misclassified as permanent). An operator explicitly asking to sync
-     * is exactly the human attention a halt exists to wait for, so this clears it first.
+     * Forces an immediate retry, skipping whatever backoff window (halted or not) is currently
+     * in effect. Everything in this application runs automatically -- there is no UI entry point
+     * for this -- but a halted checkpoint already retries on its own at the slow maxBackoff
+     * cadence (see {@link #handleGatewayFailure}), so nothing needs this to eventually recover;
+     * it only shortens the wait.
      */
     public SyncOutcome syncNow(UUID tenantId, UUID chatId) {
         this.checkpointRepository.clearHalt(tenantId, chatId);
@@ -230,11 +228,17 @@ public class ChatSyncService {
     private SyncOutcome handleGatewayFailure(UUID tenantId, UUID chatId, SyncCheckpoint checkpoint,
                                              TelegramGatewayException ex, Instant now) {
         int attempt = checkpoint.consecutiveFailures() + 1;
-        // Authentication and permission failures are not retried: no amount of waiting
-        // turns a revoked session or a lost membership back into a readable chat.
+        // An authentication or permission failure stops the fast exponential ramp-up immediately
+        // -- no amount of waiting a few seconds turns a revoked session or a lost membership back
+        // into a readable chat -- but it must not stop ingestion forever. Everything here runs
+        // fully automatically with no operator action possible or expected, so a halt still
+        // retries on its own, just at the slow, non-spammy maxBackoff cadence rather than ramping
+        // up: cheap enough that a genuinely dead session costs almost nothing to keep checking,
+        // and it self-heals the moment whatever caused it (a since-fixed bug, a since-restored
+        // permission, a boot-time ownership race that resolved itself moments later) is gone.
         boolean halt = !ex.retryable() || attempt >= this.properties.sync().maxConsecutiveFailures();
-        Instant nextAttempt = halt ? null
-                : now.plus(Backoff.delay(attempt, this.properties.sync().initialBackoff(),
+        Instant nextAttempt = now.plus(halt ? this.properties.sync().maxBackoff()
+                : Backoff.delay(attempt, this.properties.sync().initialBackoff(),
                         this.properties.sync().maxBackoff()));
 
         this.checkpointRepository.recordFailure(tenantId, chatId, ex.code(), ex.getMessage(),
