@@ -156,6 +156,20 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // single-owner check has already passed.
         this.currentOwner = ref;
         this.stateListener = listener;
+        // Confirmed from live production logs: TelegramConnectionService.reclaimOwnershipOnStartup
+        // calls this at application boot, for a connection whose persisted row was already READY
+        // before the restart -- but claiming ownership here races the async update-dispatch
+        // thread that would otherwise send setTdlibParameters once it observes TDLib's own
+        // authorizationStateWaitTdlibParameters push, which (being a genuine network round trip
+        // to Telegram) can easily take longer than the few seconds it takes Spring to finish
+        // starting up. A request that reaches this newly "owned" ref before that push has been
+        // processed -- an operator's page load, or the sync scheduler's very first tick -- passed
+        // requireCurrentOwner only to have TDLib itself reject it with "Initialization parameters
+        // are needed", surfacing as an unhandled error and leaving every newly activated chat
+        // permanently stuck at "never synced". Ensuring it here too, exactly like beginLogin does
+        // for the same race on a fresh login, closes it: whichever of this, beginLogin, or the
+        // async push runs first actually sends the parameters, and the rest are no-ops.
+        ensureTdlibParametersSent();
     }
 
     /**

@@ -62,6 +62,11 @@ class TdlibTelegramGatewayTests {
         // claim ownership here the same way a real login start would (TelegramConnectionService
         // .beginLogin calls onStateChange first, for the same reason). Tests exercising the
         // guard itself use a second, never-claimed ref instead -- see below.
+        //
+        // onStateChange now also ensures setTdlibParameters is sent (see its own doc comment),
+        // since tdlibParametersPending starts true for this freshly constructed gateway -- one
+        // scripted response for that, consumed here before any test body's own enqueue() calls.
+        this.client.enqueue("{\"@type\":\"ok\"}");
         this.gateway.onStateChange(this.ref, state -> { });
     }
 
@@ -221,41 +226,39 @@ class TdlibTelegramGatewayTests {
     }
 
     /**
-     * Confirmed from live production logs right after a real disconnect/reconnect:
-     * beginLogin's own request (requestQrCodeAuthentication) reached TDLib before the async
-     * listener path had sent setTdlibParameters for the fresh epoch TDLib had just entered,
-     * and TDLib correctly rejected it with "Initialization parameters are needed". Simulates
-     * beginLogin winning that race outright -- called with no prior authorizationStateWaitTdlibParameters
-     * push at all (tdlibParametersPending starts true for a freshly constructed gateway) --
-     * and asserts it sends setTdlibParameters itself, in order, before the login-specific call.
+     * Confirmed from live production logs a third time (see onStateChange's own doc comment):
+     * TelegramConnectionService.reclaimOwnershipOnStartup calls onStateChange for a connection
+     * that was READY before a restart, racing the async listener path that would otherwise send
+     * setTdlibParameters once it observes TDLib's own authorizationStateWaitTdlibParameters push
+     * -- a genuine network round trip that can easily outlast Spring's own startup. Uses a
+     * fresh, standalone gateway/client pair (not the shared, already-claimed fixture) to
+     * reproduce the true "nothing has claimed this gateway yet" starting point and assert
+     * onStateChange itself sends parameters, closing that race the same way beginLogin already
+     * closes its own.
      */
     @Test
-    void beginLoginSendsTdlibParametersFirstWhenNoPriorEpochHasSentThemYet() {
-        this.client.enqueue("{\"@type\":\"ok\"}");
-        this.client.enqueue("{\"@type\":\"ok\"}");
+    void onStateChangeSendsTdlibParametersFirstWhenNoPriorEpochHasSentThemYet() {
+        ScriptedTdlibClient freshClient = new ScriptedTdlibClient(this.mapper);
+        TdlibTelegramGateway freshGateway = new TdlibTelegramGateway(freshClient, this.config,
+                "dGVzdC1zZXNzaW9uLWVuY3J5cHRpb24ta2V5LTMyYnl0ZXM=");
+        freshClient.enqueue("{\"@type\":\"ok\"}");
 
-        this.gateway.beginLogin(this.ref, io.tgmcp.telegram.gateway.LoginMethod.QR_CODE, null);
+        freshGateway.onStateChange(new ConnectionRef(UUID.randomUUID(), UUID.randomUUID()), state -> { });
 
-        assertThat(this.client.timesSent("setTdlibParameters")).isEqualTo(1);
-        assertThat(this.client.timesSent("requestQrCodeAuthentication")).isEqualTo(1);
-        assertThat(this.client.sentMethods)
-                .as("setTdlibParameters must be sent before the login-specific request, not after")
-                .containsSubsequence("setTdlibParameters", "requestQrCodeAuthentication");
+        assertThat(freshClient.timesSent("setTdlibParameters")).isEqualTo(1);
     }
 
     /**
-     * The other half of the same race: the listener path wins instead, sending
-     * setTdlibParameters on its own before beginLogin ever runs. beginLogin must not send it a
-     * second time -- TDLib rejects a redundant setTdlibParameters call once already past that
-     * state, the same way it already rejects a redundant setAuthenticationPhoneNumber call.
+     * beginLogin must not re-send parameters a live epoch already sent -- TDLib rejects a
+     * redundant setTdlibParameters call once already past that state, the same way it already
+     * rejects a redundant setAuthenticationPhoneNumber call. {@code @BeforeEach}'s own
+     * onStateChange call is that prior sender here (see its updated doc comment).
      */
     @Test
     void beginLoginDoesNotResendTdlibParametersOnceAPriorEpochAlreadySentThem() {
-        this.client.enqueue("{\"@type\":\"ok\"}");
-        this.client.pushUpdate("""
-                {"@type":"updateAuthorizationState",
-                 "authorization_state":{"@type":"authorizationStateWaitTdlibParameters"}}""");
-        assertThat(this.client.timesSent("setTdlibParameters")).isEqualTo(1);
+        assertThat(this.client.timesSent("setTdlibParameters"))
+                .as("the @BeforeEach claim already sent parameters for this epoch")
+                .isEqualTo(1);
 
         this.client.enqueue("{\"@type\":\"ok\"}");
         this.gateway.beginLogin(this.ref, io.tgmcp.telegram.gateway.LoginMethod.QR_CODE, null);
@@ -269,14 +272,11 @@ class TdlibTelegramGatewayTests {
     /**
      * A second authorizationStateWaitTdlibParameters push (the real shape of a disconnect
      * followed by a reconnect) is a new epoch and must be sent again, not skipped as if it were
-     * the same one already handled.
+     * the same one already handled. {@code @BeforeEach}'s own onStateChange call already sent
+     * the first one.
      */
     @Test
     void aFreshWaitTdlibParametersEpochSendsParametersAgainAfterAnEarlierOneAlreadyDid() {
-        this.client.enqueue("{\"@type\":\"ok\"}");
-        this.client.pushUpdate("""
-                {"@type":"updateAuthorizationState",
-                 "authorization_state":{"@type":"authorizationStateWaitTdlibParameters"}}""");
         assertThat(this.client.timesSent("setTdlibParameters")).isEqualTo(1);
 
         this.client.enqueue("{\"@type\":\"ok\"}");
@@ -798,9 +798,9 @@ class TdlibTelegramGatewayTests {
         // TelegramConnectionService (security-audit finding SEC-01's other half); this class
         // only enforces whichever ref last claimed it.
         ConnectionRef refB = new ConnectionRef(UUID.randomUUID(), UUID.randomUUID());
-        // One response for beginLogin's own ensureTdlibParametersSent() (tdlibParametersPending
-        // starts true for a freshly constructed gateway), one for requestQrCodeAuthentication.
-        this.client.enqueue("{\"@type\":\"ok\"}");
+        // @BeforeEach's onStateChange already sent parameters for this epoch, so neither this
+        // onStateChange call nor beginLogin's own ensureTdlibParametersSent() resends them --
+        // the one response below is for requestQrCodeAuthentication alone.
         this.client.enqueue("{\"@type\":\"ok\"}");
         this.gateway.onStateChange(refB, state -> { });
         this.gateway.beginLogin(refB, io.tgmcp.telegram.gateway.LoginMethod.QR_CODE, null);
@@ -903,6 +903,9 @@ class TdlibTelegramGatewayTests {
         this.gateway.disconnect(this.ref);
 
         ConnectionRef newOwner = new ConnectionRef(UUID.randomUUID(), UUID.randomUUID());
+        // disconnect() marks a fresh epoch (tdlibParametersPending = true), so this onStateChange
+        // call sends parameters again -- one more scripted response for it.
+        this.client.enqueue("{\"@type\":\"ok\"}");
         this.gateway.onStateChange(newOwner, state -> { });
 
         assertThat(this.gateway.fetchRevisions(newOwner, -100123L, Instant.EPOCH, 10)).isEmpty();
