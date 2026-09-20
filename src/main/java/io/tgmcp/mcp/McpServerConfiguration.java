@@ -68,6 +68,15 @@ public class McpServerConfiguration {
     private static McpTransportContext extractContext(ServerRequest request, McpActorResolver resolver) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
+            // Confirmed useful diagnosing a real ChatGPT connection report: with no visibility
+            // into whether an MCP request even reaches this point with a validated token, a
+            // report of "no permission" was indistinguishable from "never got this far" (a
+            // failed token exchange, a client-side redirect error, or simply not having
+            // retried yet) versus "reached here but was rejected below" (client_id/scope
+            // visible in the token itself).
+            log.warn("MCP request to {} carried no validated JWT (authentication={})",
+                    request.uri().getPath(),
+                    authentication == null ? "null" : authentication.getClass().getSimpleName());
             return McpTransportContext.EMPTY;
         }
         Jwt jwt = jwtAuthentication.getToken();
@@ -75,14 +84,20 @@ public class McpServerConfiguration {
             AuthenticatedActor actor = resolver.resolve(jwt);
             String provider = McpScopes.providerFor(actor.scopes());
             if (provider == null) {
-                // A token with no provider scope authorises nothing; tools will deny.
+                // A token with no provider scope authorises nothing; tools will deny. Logging
+                // the actual scopes and client_id here is what would have made the earlier
+                // ChatGPT wrong-provider-scope bug (fixed in McpBearerAuthenticationEntryPoint)
+                // immediately diagnosable from this side too, instead of only from the
+                // /oauth2/authorize request logs.
+                log.warn("MCP request from client {} carried a token with no provider scope (scopes={})",
+                        jwt.getClaimAsString("client_id"), actor.scopes());
                 return McpTransportContext.EMPTY;
             }
             return McpTransportContext.create(
                     Map.of(McpCallContext.TRANSPORT_KEY, new McpCallContext(actor, provider)));
         }
         catch (IllegalStateException ex) {
-            log.warn("Rejected an MCP request whose token lacks a tenant/user binding");
+            log.warn("Rejected an MCP request whose token lacks a tenant/user binding: {}", ex.getMessage());
             return McpTransportContext.EMPTY;
         }
     }
