@@ -27,10 +27,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The user-requested alternative to selecting each discovered chat one at a time: check the ones
- * you want, press one shared button, and they turn on. {@link
- * io.tgmcp.ui.DashboardController#bulkPrepare} proposes (with defaults, importing participants)
- * and immediately activates every checked, not-yet-selected chat -- per this deployment's
+ * The user-requested alternative to opening each discovered chat one at a time: check the ones
+ * you want on the dashboard list and press one shared button, whatever state each one is
+ * currently in. {@link io.tgmcp.ui.DashboardController#bulkPrepare} (re)proposes with defaults
+ * only for a chat that was never touched or that was fully REVOKED (its settings are gone);
+ * anything else already has a working purpose/providers/date range, so it is activated directly
+ * without resetting that. {@link io.tgmcp.ui.DashboardController#bulkPause} is the same
+ * checkbox-driven idea for turning several ACTIVE chats off at once. Per this deployment's
  * explicit operator decision (see {@link io.tgmcp.consent.ConsentService#coverageFor}), no
  * separate per-participant consent step exists to skip any more.
  */
@@ -100,7 +103,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
     }
 
     @Test
-    void skipsAChatThatIsAlreadySelectedRatherThanResettingItsSettings() throws Exception {
+    void activatesAnAlreadySelectedChatWithoutResettingItsSettings() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-c", EMAIL,
                 this.passwordEncoder.encode(PASSWORD));
         MockHttpSession session = signInAndConnect(team);
@@ -123,6 +126,84 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
         assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().purpose())
                 .as("bulk-prepare must not overwrite settings a real select() already recorded")
                 .isEqualTo("A specific, already-chosen purpose");
+        assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
+                .as("an AWAITING_CONSENT chat checked on the dashboard must actually turn on")
+                .isEqualTo(ActivationState.ACTIVE);
+    }
+
+    /**
+     * The exact complaint this bulk action exists to fix: a chat the operator had already turned
+     * on and later paused (e.g. after a Telegram-side hiccup) used to require opening its own
+     * page and pressing "Activate" there individually. Checking it on the dashboard and pressing
+     * the same shared button must turn it back on, keeping the purpose/providers/dates it already
+     * had rather than resetting them to the bulk defaults.
+     */
+    @Test
+    void reactivatesAPausedChatWithoutResettingItsSettings() throws Exception {
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-e", EMAIL,
+                this.passwordEncoder.encode(PASSWORD));
+        MockHttpSession session = signInAndConnect(team);
+        TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
+                .orElseThrow();
+        Chat engineering = this.chats.findByConnection(team.tenant().id(), connection.id()).stream()
+                .filter(c -> c.tgChatId() == SyntheticDataset.ENGINEERING_CHAT).findFirst().orElseThrow();
+        this.mockMvc.perform(post("/chats/" + engineering.id() + "/select").session(session).with(csrf())
+                        .param("purpose", "A specific, already-chosen purpose")
+                        .param("providers", McpScopes.ANTHROPIC_CLAUDE)
+                        .param("approvedFrom", "2026-01-01")
+                        .param("approvedTo", "2026-06-30")
+                        .param("retentionDays", "30"))
+                .andExpect(status().is3xxRedirection());
+        this.mockMvc.perform(post("/chats/" + engineering.id() + "/activate").session(session).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+        this.mockMvc.perform(post("/chats/" + engineering.id() + "/pause").session(session).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+        assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
+                .isEqualTo(ActivationState.PAUSED);
+
+        this.mockMvc.perform(post("/chats/bulk-prepare").session(session).with(csrf())
+                        .param("chatId", engineering.id().toString()))
+                .andExpect(status().is3xxRedirection());
+
+        var reactivated = this.activations.find(team.tenant().id(), engineering.id()).orElseThrow();
+        assertThat(reactivated.state()).isEqualTo(ActivationState.ACTIVE);
+        assertThat(reactivated.purpose()).isEqualTo("A specific, already-chosen purpose");
+    }
+
+    /**
+     * A REVOKED chat's activation row carries no meaningful settings any more (revoke() also
+     * purges the stored messages), so there is nothing to preserve -- reactivating it through the
+     * bulk button falls back to the same defaults a never-touched chat gets.
+     */
+    @Test
+    void reactivatesARevokedChatUsingDefaultsSinceItsSettingsWerePurged() throws Exception {
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-f", EMAIL,
+                this.passwordEncoder.encode(PASSWORD));
+        MockHttpSession session = signInAndConnect(team);
+        TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
+                .orElseThrow();
+        Chat engineering = this.chats.findByConnection(team.tenant().id(), connection.id()).stream()
+                .filter(c -> c.tgChatId() == SyntheticDataset.ENGINEERING_CHAT).findFirst().orElseThrow();
+        this.mockMvc.perform(post("/chats/" + engineering.id() + "/select").session(session).with(csrf())
+                        .param("purpose", "A specific, already-chosen purpose")
+                        .param("providers", McpScopes.ANTHROPIC_CLAUDE)
+                        .param("approvedFrom", "2026-01-01")
+                        .param("approvedTo", "2026-06-30")
+                        .param("retentionDays", "30"))
+                .andExpect(status().is3xxRedirection());
+        this.mockMvc.perform(post("/chats/" + engineering.id() + "/activate").session(session).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+        this.mockMvc.perform(post("/chats/" + engineering.id() + "/revoke").session(session).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+        assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
+                .isEqualTo(ActivationState.REVOKED);
+
+        this.mockMvc.perform(post("/chats/bulk-prepare").session(session).with(csrf())
+                        .param("chatId", engineering.id().toString()))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
+                .isEqualTo(ActivationState.ACTIVE);
     }
 
     @Test
@@ -133,5 +214,49 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
 
         this.mockMvc.perform(post("/chats/bulk-prepare").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
+    }
+
+    @Test
+    void bulkPausePausesEveryCheckedActiveChatAndLeavesUncheckedOnesAlone() throws Exception {
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-g", EMAIL,
+                this.passwordEncoder.encode(PASSWORD));
+        MockHttpSession session = signInAndConnect(team);
+        TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
+                .orElseThrow();
+        List<Chat> discovered = this.chats.findByConnection(team.tenant().id(), connection.id());
+        Chat engineering = discovered.stream()
+                .filter(c -> c.tgChatId() == SyntheticDataset.ENGINEERING_CHAT).findFirst().orElseThrow();
+        Chat launchOps = discovered.stream()
+                .filter(c -> c.tgChatId() == SyntheticDataset.LAUNCH_OPS_CHAT).findFirst().orElseThrow();
+        this.mockMvc.perform(post("/chats/bulk-prepare").session(session).with(csrf())
+                        .param("chatId", engineering.id().toString(), launchOps.id().toString()))
+                .andExpect(status().is3xxRedirection());
+
+        this.mockMvc.perform(post("/chats/bulk-pause").session(session).with(csrf())
+                        .param("chatId", engineering.id().toString()))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
+                .isEqualTo(ActivationState.PAUSED);
+        assertThat(this.activations.find(team.tenant().id(), launchOps.id()).orElseThrow().state())
+                .as("a chat left unchecked on the pause form must stay ACTIVE")
+                .isEqualTo(ActivationState.ACTIVE);
+    }
+
+    @Test
+    void bulkPauseLeavesANeverActivatedChatAlone() throws Exception {
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-h", EMAIL,
+                this.passwordEncoder.encode(PASSWORD));
+        MockHttpSession session = signInAndConnect(team);
+        TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
+                .orElseThrow();
+        Chat engineering = this.chats.findByConnection(team.tenant().id(), connection.id()).stream()
+                .filter(c -> c.tgChatId() == SyntheticDataset.ENGINEERING_CHAT).findFirst().orElseThrow();
+
+        this.mockMvc.perform(post("/chats/bulk-pause").session(session).with(csrf())
+                        .param("chatId", engineering.id().toString()))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(this.activations.find(team.tenant().id(), engineering.id())).isEmpty();
     }
 }

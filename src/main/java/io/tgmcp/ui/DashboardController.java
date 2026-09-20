@@ -4,9 +4,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
+import io.tgmcp.chat.ActivationState;
 import io.tgmcp.chat.Chat;
+import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatActivationService;
 import io.tgmcp.chat.ChatRepository;
 import io.tgmcp.config.AppProperties;
@@ -72,12 +75,20 @@ public class DashboardController {
     }
 
     /**
-     * The one step needed to start reading a chat: picks every checked chat, proposes it with
-     * the same default purpose/providers/date range/retention the single-chat "Select chat"
-     * step defaults to (importing participants along the way), and immediately activates it --
-     * one submission turns any number of chats fully on. Per this deployment's explicit
-     * operator decision (see {@link io.tgmcp.consent.ConsentService#coverageFor}), activation no
-     * longer waits on per-participant consent, so there is no separate step left to skip here.
+     * The one step needed to start reading any number of chats: check them on the dashboard
+     * list and press this one button, whatever state each one is currently in -- per the
+     * operator's explicit feedback that having to open every chat individually just to turn it
+     * (back) on was exactly the repetitive step this bulk action exists to remove.
+     *
+     * <p>A chat with no activation yet (never touched) or a REVOKED one (its settings are gone)
+     * is (re)proposed with the same default purpose/providers/date range/retention the
+     * single-chat "Select chat" step defaults to, importing participants along the way, then
+     * activated. A chat sitting at AWAITING_CONSENT or PAUSED already carries a working
+     * purpose/providers/date range from whenever it was configured, so it is activated directly
+     * instead -- reusing that, not silently resetting it back to the defaults above. A chat
+     * already ACTIVE is left alone. Per this deployment's explicit operator decision (see {@link
+     * io.tgmcp.consent.ConsentService#coverageFor}), activation no longer waits on
+     * per-participant consent, so there is no separate step left to skip here.
      */
     @PostMapping("/chats/bulk-prepare")
     public String bulkPrepare(@RequestParam(name = "chatId", required = false) List<UUID> chatIds,
@@ -99,23 +110,53 @@ public class DashboardController {
             if (this.chatRepository.find(actor.tenantId(), chatId).isEmpty()) {
                 continue;
             }
-            // Already selected (or further along) -- bulk-prepare only ever does the first,
-            // repetitive step; re-selecting would reset an already-in-progress chat's settings.
-            if (this.activationService.find(actor, chatId).isPresent()) {
-                continue;
-            }
             try {
-                this.activationService.propose(actor, chatId, defaultPurpose, defaultProviders, approvedFrom,
-                        approvedTo, 90);
+                Optional<ChatActivation> existing = this.activationService.find(actor, chatId);
+                if (existing.isPresent() && existing.get().state() == ActivationState.ACTIVE) {
+                    continue;
+                }
+                if (existing.isEmpty() || existing.get().state() == ActivationState.REVOKED) {
+                    this.activationService.propose(actor, chatId, defaultPurpose, defaultProviders, approvedFrom,
+                            approvedTo, 90);
+                }
                 this.activationService.activate(actor, chatId);
                 activated++;
             }
             catch (IllegalArgumentException | IllegalStateException ex) {
-                log.warn("Bulk-prepare skipped chat {}: {}", chatId, ex.getMessage());
+                log.warn("Bulk-activate skipped chat {}: {}", chatId, ex.getMessage());
             }
         }
         redirectAttributes.addFlashAttribute("message",
                 Messages.text(this.messages, "dashboard.bulkPrepare.success", activated));
+        return "redirect:/";
+    }
+
+    /**
+     * The other half of the same checkbox-driven workflow: turn several ACTIVE chats off in one
+     * submission instead of opening each one's own page to press Pause. Anything checked that
+     * isn't currently ACTIVE (never activated, already paused, or revoked) is left untouched.
+     */
+    @PostMapping("/chats/bulk-pause")
+    public String bulkPause(@RequestParam(name = "chatId", required = false) List<UUID> chatIds,
+                            RedirectAttributes redirectAttributes) {
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
+        List<UUID> ids = chatIds == null ? List.of() : chatIds;
+        if (ids.isEmpty()) {
+            redirectAttributes.addFlashAttribute("error",
+                    Messages.text(this.messages, "dashboard.bulkPrepare.noneSelected"));
+            return "redirect:/";
+        }
+        int paused = 0;
+        for (UUID chatId : ids) {
+            Optional<ChatActivation> existing = this.activationService.find(actor, chatId);
+            if (existing.isEmpty() || existing.get().state() != ActivationState.ACTIVE) {
+                continue;
+            }
+            this.activationService.pause(actor, chatId, "Paused by operator");
+            paused++;
+        }
+        redirectAttributes.addFlashAttribute("message",
+                Messages.text(this.messages, "dashboard.bulkPause.success", paused));
         return "redirect:/";
     }
 }

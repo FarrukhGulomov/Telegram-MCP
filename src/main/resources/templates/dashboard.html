@@ -10,9 +10,8 @@
     <h2 th:text="#{dashboard.howItWorks.title}">How this works, in short</h2>
     <ol class="steps-list">
       <li><span class="step-num" aria-hidden="true">1</span><span th:text="#{dashboard.howItWorks.step1}">Connect your Telegram account (once).</span></li>
-      <li><span class="step-num" aria-hidden="true">2</span><span th:text="#{dashboard.howItWorks.step2}">Refresh the chat list below and pick a chat to manage.</span></li>
-      <li><span class="step-num" aria-hidden="true">3</span><span th:text="#{dashboard.howItWorks.step3}">Choose which AI app may read it, and wait for everyone in the chat to consent.</span></li>
-      <li><span class="step-num" aria-hidden="true">4</span><span th:text="#{dashboard.howItWorks.step4}">Activate. Only from that moment can an AI assistant read that one chat.</span></li>
+      <li><span class="step-num" aria-hidden="true">2</span><span th:text="#{dashboard.howItWorks.step2}">Refresh the chat list below, then check the chats you want.</span></li>
+      <li><span class="step-num" aria-hidden="true">3</span><span th:text="#{dashboard.howItWorks.step3}">Click &quot;Turn on selected chats&quot; -- no need to open each one individually. &quot;Pause selected chats&quot; turns them off the same way.</span></li>
     </ol>
   </div>
 
@@ -57,11 +56,14 @@
     </div>
   </div>
 
-  <!-- One shared form for bulk-turning-on every checked, not-yet-selected chat at once (see
-       DashboardController#bulkPrepare) -- the checkboxes are genuine children of this <form>
-       rather than bound via the HTML5 form= attribute, which some mobile browsers fail to
-       honor for elements outside the <form> tag (see chat.html's consent-all-form, fixed for
-       the same reason after a confirmed production crash on that page). -->
+  <!-- One shared form covering every checkbox action on this page (see
+       DashboardController#bulkPrepare / #bulkPause) -- the checkboxes are genuine children of
+       this <form> rather than bound via the HTML5 form= attribute, which some mobile browsers
+       fail to honor for elements outside the <form> tag (see chat.html's consent-all-form, fixed
+       for the same reason after a confirmed production crash on that page). Every row's
+       checkbox works no matter the chat's current state, so turning a chat on or back off never
+       requires opening its own page -- the two submit buttons below just target a different
+       endpoint via formaction. -->
   <form id="bulk-prepare-form" th:action="@{/chats/bulk-prepare}" method="post" data-guard-resubmit>
     <div class="table-wrap">
       <table>
@@ -78,7 +80,7 @@
         <tr th:each="c : ${chats}">
           <td>
             <input type="checkbox" name="chatId" th:value="${c.chat.id}"
-                   th:if="${c.coverage == null}" th:title="#{dashboard.table.selectCheckbox}">
+                   th:title="#{dashboard.table.selectCheckbox}">
           </td>
           <td th:text="${c.chat.title}">chat</td>
           <td th:text="#{${'chatType.' + c.chat.chatType}}">SUPERGROUP</td>
@@ -113,8 +115,12 @@
     <p class="hint" th:if="${!#lists.isEmpty(chats)}" th:text="#{dashboard.bulkPrepare.recommendation}">
       Selected chats sync automatically every 30 seconds once turned on.
     </p>
-    <button type="submit" th:if="${!#lists.isEmpty(chats)}"
-            th:text="#{dashboard.bulkPrepare.button}">Turn on selected chats</button>
+    <div class="actions-row" th:if="${!#lists.isEmpty(chats)}">
+      <button type="submit" th:formaction="@{/chats/bulk-prepare}"
+              th:text="#{dashboard.bulkPrepare.button}">Turn on selected chats</button>
+      <button type="submit" class="secondary" th:formaction="@{/chats/bulk-pause}"
+              th:text="#{dashboard.bulkPause.button}">Pause selected chats</button>
+    </div>
   </form>
 </section>
 </body>
