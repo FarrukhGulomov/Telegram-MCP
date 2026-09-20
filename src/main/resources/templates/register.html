@@ -7,50 +7,57 @@
   <link rel="stylesheet" th:href="@{/css/app.css}">
 </head>
 <body class="centered">
-<div class="lang-switch">
-  <a href="#" data-lang="en">EN</a>
-  <a href="#" data-lang="uz">UZ</a>
-  <a href="#" data-lang="ru">RU</a>
-</div>
-<main class="card">
-  <h1 th:text="#{register.heading}">Create your workspace</h1>
-  <p class="muted" th:text="#{register.intro}">Set up your own team in a minute. No operator needs to create this account for you.</p>
-
-  <div class="flash err" th:if="${error}" th:text="${error}"></div>
-
-  <form th:action="@{/register}" method="post" data-guard-resubmit>
-    <label for="workspaceName" th:text="#{register.workspaceName}">Workspace name</label>
-    <input id="workspaceName" name="workspaceName" type="text" maxlength="200" required
-           th:value="${workspaceName}">
-
-    <label for="email" th:text="#{register.email}">Email</label>
-    <input id="email" name="email" type="email" required autocomplete="username" th:value="${email}">
-
-    <label for="password" th:text="#{register.password}">Password</label>
-    <input id="password" name="password" type="password" required minlength="10" autocomplete="new-password">
-    <p class="hint" th:text="#{register.passwordHint}">At least 10 characters.</p>
-
-    <label for="passwordConfirm" th:text="#{register.passwordConfirm}">Confirm password</label>
-    <input id="passwordConfirm" name="passwordConfirm" type="password" required minlength="10"
-           autocomplete="new-password">
-
-    <button type="submit" th:text="#{register.createAccount}">Create account</button>
-  </form>
-
-  <div class="card ok step-card" th:if="${telegramLoginEnabled}" style="margin-top:16px">
-    <p class="muted" th:text="#{register.orDivider}">Or</p>
-    <a class="link" th:href="@{/login/telegram}" th:text="#{login.continueWithTelegram}">Continue with Telegram</a>
-    <p class="hint" th:text="#{login.telegramHint}">Uses your Telegram identity to sign in -- no password needed.
-      If you don't have an account yet, one is created automatically.</p>
+<div class="auth-shell">
+  <div class="lang-switch-row">
+    <div class="lang-switch">
+      <a href="#" data-lang="en" th:classappend="${#locale.language == 'en'} ? 'is-active'">EN</a>
+      <a href="#" data-lang="uz" th:classappend="${#locale.language == 'uz'} ? 'is-active'">UZ</a>
+      <a href="#" data-lang="ru" th:classappend="${#locale.language == 'ru'} ? 'is-active'">RU</a>
+    </div>
   </div>
 
-  <script src="/js/forms.js" defer></script>
-  <script src="/js/lang.js" defer></script>
+  <span class="brand-mark" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></svg>
+  </span>
+  <h1 th:text="#{register.heading}">Create your workspace</h1>
 
-  <p class="muted">
-    <span th:text="#{register.alreadyHaveAccount}">Already have an account?</span>
-    <a th:href="@{/login}" th:text="#{register.signInLink}">Sign in</a>
-  </p>
-</main>
+  <main class="card">
+    <p class="muted" th:text="#{register.intro}">Set up your workspace in a minute — no invite needed.</p>
+
+    <div class="flash err" th:if="${error}" th:text="${error}"></div>
+
+    <form th:action="@{/register}" method="post" data-guard-resubmit>
+      <label for="workspaceName" th:text="#{register.workspaceName}">Workspace name</label>
+      <input id="workspaceName" name="workspaceName" type="text" maxlength="200" required
+             th:value="${workspaceName}">
+
+      <label for="email" th:text="#{register.email}">Email</label>
+      <input id="email" name="email" type="email" required autocomplete="username" th:value="${email}">
+
+      <label for="password" th:text="#{register.password}">Password</label>
+      <input id="password" name="password" type="password" required minlength="10" autocomplete="new-password">
+      <p class="hint" th:text="#{register.passwordHint}">At least 10 characters.</p>
+
+      <label for="passwordConfirm" th:text="#{register.passwordConfirm}">Confirm password</label>
+      <input id="passwordConfirm" name="passwordConfirm" type="password" required minlength="10"
+             autocomplete="new-password">
+
+      <button type="submit" th:text="#{register.createAccount}">Create account</button>
+    </form>
+
+    <div th:if="${telegramLoginEnabled}" class="auth-alt">
+      <p class="auth-divider" th:text="#{register.orDivider}">Or</p>
+      <a th:href="@{/login/telegram}" th:text="#{login.continueWithTelegram}">Continue with Telegram</a>
+      <p class="hint" th:text="#{login.telegramHint}">Sign in with Telegram — no password needed.</p>
+    </div>
+
+    <p class="muted auth-note">
+      <span th:text="#{register.alreadyHaveAccount}">Already have an account?</span>
+      <a th:href="@{/login}" th:text="#{register.signInLink}">Sign in</a>
+    </p>
+  </main>
+</div>
+<script src="/js/forms.js" defer></script>
+<script src="/js/lang.js" defer></script>
 </body>
 </html>
