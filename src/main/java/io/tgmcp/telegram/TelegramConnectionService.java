@@ -27,8 +27,10 @@ import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.session.SessionCipher;
 
-import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -150,8 +152,26 @@ public class TelegramConnectionService {
      * revisits the connect page -- a remote logout or ban -- still reaches {@link
      * #applyAsyncStateChange} and pauses this connection's active chats (security-audit finding
      * SEC-06), instead of silently going nowhere.
+     *
+     * <p>Confirmed from production logs: firing on {@code ApplicationReadyEvent} (Spring's own
+     * "the app is fully up" signal) was too late -- {@code @Scheduled} tasks such as {@link
+     * io.tgmcp.sync.SyncScheduler} are armed earlier, on {@code ContextRefreshedEvent}, and a
+     * fixed-delay task with no explicit initial delay fires its first execution essentially
+     * immediately once armed. That first sync tick reached {@code requireCurrentOwner} before
+     * this method had run at all, so {@code currentOwner} was still whatever a fresh process
+     * starts with (nothing), and the sync failed with "not the current owner" -- indistinguishable
+     * from a genuine SEC-01 rejection, so it was treated as a non-retryable auth failure and
+     * halted every newly activated chat on the very first attempt, forever, until an operator
+     * happened to notice and press "Sync now". Listening on {@code ContextRefreshedEvent} instead,
+     * with the highest listener precedence, makes this run synchronously as part of the very same
+     * event dispatch that arms the scheduler ({@code ScheduledAnnotationBeanPostProcessor} listens
+     * to the same event, at default/lowest precedence) -- ownership is reclaimed before that
+     * dispatch even finishes, and only then can the scheduler's own timer thread get a chance to
+     * invoke anything, closing the race for good rather than relying on it usually resolving fast
+     * enough.
      */
-    @EventListener(ApplicationReadyEvent.class)
+    @EventListener(ContextRefreshedEvent.class)
+    @Order(Ordered.HIGHEST_PRECEDENCE)
     public void reclaimOwnershipOnStartup() {
         for (TelegramConnection connection : this.connectionRepository.findAllReady()) {
             AuthenticatedActor systemActor = new AuthenticatedActor(connection.tenantId(),
