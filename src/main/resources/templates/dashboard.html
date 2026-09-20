@@ -73,7 +73,7 @@
           <th th:text="#{dashboard.table.chat}">Chat</th><th th:text="#{dashboard.table.type}">Type</th>
           <th th:text="#{dashboard.table.state}">State</th>
           <th th:text="#{dashboard.table.providers}">Providers</th>
-          <th th:text="#{dashboard.table.stored}">Stored</th><th th:text="#{dashboard.table.sync}">Sync</th><th></th>
+          <th th:text="#{dashboard.table.stored}">Stored</th><th th:text="#{dashboard.table.sync}">Sync</th>
         </tr>
         </thead>
         <tbody>
@@ -82,7 +82,8 @@
             <input type="checkbox" name="chatId" th:value="${c.chat.id}"
                    th:title="#{dashboard.table.selectCheckbox}">
           </td>
-          <td th:text="${c.chat.title}">chat</td>
+          <td><a th:href="@{'/chats/' + ${c.chat.id}}" th:text="${c.chat.title}"
+                 th:title="#{dashboard.table.detailsLink}">chat</a></td>
           <td th:text="#{${'chatType.' + c.chat.chatType}}">SUPERGROUP</td>
           <td><span class="pill" th:classappend="${c.active} ? 'ok' : 'warn'"
                     th:text="#{${'state.' + c.stateLabel}}">INACTIVE</span></td>
@@ -98,10 +99,9 @@
                   th:text="#{dashboard.table.partialLabel}">partial</span>
             <span class="err" th:if="${c.lastErrorCode != null}" th:text="${c.lastErrorCode}"></span>
           </td>
-          <td><a th:href="@{'/chats/' + ${c.chat.id}}" th:text="#{dashboard.table.manage}">Manage</a></td>
         </tr>
         <tr th:if="${#lists.isEmpty(chats)}">
-          <td colspan="8">
+          <td colspan="7">
             <div class="empty-state">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               <span th:text="#{dashboard.table.empty}">No chats discovered yet. Connect Telegram, then refresh the chat list.</span>
