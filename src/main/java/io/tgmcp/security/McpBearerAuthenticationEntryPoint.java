@@ -30,7 +30,18 @@ public class McpBearerAuthenticationEntryPoint implements AuthenticationEntryPoi
                                              @Value("${tgmcp.oauth.public-base-url:http://localhost:8080}")
                                              String publicBaseUrl) {
         this.resourceMetadataUrl = publicBaseUrl + "/.well-known/oauth-protected-resource";
-        this.requiredScopes = properties.mcp().requiredScope() + " " + McpScopes.SCOPE_ANTHROPIC_CLAUDE;
+        // Confirmed from a real ChatGPT connection attempt: this hint used to advertise only
+        // provider:anthropic_claude, and ChatGPT's connector requests exactly what it says here
+        // rather than knowing in advance which provider scope it should ask for -- so ChatGPT
+        // ended up requesting Claude's scope, which AuthorizationServerConfig's own (deliberate,
+        // documented) intersection logic correctly refused to grant to a client only registered
+        // for provider:openai_chatgpt, leaving its token with no provider scope at all and every
+        // tool call denied. Advertising every known provider scope here, exactly like the
+        // discovery metadata already does, lets that same intersection logic narrow the grant
+        // down to whichever one a given client actually holds, instead of this hint silently
+        // picking a winner among providers that are mutually exclusive per client.
+        this.requiredScopes = properties.mcp().requiredScope() + " " + McpScopes.SCOPE_ANTHROPIC_CLAUDE
+                + " " + McpScopes.SCOPE_OPENAI_CHATGPT;
     }
 
     @Override
