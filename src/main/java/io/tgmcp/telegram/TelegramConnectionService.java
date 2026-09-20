@@ -341,7 +341,8 @@ public class TelegramConnectionService {
             this.auditService.record(actor, AuditAction.TELEGRAM_CONNECTED, null, AuditService.ALLOWED,
                     Map.of("adapter", connection.adapter().name()));
         }
-        else if (state.stage() == LoginStage.DISCONNECTED || state.stage() == LoginStage.ERROR) {
+        else if (state.stage() == LoginStage.ERROR
+                || (state.stage() == LoginStage.DISCONNECTED && !"login.tdlib.initialising".equals(state.message()))) {
             // Security-audit finding SEC-06: this state can arrive with no user action at all
             // -- TDLib reporting authorizationStateLoggingOut/Closing/Closed, or any other
             // unrecognised state mapped to ERROR -- meaning the account was logged out
@@ -349,6 +350,16 @@ public class TelegramConnectionService {
             // as blinding to future membership/consent verification as calling disconnect()
             // explicitly, so it must pause every chat this connection had activated the same
             // way (see pauseActiveChatsForConnection).
+            //
+            // Confirmed from production logs: reclaimOwnershipOnStartup() registers this same
+            // listener at boot for every already-READY connection, so it also receives TDLib's
+            // authorizationStateWaitTdlibParameters push -- a normal, transient step every
+            // fresh process goes through, mapped to DISCONNECTED purely to drive UI copy during
+            // a live login flow (see TdlibTelegramGateway.mapAuthorizationState). Treating that
+            // as a genuine authorization loss meant every restart paused every active chat, even
+            // though the account was never actually logged out. Excluding that specific message
+            // keeps SEC-06's protection for real disconnects while no longer punishing a normal
+            // restart.
             int pausedChats = pauseActiveChatsForConnection(actor, connection,
                     "Telegram authorization was lost (" + state.stage() + ")");
             if (pausedChats > 0) {

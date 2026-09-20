@@ -239,6 +239,39 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         assertThat(this.connectionService.find(team.actor()).orElseThrow().ready()).isFalse();
     }
 
+    /**
+     * Confirmed from live production logs: after {@link #reclaimOwnershipOnStartupRegistersARealListenerForEveryReadyConnection}
+     * registers its listener at boot, TDLib also pushes {@code authorizationStateWaitTdlibParameters}
+     * through that same listener as a normal, transient part of every fresh process's
+     * initialization -- mapped to {@code LoginStage.DISCONNECTED} with message
+     * {@code "login.tdlib.initialising"} purely to drive UI copy during a live login flow (see
+     * {@code TdlibTelegramGateway.mapAuthorizationState}). Before this fix, persist() treated
+     * that exactly like a genuine authorization loss and paused every active chat on every
+     * restart, even though the account was never actually logged out -- the real cause behind
+     * previously-activated chats silently disappearing from sync after a redeploy.
+     */
+    @Test
+    void reclaimedListenerDoesNotPauseChatsForTheTransientTdlibInitialisingState() {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = team("startup-reclaim-transient-init");
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+        this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        Mockito.clearInvocations(this.gateway);
+        Consumer<LoginState> deliverAfterRestart = captureRegisteredListener();
+
+        this.connectionService.reclaimOwnershipOnStartup();
+        deliverAfterRestart.accept(LoginState.of(LoginStage.DISCONNECTED, "login.tdlib.initialising"));
+
+        TelegramConnection persisted = this.connectionService.find(team.actor()).orElseThrow();
+        assertThat(persisted.ready())
+                .as("a transient re-init push must not be mistaken for a genuine authorization loss")
+                .isFalse();
+        assertThat(persisted.status())
+                .as("the persisted stage still records the transient state, it just must not trigger a pause")
+                .isEqualTo(LoginStage.DISCONNECTED);
+    }
+
     /** A connection that never reached READY has nothing to reclaim -- no live session survives. */
     @Test
     void reclaimOwnershipOnStartupSkipsAConnectionThatNeverReachedReady() {
