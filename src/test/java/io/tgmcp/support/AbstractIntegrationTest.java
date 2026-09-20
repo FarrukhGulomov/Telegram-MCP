@@ -21,7 +21,7 @@ import org.springframework.test.context.ActiveProfiles;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import(TestClockConfiguration.class)
+@Import({TestClockConfiguration.class, TestTelegramBotMessengerConfiguration.class})
 public abstract class AbstractIntegrationTest {
 
     @Autowired
@@ -36,17 +36,21 @@ public abstract class AbstractIntegrationTest {
     @Autowired
     protected TelegramGateway telegramGateway;
 
+    @Autowired
+    protected FakeTelegramBotMessenger telegramBotMessenger;
+
     @BeforeEach
     void resetDatabaseAndClock() {
         this.jdbcTemplate.execute("""
                 TRUNCATE audit_events, messages, sync_checkpoints, consent_records, chat_participants,
-                         chat_activations, chats, telegram_connections, app_users, tenants,
-                         oauth2_authorization, oauth2_authorization_consent, oauth2_registered_client
+                         chat_activations, chats, telegram_connections, login_verification_codes, app_users,
+                         tenants, oauth2_authorization, oauth2_authorization_consent, oauth2_registered_client
                 RESTART IDENTITY CASCADE
                 """);
         // Clock first, then the adapter: the synthetic dataset is generated relative to "now".
         mutableClock().set(TestClockConfiguration.START);
         mockGateway().reset();
+        this.telegramBotMessenger.reset();
     }
 
     protected MutableClock mutableClock() {

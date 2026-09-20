@@ -36,6 +36,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
       <span th:text="#{login.telegramError}">Telegram sign-in failed or was cancelled.</span>
     </div>
+    <div class="flash err" th:if="${param.telegramCodeError}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+      <span th:text="#{login.telegramCodeError}">Couldn't send the verification code. Open a chat with the sign-in bot first, then try again.</span>
+    </div>
     <div class="flash ok" th:if="${param.loggedOut}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
       <span th:text="#{login.loggedOut}">Signed out.</span>

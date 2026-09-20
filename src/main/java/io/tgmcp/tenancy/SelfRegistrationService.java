@@ -1,5 +1,6 @@
 package io.tgmcp.tenancy;
 
+import java.io.Serializable;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -12,6 +13,13 @@ import org.springframework.stereotype.Service;
  * Lets a new team create its own tenant and OWNER account, without an operator having to seed
  * it by hand -- the demo tenant/user in {@link io.tgmcp.config.DemoDataSeeder} was previously
  * the only way any {@code app_users} row came to exist.
+ *
+ * <p>Validation ({@link #validate}) and persistence ({@link #completeRegistration}) are
+ * deliberately two steps: when Telegram sign-in is configured, {@code RegistrationController}
+ * holds a validated {@link PendingRegistration} in the visitor's session across the "Sign in
+ * with Telegram" round trip required to link an account, and only creates the row once that
+ * comes back -- so a visitor who abandons that step never leaves behind a usable, unlinked
+ * account. Deployments without Telegram sign-in configured skip straight to persistence.
  */
 @Service
 public class SelfRegistrationService {
@@ -29,13 +37,17 @@ public class SelfRegistrationService {
         this.passwordEncoder = passwordEncoder;
     }
 
+    /** A validated, not-yet-persisted registration. The password is already hashed. */
+    public record PendingRegistration(String workspaceName, String normalizedEmail,
+                                      String passwordHash) implements Serializable {
+    }
+
     /**
-     * Creates a fresh tenant and its OWNER user. The same generic-looking failure ({@code
-     * register.emailTaken}) is used whether the email belongs to another tenant's owner or a
-     * member of one -- like {@link io.tgmcp.security.DatabaseUserDetailsService}, this must not
-     * let a registration attempt confirm which email addresses already have accounts.
+     * Checks every field a registration form submits, but does not touch the database except
+     * to check the email is not already taken. Throws {@link IllegalArgumentException} with a
+     * message-catalog code, exactly like the previous single-step {@code register} method did.
      */
-    public AppUser register(String workspaceName, String email, String password) {
+    public PendingRegistration validate(String workspaceName, String email, String password) {
         String normalizedEmail = email == null ? "" : email.strip().toLowerCase(Locale.ROOT);
         if (normalizedEmail.isBlank() || !normalizedEmail.contains("@")) {
             throw new IllegalArgumentException("register.emailInvalid");
@@ -49,11 +61,30 @@ public class SelfRegistrationService {
         String name = workspaceName == null || workspaceName.isBlank()
                 ? normalizedEmail.substring(0, normalizedEmail.indexOf('@'))
                 : workspaceName.strip();
+        return new PendingRegistration(name, normalizedEmail, this.passwordEncoder.encode(password));
+    }
 
+    /**
+     * Actually creates the tenant and OWNER user. Re-checks email uniqueness (and, when given,
+     * Telegram-id uniqueness) immediately before inserting: real wall-clock time -- an entire
+     * "Sign in with Telegram" round trip -- can pass between {@link #validate} and this call, so
+     * the checks {@code validate} already ran are not guaranteed to still hold.
+     *
+     * @param telegramUserId the Telegram identity this account is linked to, or {@code null} on
+     *                        a deployment where Telegram sign-in is not configured at all.
+     */
+    public AppUser completeRegistration(PendingRegistration pending, Long telegramUserId) {
+        if (this.users.findByEmail(pending.normalizedEmail()).isPresent()) {
+            throw new IllegalArgumentException("register.emailTaken");
+        }
+        if (telegramUserId != null && this.users.findByTelegramUserId(telegramUserId).isPresent()) {
+            throw new IllegalArgumentException("register.telegramTaken");
+        }
         UUID tenantId = Ids.newId();
-        this.tenants.insert(new Tenant(tenantId, uniqueSlug(name), name, false, null));
-        AppUser user = new AppUser(Ids.newId(), tenantId, normalizedEmail,
-                this.passwordEncoder.encode(password), name, "OWNER", true, null);
+        this.tenants.insert(new Tenant(tenantId, uniqueSlug(pending.workspaceName()), pending.workspaceName(),
+                false, null));
+        AppUser user = new AppUser(Ids.newId(), tenantId, pending.normalizedEmail(), pending.passwordHash(),
+                pending.workspaceName(), "OWNER", true, telegramUserId);
         this.users.insert(user);
         return user;
     }

@@ -5,6 +5,8 @@ import java.util.List;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
 import io.tgmcp.config.AppProperties;
+import io.tgmcp.tenancy.AppUser;
+import io.tgmcp.tenancy.AppUserRepository;
 
 import org.springframework.boot.web.server.servlet.CookieSameSiteSupplier;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -29,6 +31,7 @@ import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
@@ -40,6 +43,8 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
  */
 @Configuration(proxyBeanMethods = false)
 public class WebSecurityConfig {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WebSecurityConfig.class);
 
     /**
      * MCP endpoint and its discovery documents.
@@ -96,7 +101,8 @@ public class WebSecurityConfig {
     @Order(3)
     public SecurityFilterChain managementUiFilterChain(HttpSecurity http, AppProperties properties,
                                                         java.time.Clock clock,
-                                                        SecurityContextRepository securityContextRepository)
+                                                        SecurityContextRepository securityContextRepository,
+                                                        AuthenticationSuccessHandler twoFactorGatingSuccessHandler)
             throws Exception {
         // Security-audit finding SEC-10: a login attempt is unauthenticated by definition, so
         // it shares no budget with anything else in this application; IP-keyed and placed
@@ -118,9 +124,18 @@ public class WebSecurityConfig {
                 properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("GET", "/login/telegram/callback", telegramLoginLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
+        // The second-factor code entry is exactly as guessable-by-brute-force as a password
+        // would be if nothing budgeted attempts against it independently of the per-code
+        // attempt cap LoginTwoFactorService already enforces -- IP-keyed, same budget and
+        // reasoning as loginLimiter above.
+        io.tgmcp.ratelimit.RateLimiter verifyLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/verify", verifyLimiter),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
         http.securityContext(context -> context.securityContextRepository(securityContextRepository));
         http.authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/login", "/login/telegram", "/login/telegram/callback", "/register",
+                        .requestMatchers("/login", "/login/telegram", "/login/telegram/callback",
+                                "/login/verify", "/login/verify/resend", "/register", "/register/link-telegram",
                                 "/css/**", "/js/**", "/actuator/health").permitAll()
                         // Security-audit finding F17: AppUser carries an OWNER/ADMIN/MEMBER
                         // role, and DatabaseUserDetailsService already turns it into a granted
@@ -134,7 +149,8 @@ public class WebSecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/chats/**", "/connect/**")
                         .hasAnyRole("OWNER", "ADMIN")
                         .anyRequest().authenticated())
-                .formLogin(form -> form.loginPage("/login").defaultSuccessUrl("/", true).permitAll())
+                .formLogin(form -> form.loginPage("/login").successHandler(twoFactorGatingSuccessHandler)
+                        .permitAll())
                 .logout(logout -> logout.logoutSuccessUrl("/login?loggedOut").permitAll())
                 .csrf(Customizer.withDefaults())
                 .headers(headers -> headers
@@ -180,6 +196,40 @@ public class WebSecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+    }
+
+    /**
+     * A correct password is no longer sufficient by itself once an account has a Telegram
+     * identity linked: {@code UsernamePasswordAuthenticationFilter} has already established a
+     * fully authenticated session by the time this runs (it always does, for any successful
+     * {@code AuthenticationManager} check), so an account requiring the second factor has that
+     * session immediately undone ({@link ManualSessionEstablisher#clearAuthentication}) and the
+     * visitor is sent to enter a Telegram-delivered code instead ({@code
+     * LoginVerificationController} is what actually re-establishes it). An account with no
+     * linked Telegram identity -- every account created before this feature existed, and any
+     * account on a deployment that has never configured "Sign in with Telegram" -- is
+     * unaffected: the password check alone remains sufficient for it.
+     */
+    @Bean
+    public AuthenticationSuccessHandler twoFactorGatingSuccessHandler(AppUserRepository users,
+            LoginTwoFactorService twoFactorService, ManualSessionEstablisher sessionEstablisher) {
+        return (request, response, authentication) -> {
+            AppUser user = users.findByEmail(authentication.getName()).orElse(null);
+            if (user == null || user.telegramUserId() == null) {
+                response.sendRedirect(request.getContextPath() + "/");
+                return;
+            }
+            sessionEstablisher.clearAuthentication(request, response);
+            try {
+                twoFactorService.beginVerification(user, request);
+                response.sendRedirect(request.getContextPath() + "/login/verify");
+            }
+            catch (TelegramBotMessageException ex) {
+                log.warn("Could not deliver a second-factor code to Telegram user {}: {}",
+                        user.telegramUserId(), ex.getMessage());
+                response.sendRedirect(request.getContextPath() + "/login?telegramCodeError");
+            }
+        };
     }
 
     /**

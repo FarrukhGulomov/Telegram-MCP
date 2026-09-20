@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Link Telegram — Telegram Consent MCP</title>
+  <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body class="centered">
+<div class="auth-shell">
+  <div class="lang-switch-row">
+    <div class="lang-switch">
+      <a href="#" data-lang="en" th:classappend="${#locale.language == 'en'} ? 'is-active'">EN</a>
+      <a href="#" data-lang="uz" th:classappend="${#locale.language == 'uz'} ? 'is-active'">UZ</a>
+      <a href="#" data-lang="ru" th:classappend="${#locale.language == 'ru'} ? 'is-active'">RU</a>
+    </div>
+  </div>
+
+  <span class="brand-mark" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></svg>
+  </span>
+  <h1 th:text="#{register.linkTelegram.heading}">Link your Telegram account</h1>
+
+  <main class="card">
+    <p class="muted" th:text="#{register.linkTelegram.hint}">One last step: confirm your Telegram account. It becomes the second factor for signing in.</p>
+
+    <div class="flash err" th:if="${telegramTaken}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+      <span th:text="#{register.linkTelegram.error.taken}">That Telegram account is already linked to another workspace.</span>
+    </div>
+
+    <a th:href="@{/login/telegram}" th:text="#{login.continueWithTelegram}">Continue with Telegram</a>
+  </main>
+</div>
+<script src="/js/forms.js" defer></script>
+<script src="/js/lang.js" defer></script>
+</body>
+</html>

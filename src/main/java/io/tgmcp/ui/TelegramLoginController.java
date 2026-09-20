@@ -19,15 +19,17 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import jakarta.servlet.http.HttpSession;
 
 import io.tgmcp.common.Ids;
 import io.tgmcp.config.AppProperties;
+import io.tgmcp.security.LoginTwoFactorService;
+import io.tgmcp.security.TelegramBotMessageException;
 import io.tgmcp.tenancy.ActorType;
 import io.tgmcp.tenancy.AppUser;
 import io.tgmcp.tenancy.AppUserRepository;
 import io.tgmcp.tenancy.AuthenticatedActor;
+import io.tgmcp.tenancy.SelfRegistrationService;
+import io.tgmcp.tenancy.SelfRegistrationService.PendingRegistration;
 import io.tgmcp.tenancy.Tenant;
 import io.tgmcp.tenancy.TenantRepository;
 import io.tgmcp.telegram.TelegramConnectionService;
@@ -38,13 +40,7 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.MessageSource;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -57,19 +53,26 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
  * The redirect itself carries no secret; the callback's query parameters are what Telegram signs
  * with the bot token, and {@link #verify} is what actually establishes trust.
  *
- * <p>A first-time Telegram identity provisions its own new tenant, exactly like {@link
- * io.tgmcp.tenancy.SelfRegistrationService} does for email/password sign-up -- this is a second,
- * independent front door to the same self-service model, not an alternative credential bolted
- * onto an existing account.
+ * <p>Proving a Telegram identity here is never, by itself, enough to establish a session: every
+ * path through {@link #callback} ends by handing off to {@link LoginTwoFactorService}, which
+ * sends a one-time code to that same Telegram account and only {@code
+ * LoginVerificationController} actually signs the visitor in once it is entered. This is what
+ * stops the widget confirmation alone (which only proves control of whichever Telegram session
+ * happens to be logged into the visitor's browser) from being sufficient on its own.
  *
- * <p>Signing in here proves who a visitor is; it is not, and Telegram gives no way to make it,
- * the separate MTProto session {@code TelegramConnectionService} needs to actually read that
- * account's chats -- the login widget hands over an identity (id, name, username), never
- * session material. What this class *can* remove is the redundant manual step of picking a
- * connection method and clicking through to it: a brand-new Telegram sign-in already knows
- * enough to start that QR handshake itself, so {@link #callback} does, landing the visitor
- * straight on the "scan this" screen instead of an empty dashboard with a "Connection" tab
- * still to find.
+ * <p>{@link #callback} serves two distinct situations, distinguished only by whether the
+ * session carries a {@link RegistrationController#SESSION_KEY} left there by {@link
+ * RegistrationController#register}:
+ * <ul>
+ *   <li>Signing in (no pending registration): a returning Telegram identity resolves to its
+ *       existing account, or -- when "Sign in with Telegram" is used as its own front door,
+ *       without ever visiting the registration form -- a first-time identity provisions a new
+ *       tenant, exactly like {@link SelfRegistrationService} does for email/password sign-up.
+ *   <li>Completing a registration (a pending registration is present): the validated,
+ *       not-yet-persisted account from {@link RegistrationController#register} is actually
+ *       created now, linked to this Telegram identity. Nothing was ever inserted before this
+ *       point, so a visitor who never finishes this step leaves no account behind at all.
+ * </ul>
  */
 @Controller
 public class TelegramLoginController {
@@ -83,27 +86,22 @@ public class TelegramLoginController {
     private final AppUserRepository users;
     private final TenantRepository tenants;
     private final PasswordEncoder passwordEncoder;
-    private final UserDetailsService userDetailsService;
-    private final SecurityContextRepository securityContextRepository;
-    private final TelegramConnectionService connectionService;
-    private final MessageSource messages;
+    private final SelfRegistrationService registrationService;
+    private final LoginTwoFactorService twoFactorService;
     private final Clock clock;
     private final String publicBaseUrl;
 
     public TelegramLoginController(AppProperties properties, AppUserRepository users, TenantRepository tenants,
-                                   PasswordEncoder passwordEncoder, UserDetailsService userDetailsService,
-                                   SecurityContextRepository securityContextRepository,
-                                   TelegramConnectionService connectionService, MessageSource messages, Clock clock,
+                                   PasswordEncoder passwordEncoder, SelfRegistrationService registrationService,
+                                   LoginTwoFactorService twoFactorService, Clock clock,
                                    @Value("${tgmcp.oauth.public-base-url:http://localhost:8080}")
                                    String publicBaseUrl) {
         this.properties = properties;
         this.users = users;
         this.tenants = tenants;
         this.passwordEncoder = passwordEncoder;
-        this.userDetailsService = userDetailsService;
-        this.securityContextRepository = securityContextRepository;
-        this.connectionService = connectionService;
-        this.messages = messages;
+        this.registrationService = registrationService;
+        this.twoFactorService = twoFactorService;
         this.clock = clock;
         this.publicBaseUrl = publicBaseUrl;
     }
@@ -123,8 +121,7 @@ public class TelegramLoginController {
     }
 
     @GetMapping("/login/telegram/callback")
-    public String callback(@RequestParam Map<String, String> params, HttpServletRequest request,
-                           HttpServletResponse response, RedirectAttributes redirectAttributes) {
+    public String callback(@RequestParam Map<String, String> params, HttpServletRequest request) {
         AppProperties.TelegramLogin config = this.properties.telegramLogin();
         if (!config.enabled() || !verify(params, config.botToken())) {
             log.warn("Rejected a /login/telegram/callback request: missing configuration or an invalid "
@@ -138,6 +135,12 @@ public class TelegramLoginController {
         catch (NumberFormatException ex) {
             return "redirect:/login?telegramError";
         }
+
+        PendingRegistration pendingRegistration = RegistrationController.pendingRegistration(request);
+        if (pendingRegistration != null) {
+            return completeRegistrationLink(pendingRegistration, telegramUserId, request);
+        }
+
         boolean[] freshlyProvisioned = {false};
         AppUser user = this.users.findByTelegramUserId(telegramUserId).orElseGet(() -> {
             freshlyProvisioned[0] = true;
@@ -146,28 +149,65 @@ public class TelegramLoginController {
         if (!user.enabled()) {
             return "redirect:/login?telegramError";
         }
-        signIn(user, request, response);
-        if (freshlyProvisioned[0]) {
-            return startQrConnectionFor(user, redirectAttributes);
+        return beginSecondFactor(user, request, freshlyProvisioned[0]);
+    }
+
+    /** A Telegram identity already linked to someone else's account cannot also register this one. */
+    private String completeRegistrationLink(PendingRegistration pending, long telegramUserId,
+                                            HttpServletRequest request) {
+        if (this.users.findByTelegramUserId(telegramUserId).isPresent()) {
+            return "redirect:/register/link-telegram?telegramTaken";
         }
-        return "redirect:/";
+        AppUser user;
+        try {
+            user = this.registrationService.completeRegistration(pending, telegramUserId);
+        }
+        catch (IllegalArgumentException ex) {
+            // The email was taken by a concurrent registration in the time since validate() ran.
+            request.getSession().removeAttribute(RegistrationController.SESSION_KEY);
+            return "redirect:/register";
+        }
+        request.getSession().removeAttribute(RegistrationController.SESSION_KEY);
+        return beginSecondFactor(user, request, false);
+    }
+
+    /**
+     * Sends the mandatory second-factor code and sends the visitor to enter it. {@code
+     * autoStartQr} threads through to {@code LoginVerificationController}, which starts the QR
+     * handshake once the code is verified -- see {@link #startQrConnectionFor} below for why a
+     * brand-new Telegram sign-in gets this and a registration-linked or returning one does not.
+     */
+    private String beginSecondFactor(AppUser user, HttpServletRequest request, boolean autoStartQr) {
+        try {
+            this.twoFactorService.beginVerification(user, request);
+        }
+        catch (TelegramBotMessageException ex) {
+            log.warn("Could not deliver a second-factor code to Telegram user {}: {}", user.telegramUserId(),
+                    ex.getMessage());
+            return "redirect:/login?telegramCodeError";
+        }
+        if (autoStartQr) {
+            request.getSession().setAttribute(LoginVerificationController.AUTOSTART_QR_SESSION_KEY, Boolean.TRUE);
+        }
+        return "redirect:/login/verify";
     }
 
     /**
      * A brand-new Telegram sign-in already proved this visitor's Telegram identity -- nothing
      * more is gained by also asking them to open the Connection tab and pick a method by hand,
-     * so this starts the QR handshake for them and sends them straight to it. Scanning the code
-     * itself is not skippable: only that does the MTProto handshake this login could never do.
-     * Best-effort -- if the adapter cannot start a QR login right now (the TDLIB adapter is
-     * unproven native code; see docs/production-prerequisites.md), the visitor still lands on
-     * an ordinary, freshly signed-in dashboard and can start a connection manually from there.
+     * so this starts the QR handshake for them once the second factor above is verified. Scanning
+     * the code itself is not skippable: only that does the MTProto handshake this login could
+     * never do. Best-effort -- if the adapter cannot start a QR login right now (the TDLIB
+     * adapter is unproven native code; see docs/production-prerequisites.md), the visitor still
+     * lands on an ordinary, freshly signed-in dashboard and can start a connection manually.
      */
-    private String startQrConnectionFor(AppUser user, RedirectAttributes redirectAttributes) {
+    static String startQrConnectionFor(AppUser user, TelegramConnectionService connectionService,
+                                       MessageSource messages, RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = new AuthenticatedActor(user.tenantId(), user.id(), user.email(),
                 ActorType.UI_USER, java.util.Set.of("ui:manage"), null);
         try {
-            LoginState state = this.connectionService.beginLogin(actor, LoginMethod.QR_CODE, null);
-            redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
+            LoginState state = connectionService.beginLogin(actor, LoginMethod.QR_CODE, null);
+            redirectAttributes.addFlashAttribute("message", Messages.text(messages, state.message()));
             return "redirect:/connect";
         }
         catch (RuntimeException ex) {
@@ -258,27 +298,6 @@ public class TelegramLoginController {
             candidate = base + "-" + attempt;
         }
         return candidate;
-    }
-
-    /**
-     * Manually establishes the session's {@link SecurityContext} -- there is no password to
-     * hand {@code AuthenticationManager} here, only a Telegram-verified identity, so this plays
-     * the same role the standard form-login success handler plays for a password sign-in.
-     * Rotating the session id first (when a session already exists) is the same session-fixation
-     * defence Spring Security's own authentication filters apply automatically.
-     */
-    private void signIn(AppUser user, HttpServletRequest request, HttpServletResponse response) {
-        HttpSession existingSession = request.getSession(false);
-        if (existingSession != null) {
-            request.changeSessionId();
-        }
-        UserDetails principal = this.userDetailsService.loadUserByUsername(user.email());
-        var authentication = UsernamePasswordAuthenticationToken.authenticated(principal, null,
-                principal.getAuthorities());
-        SecurityContext context = SecurityContextHolder.createEmptyContext();
-        context.setAuthentication(authentication);
-        SecurityContextHolder.setContext(context);
-        this.securityContextRepository.saveContext(context, request, response);
     }
 
     private static String encode(String value) {

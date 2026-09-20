@@ -1,7 +1,10 @@
 package io.tgmcp.ui;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.tenancy.SelfRegistrationService;
+import io.tgmcp.tenancy.SelfRegistrationService.PendingRegistration;
 
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Controller;
@@ -17,9 +20,20 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
  * UiExceptionHandler}, which is scoped to the authenticated-only controllers and redirects to
  * {@code /}) so a failed attempt lands the visitor back on this same, still-unauthenticated
  * form with the reason shown.
+ *
+ * <p>When "Sign in with Telegram" is configured, the account is not actually created by this
+ * form alone: {@link #register} validates the fields and holds them as a {@link
+ * PendingRegistration} in the session ({@link #SESSION_KEY}), then sends the visitor to link a
+ * Telegram identity before {@link io.tgmcp.ui.TelegramLoginController#callback} completes the
+ * registration and starts the mandatory second-factor code. This keeps a password alone from
+ * ever being enough to create a usable account once Telegram sign-in exists as a deployment
+ * option, and it means an abandoned attempt (the visitor never finishes the Telegram step)
+ * leaves no half-created account behind -- nothing was ever inserted.
  */
 @Controller
 public class RegistrationController {
+
+    static final String SESSION_KEY = "tgmcp.pendingRegistration";
 
     private final AppProperties properties;
     private final SelfRegistrationService registrationService;
@@ -41,12 +55,13 @@ public class RegistrationController {
     @PostMapping("/register")
     public String register(@RequestParam String workspaceName, @RequestParam String email,
                            @RequestParam String password, @RequestParam String passwordConfirm,
-                           RedirectAttributes redirectAttributes) {
+                           HttpServletRequest request, RedirectAttributes redirectAttributes) {
+        PendingRegistration pending;
         try {
             if (!password.equals(passwordConfirm)) {
                 throw new IllegalArgumentException("register.passwordMismatch");
             }
-            this.registrationService.register(workspaceName, email, password);
+            pending = this.registrationService.validate(workspaceName, email, password);
         }
         catch (IllegalArgumentException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
@@ -54,6 +69,29 @@ public class RegistrationController {
             redirectAttributes.addFlashAttribute("email", email);
             return "redirect:/register";
         }
-        return "redirect:/login?registered";
+        if (!this.properties.telegramLogin().enabled()) {
+            this.registrationService.completeRegistration(pending, null);
+            return "redirect:/login?registered";
+        }
+        request.getSession(true).setAttribute(SESSION_KEY, pending);
+        return "redirect:/register/link-telegram";
+    }
+
+    @GetMapping("/register/link-telegram")
+    public String linkTelegram(HttpServletRequest request, Model model) {
+        if (!this.properties.telegramLogin().enabled() || pendingRegistration(request) == null) {
+            return "redirect:/register";
+        }
+        model.addAttribute("telegramTaken", request.getParameter("telegramTaken") != null);
+        return "register-link-telegram";
+    }
+
+    static PendingRegistration pendingRegistration(HttpServletRequest request) {
+        var session = request.getSession(false);
+        if (session == null) {
+            return null;
+        }
+        Object value = session.getAttribute(SESSION_KEY);
+        return value instanceof PendingRegistration pending ? pending : null;
     }
 }
