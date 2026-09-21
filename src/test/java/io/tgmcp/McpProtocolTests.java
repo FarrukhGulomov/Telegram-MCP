@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import io.modelcontextprotocol.spec.McpSchema;
 import io.tgmcp.mcp.McpToolNames;
+import io.tgmcp.security.ConnectedAppRepository;
 import io.tgmcp.security.McpScopes;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -42,6 +44,12 @@ class McpProtocolTests extends AbstractIntegrationTest {
 
     @Autowired
     private ChatSyncService syncService;
+
+    @Autowired
+    private ConnectedAppRepository connectedApps;
+
+    @Autowired
+    private RegisteredClientRepository registeredClients;
 
     private Fixtures.ReadyChat ready;
 
@@ -299,6 +307,35 @@ class McpProtocolTests extends AbstractIntegrationTest {
                     .as("the same still-unexpired token must stop working the instant the "
                             + "account behind it is disabled").isTrue();
             assertThat(errorCode(result)).isEqualTo("ACCESS_DENIED");
+        }
+    }
+
+    /**
+     * Security-audit finding SEC-R05: revoking a connected app deletes its {@code
+     * oauth2_authorization} row, but nothing previously stopped a bearer token already handed
+     * out under that authorization from continuing to work -- it kept validating on signature,
+     * issuer, audience and expiry alone until it naturally expired, up to 30 minutes later. The
+     * resource server's {@code JwtDecoder} now also confirms the decoded token still has a
+     * matching, non-revoked {@code oauth2_authorization} row, so revocation takes effect on the
+     * very next request instead of waiting out the token's remaining lifetime.
+     */
+    @Test
+    void deniesEveryToolTheInstantTheConnectedAppIsRevoked() {
+        Fixtures.ReadyChat chat = readyChat();
+        String token = tokenFor(chat);
+
+        try (McpTestClient client = connect(token)) {
+            assertThat(client.call(McpToolNames.LIST_ALLOWED_CHATS, Map.of()).isError())
+                    .as("the token is freshly issued and the app has not been revoked yet").isFalse();
+        }
+
+        String registeredClientId = this.registeredClients.findByClientId("claude").getId();
+        this.connectedApps.revoke(chat.team().user().id().toString(), registeredClientId);
+
+        try (McpTestClient client = new McpTestClient(this.port, token)) {
+            assertThatThrownBy(client::initialize)
+                    .as("the same still-unexpired token must stop working the instant the "
+                            + "connected app is revoked").isInstanceOf(Exception.class);
         }
     }
 

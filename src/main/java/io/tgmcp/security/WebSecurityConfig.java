@@ -24,6 +24,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtValidationException;
 import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
+import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
@@ -179,10 +181,22 @@ public class WebSecurityConfig {
      * with) verifies the signature and the default temporal claims. On top of that we require
      * the issuer to be ours and the audience to name this resource, because the MCP
      * specification requires a server to reject tokens minted for anything else.
+     *
+     * <p>Security-audit finding SEC-R05: an access token is otherwise self-contained -- a
+     * connected app revoked from the account's own "connected apps" page ({@link
+     * ConnectedAppRepository#revoke}, which deletes that client's {@code oauth2_authorization}
+     * rows) kept working with any token already issued until it naturally expired. Rather than
+     * introduce a separate version counter (and a new place that counter could itself drift out
+     * of sync), this re-checks the one source of truth revoke already updates: {@link
+     * OAuth2AuthorizationService#findByToken} looks the token up by its own value in exactly the
+     * table {@code revoke} deletes from, so the instant that row is gone, so is every token that
+     * was ever issued under it -- immediately, not just for future authorization/refresh
+     * attempts.
      */
     @Bean
     public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource,
                                  AppProperties properties,
+                                 OAuth2AuthorizationService authorizationService,
                                  @org.springframework.beans.factory.annotation.Value(
                                          "${tgmcp.oauth.issuer:http://localhost:8080}") String issuer) {
         JwtDecoder delegate = OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
@@ -196,6 +210,10 @@ public class WebSecurityConfig {
                 OAuth2Error error = result.getErrors().iterator().next();
                 throw new JwtValidationException("Access token rejected: " + error.getErrorCode(),
                         result.getErrors());
+            }
+            if (authorizationService.findByToken(jwt.getTokenValue(), OAuth2TokenType.ACCESS_TOKEN) == null) {
+                throw new JwtValidationException("Access token rejected: revoked",
+                        List.of(new OAuth2Error("invalid_token", "The access token has been revoked", null)));
             }
             return jwt;
         };
