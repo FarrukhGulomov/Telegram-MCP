@@ -64,8 +64,23 @@ public class PreAuthLoginService {
             implements Serializable {
     }
 
+    /**
+     * Canonicalizes to "+&lt;digits&gt;" (adding the leading "+" when a visitor left it off) so
+     * that a returning account's own {@link AppUserRepository#findByPhoneNumber} lookup -- an
+     * exact string match -- keeps matching however Telegram's own login later reports it: TDLib
+     * (see {@code TdlibTelegramGateway.withAccountIdentity}) reports {@code getMe().phone_number}
+     * as bare digits with no "+", and once that is written back to the account (see {@link
+     * #finishIfReady}), a subsequent visit typing the number without a "+" of their own must
+     * still resolve to the same, already-registered account rather than colliding with it while
+     * trying to create a second one.
+     */
     public static String normalizePhoneNumber(String raw) {
-        return raw == null ? "" : raw.replaceAll("[^0-9+]", "").strip();
+        if (raw == null) {
+            return "";
+        }
+        String digitsAndPlus = raw.replaceAll("[^0-9+]", "").strip();
+        return digitsAndPlus.isEmpty() || digitsAndPlus.startsWith("+")
+                ? digitsAndPlus : "+" + digitsAndPlus;
     }
 
     /**

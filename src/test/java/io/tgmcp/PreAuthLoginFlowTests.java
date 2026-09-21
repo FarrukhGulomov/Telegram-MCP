@@ -8,6 +8,7 @@ import io.tgmcp.chat.ActivationState;
 import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivation;
 import io.tgmcp.chat.ChatActivationRepository;
+import io.tgmcp.security.PreAuthLoginService;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
 import io.tgmcp.tenancy.AppUserRepository;
@@ -96,6 +97,36 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
         assertThat(this.activations.find(originalTenantId, chat.id()).orElseThrow().state())
                 .as("a routine re-login must never pause chats the account already activated")
                 .isEqualTo(ActivationState.ACTIVE);
+    }
+
+    /**
+     * Regression for a real production incident: TDLib's own {@code getMe().phone_number} is
+     * bare digits with no "+", and once a real login confirms an account's identity that value
+     * overwrites {@code app_users.phone_number} (see {@link
+     * PreAuthLoginService#finishIfReady}). Before {@code
+     * TdlibTelegramGateway.withAccountIdentity} was fixed to add the "+" back, a returning
+     * visitor typing their own number (which {@code normalizePhoneNumber} always renders with a
+     * "+") could no longer find their own account and instead collided with it trying to create
+     * a brand-new one -- both derive {@code tenants.slug} from the same digits. This simulates
+     * that already-broken stored state (as the V10 migration also backfills) and asserts signing
+     * in still finds the same account rather than throwing a duplicate-key error.
+     */
+    @Test
+    void signingInFindsAnAccountWhosePhoneNumberWasStoredWithoutALeadingPlus() throws Exception {
+        Fixtures.Team team = this.fixtures.team("legacy-no-plus");
+        String phoneNumber = team.user().phoneNumber();
+        this.jdbcTemplate.update("UPDATE app_users SET phone_number = ? WHERE id = ?",
+                phoneNumber.replaceFirst("^\\+", ""), team.user().id());
+
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, phoneNumber);
+        assertThat(session).isNotNull();
+
+        assertThat(this.users.findByPhoneNumber(phoneNumber))
+                .as("the visitor's own, \"+\"-prefixed number must resolve to their existing account")
+                .isPresent();
+        assertThat(this.tenants.findById(team.tenant().id()))
+                .as("no second, colliding tenant should have been created")
+                .isPresent();
     }
 
     @Test

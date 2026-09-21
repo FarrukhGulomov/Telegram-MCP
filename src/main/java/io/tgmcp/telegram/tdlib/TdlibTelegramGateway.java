@@ -303,7 +303,14 @@ public class TdlibTelegramGateway implements TelegramGateway {
             JsonNode me = this.client.request("getMe", Map.of());
             long tgUserId = me.path("id").asLong();
             String username = me.path("usernames").path("editable_username").asString(null);
+            // TDLib's own phone_number is always bare digits, never "+"-prefixed -- normalize it
+            // to the same "+<digits>" form PreAuthLoginService.normalizePhoneNumber() produces
+            // from what a visitor types, so a returning account's own findByPhoneNumber lookup
+            // (an exact string match) keeps matching after this identity is written back to it.
             String phoneNumber = me.path("phone_number").asString(null);
+            if (phoneNumber != null && !phoneNumber.isBlank() && !phoneNumber.startsWith("+")) {
+                phoneNumber = "+" + phoneNumber;
+            }
             return new LoginState(state.stage(), state.qrLoginLink(), tgUserId, username, phoneNumber,
                     state.message());
         }

@@ -11,6 +11,7 @@ import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.TelegramGatewayException;
 
 import org.springframework.context.MessageSource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -80,6 +81,13 @@ public class PreAuthLoginController {
         }
         catch (TelegramGatewayException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "login.telegramUnavailable"));
+        }
+        catch (DataAccessException ex) {
+            // A brand-new phone number's eager tenant/account creation racing an identical
+            // concurrent attempt (e.g. a double-tap before the resubmit guard disables the
+            // button) hits the same unique constraint that protects it -- retrying now finds the
+            // account the other attempt just created instead of colliding with it again.
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "error.unexpected"));
         }
         return "redirect:/login";
     }
