@@ -374,7 +374,8 @@ public class TelegramConnectionService {
             // Placeholder envelope for the mock adapter; the TDLib adapter keeps its own
             // encrypted database directory and stores its handle the same way.
             byte[] envelope = this.sessionCipher.encrypt(
-                    ("session:" + connection.id()).getBytes(StandardCharsets.UTF_8));
+                    ("session:" + connection.id()).getBytes(StandardCharsets.UTF_8),
+                    actor.tenantId(), connection.id());
             this.connectionRepository.storeSession(actor.tenantId(), connection.id(), envelope,
                     this.sessionCipher.keyId());
             this.auditService.record(actor, AuditAction.TELEGRAM_CONNECTED, null, AuditService.ALLOWED,
