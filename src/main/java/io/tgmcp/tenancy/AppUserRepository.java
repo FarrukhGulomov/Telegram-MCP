@@ -49,6 +49,14 @@ public class AppUserRepository {
                 .optional();
     }
 
+    public void updatePasswordHash(UUID tenantId, UUID userId, String newPasswordHash) {
+        jdbc.sql("UPDATE app_users SET password_hash = :hash WHERE tenant_id = :tenantId AND id = :id")
+                .param("hash", newPasswordHash)
+                .param("tenantId", tenantId)
+                .param("id", userId)
+                .update();
+    }
+
     public void insert(AppUser user) {
         jdbc.sql("""
                         INSERT INTO app_users (id, tenant_id, email, password_hash, display_name, role, enabled,

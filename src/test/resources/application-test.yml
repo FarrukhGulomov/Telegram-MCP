@@ -3,6 +3,15 @@ spring:
     url: ${TGMCP_TEST_DB_URL:jdbc:postgresql://localhost:5432/tgmcp_test}
     username: ${TGMCP_TEST_DB_USER:tgmcp}
     password: ${TGMCP_TEST_DB_PASSWORD:tgmcp}
+    hikari:
+      # Several test classes use a distinct @TestPropertySource on purpose (a tiny rate-limit
+      # or lockout threshold, reachable without looping hundreds of times), and Spring's test
+      # context cache keeps one full Spring context -- and one full Hikari pool -- alive per
+      # distinct property combination for the life of the whole test JVM. The default pool size
+      # (10) times enough of those distinct contexts comfortably exceeds Postgres's connection
+      # budget (max_connections minus superuser_reserved_connections) well before any of them
+      # is individually under load, since the whole suite runs sequentially anyway.
+      maximum-pool-size: 5
   flyway:
     enabled: true
     clean-disabled: false

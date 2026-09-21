@@ -177,7 +177,27 @@ public record AppProperties(@DefaultValue Telegram telegram,
                                  * durable tenant + user row per success -- its own budget, IP
                                  * keyed, distinct from the plain login-attempt budget above.
                                  */
-                                @DefaultValue("5") int selfRegistrationsPerHourPerIp) {
+                                @DefaultValue("5") int selfRegistrationsPerHourPerIp,
+                                /**
+                                 * Distinct from {@link #loginAttemptsPerMinutePerIp}: that budget
+                                 * is per source IP and resets every minute, so an attacker who
+                                 * rotates IPs faces no additional slowdown against one specific
+                                 * account's password. This one is keyed by the submitted account
+                                 * email itself, has no time window of its own (only a threshold),
+                                 * and locks the account out -- regardless of which password is
+                                 * tried next, correct or not -- for {@link #accountLockMinutes}
+                                 * once reached. Cleared the moment a correct password is entered.
+                                 */
+                                @DefaultValue("10") int accountLockThreshold,
+                                @DefaultValue("15") int accountLockMinutes,
+                                /**
+                                 * A password change is reachable by anyone already holding a
+                                 * valid session, correct current password required or not -- a
+                                 * hijacked session cookie could otherwise be used to brute-force
+                                 * the current-password check itself. Per-user, not per-IP, since
+                                 * the caller is already authenticated by the time this applies.
+                                 */
+                                @DefaultValue("10") int accountActionsPerMinutePerUser) {
     }
 
     /**

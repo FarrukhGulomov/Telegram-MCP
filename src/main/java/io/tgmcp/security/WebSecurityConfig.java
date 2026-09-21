@@ -30,8 +30,11 @@ import org.springframework.security.oauth2.jwt.JwtValidationException;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.authentication.LockedException;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.AuthenticationFailureHandler;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
+import org.springframework.security.web.authentication.SimpleUrlAuthenticationFailureHandler;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
@@ -122,7 +125,8 @@ public class WebSecurityConfig {
     public SecurityFilterChain managementUiFilterChain(HttpSecurity http, AppProperties properties,
                                                         java.time.Clock clock,
                                                         SecurityContextRepository securityContextRepository,
-                                                        AuthenticationSuccessHandler twoFactorGatingSuccessHandler)
+                                                        AuthenticationSuccessHandler twoFactorGatingSuccessHandler,
+                                                        AuthenticationFailureHandler loginFailureHandler)
             throws Exception {
         // Security-audit finding SEC-10: a login attempt is unauthenticated by definition, so
         // it shares no budget with anything else in this application; IP-keyed and placed
@@ -173,6 +177,7 @@ public class WebSecurityConfig {
                         .hasAnyRole("OWNER", "ADMIN")
                         .anyRequest().authenticated())
                 .formLogin(form -> form.loginPage("/login").successHandler(twoFactorGatingSuccessHandler)
+                        .failureHandler(loginFailureHandler)
                         .permitAll())
                 .logout(logout -> logout.logoutSuccessUrl("/login?loggedOut").permitAll())
                 .csrf(Customizer.withDefaults())
@@ -235,8 +240,12 @@ public class WebSecurityConfig {
      */
     @Bean
     public AuthenticationSuccessHandler twoFactorGatingSuccessHandler(AppUserRepository users,
-            LoginTwoFactorService twoFactorService, ManualSessionEstablisher sessionEstablisher) {
+            LoginTwoFactorService twoFactorService, ManualSessionEstablisher sessionEstablisher,
+            LoginLockoutService lockoutService) {
         return (request, response, authentication) -> {
+            // Reached only once AuthenticationManager has already accepted the password, so any
+            // earlier failed attempts against this account no longer mean anything.
+            lockoutService.recordSuccess(authentication.getName());
             AppUser user = users.findByEmail(authentication.getName()).orElse(null);
             if (user == null || user.telegramUserId() == null) {
                 response.sendRedirect(request.getContextPath() + "/");
@@ -252,6 +261,27 @@ public class WebSecurityConfig {
                         user.telegramUserId(), ex.getMessage());
                 response.sendRedirect(request.getContextPath() + "/login?telegramCodeError");
             }
+        };
+    }
+
+    /**
+     * Records a bad-credentials attempt against {@link LoginLockoutService} before falling back
+     * to the same generic {@code /login?error} redirect as before -- the failure message shown
+     * to the visitor stays identical whether the account was locked, the password was wrong, or
+     * no such account exists, so a lockout can never itself become a way to test which emails
+     * are registered. Skips recording while the account is already locked ({@link
+     * LockedException}): a legitimate holder retrying during the lock window must not keep
+     * pushing it further out every time they try again.
+     */
+    @Bean
+    public AuthenticationFailureHandler loginFailureHandler(LoginLockoutService lockoutService) {
+        SimpleUrlAuthenticationFailureHandler delegate = new SimpleUrlAuthenticationFailureHandler("/login?error");
+        return (request, response, exception) -> {
+            String email = request.getParameter("username");
+            if (email != null && !(exception instanceof LockedException)) {
+                lockoutService.recordFailure(email);
+            }
+            delegate.onAuthenticationFailure(request, response, exception);
         };
     }
 

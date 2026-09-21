@@ -33,6 +33,11 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
       <span th:text="#{nav.audit}">Audit</span>
     </a>
+    <a class="nav-link" th:classappend="${#strings.startsWith(currentPath, '/account')} ? 'is-active'"
+       th:href="@{/account}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+      <span th:text="#{nav.account}">Account</span>
+    </a>
     <span class="nav-sep" aria-hidden="true"></span>
     <form th:action="@{/logout}" method="post" data-guard-resubmit class="inline">
       <button type="submit" class="link nav-link" th:text="#{nav.signOut}">Sign out</button>

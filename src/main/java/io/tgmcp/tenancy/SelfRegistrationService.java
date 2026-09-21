@@ -24,7 +24,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class SelfRegistrationService {
 
-    private static final int MIN_PASSWORD_LENGTH = 10;
+    /** Package-visible so {@link AccountService} enforces the identical rule for a password change. */
+    static final int MIN_PASSWORD_LENGTH = 10;
 
     private final TenantRepository tenants;
     private final AppUserRepository users;

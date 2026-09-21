@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.ModelAttribute;
  * active-link highlighting needs the current path handed in explicitly instead.
  */
 @ControllerAdvice(assignableTypes = {DashboardController.class, ChatController.class,
-        ConnectionController.class, AuditController.class})
+        ConnectionController.class, AuditController.class, AccountController.class})
 public class NavigationAttributes {
 
     @ModelAttribute("currentPath")

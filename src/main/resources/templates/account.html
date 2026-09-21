@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.account}, ~{::section})}">
+<body>
+<section>
+  <div class="page-head">
+    <h1 th:text="#{nav.account}">Account</h1>
+  </div>
+
+  <div class="card">
+    <h2 th:text="#{account.password.title}">Change password</h2>
+    <p class="muted" th:text="#{account.password.hint}">
+      Rotate your password if you think it may have been seen by anyone else.
+    </p>
+    <form th:action="@{/account/password}" method="post" data-guard-resubmit>
+      <label for="currentPassword" th:text="#{account.password.current}">Current password</label>
+      <input id="currentPassword" name="currentPassword" type="password" required
+             autocomplete="current-password">
+
+      <label for="newPassword" th:text="#{account.password.new}">New password</label>
+      <input id="newPassword" name="newPassword" type="password" required minlength="10"
+             autocomplete="new-password">
+      <p class="hint" th:text="#{register.passwordHint}">At least 10 characters.</p>
+
+      <label for="newPasswordConfirm" th:text="#{account.password.newConfirm}">Confirm new password</label>
+      <input id="newPasswordConfirm" name="newPasswordConfirm" type="password" required minlength="10"
+             autocomplete="new-password">
+
+      <button type="submit" th:text="#{account.password.button}">Change password</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 th:text="#{account.connections.title}">Connected apps</h2>
+    <p class="muted" th:text="#{account.connections.hint}">
+      Every MCP client (Claude, ChatGPT, or any other app) currently authorized to read data
+      from your account. Revoking one stops it from renewing access; a token it already holds
+      still expires on its own shortly after.
+    </p>
+    <div class="table-wrap" th:if="${!#lists.isEmpty(connectedApps)}">
+      <table>
+        <thead>
+        <tr>
+          <th th:text="#{account.connections.table.app}">App</th>
+          <th th:text="#{account.connections.table.scopes}">Access</th>
+          <th th:text="#{account.connections.table.lastActive}">Last active</th>
+          <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="app : ${connectedApps}">
+          <td th:text="${app.clientName}"></td>
+          <td><code th:text="${app.scopes}"></code></td>
+          <td th:text="${app.lastActiveAt} ?: '—'"></td>
+          <td>
+            <form th:action="@{/account/connections/revoke}" method="post" data-guard-resubmit>
+              <input type="hidden" name="clientId" th:value="${app.registeredClientId}">
+              <button type="submit" class="danger" th:text="#{account.connections.revoke}">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="empty-state" th:if="${#lists.isEmpty(connectedApps)}">
+      <span th:text="#{account.connections.empty}">No app is currently connected to your account.</span>
+    </div>
+  </div>
+</section>
+</body>
+</html>
