@@ -80,7 +80,7 @@ jobs:
       # bump would resolve has no such excuse, so failing the build on those costs nothing
       # while catching real, actionable regressions before a release image ships.
       - name: Scan image for known, fixable vulnerabilities (blocking)
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: telegram-consent-mcp:ci
           format: table
@@ -92,7 +92,7 @@ jobs:
       # for visibility -- never blocks the build.
       - name: Scan image for known vulnerabilities (report-only, includes unfixed)
         if: always()
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: telegram-consent-mcp:ci
           format: table
