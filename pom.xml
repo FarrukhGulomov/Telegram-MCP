@@ -24,6 +24,11 @@
     <mcp-sdk.version>2.0.1</mcp-sdk.version>
     <maven.compiler.parameters>true</maven.compiler.parameters>
     <jna.version>5.19.1</jna.version>
+    <!-- CVE-2026-65182/65905/68525: security constraint/auth bypasses fixed in 11.0.25.
+         spring-boot-starter-parent 4.1.1 still manages 11.0.24; overriding this property is
+         Spring Boot's own documented way to pick up a dependency's security fix ahead of the
+         next Spring Boot release. -->
+    <tomcat.version>11.0.25</tomcat.version>
   </properties>
 
   <dependencyManagement>
