@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import io.tgmcp.telegram.gateway.ConnectionRef;
+import io.tgmcp.telegram.gateway.DownloadedMedia;
 import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
@@ -46,6 +47,11 @@ public class MockTelegramGateway implements TelegramGateway {
     private final Deque<TelegramGatewayException> injectedFailures = new ArrayDeque<>();
     private final Map<Long, Instant> revisionMarks = new ConcurrentHashMap<>();
     private final AtomicLong callCount = new AtomicLong();
+    /** Registered by {@link #appendMessageWithMedia}; an id absent here mimics a media
+     * reference Telegram itself no longer resolves (deleted upstream, or simply too old). */
+    private final Map<String, byte[]> registeredMedia = new ConcurrentHashMap<>();
+    /** Structurally a valid (if contentless) JPEG: the SOI and EOI markers with nothing between. */
+    private static final byte[] SYNTHETIC_JPEG_BYTES = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9};
 
     public MockTelegramGateway(Clock clock) {
         this.clock = clock;
@@ -70,6 +76,7 @@ public class MockTelegramGateway implements TelegramGateway {
         this.injectedFailures.clear();
         this.revisionMarks.clear();
         this.callCount.set(0);
+        this.registeredMedia.clear();
     }
 
     /** Makes the next read call throw. Used to exercise flood-wait and backoff handling. */
@@ -84,22 +91,47 @@ public class MockTelegramGateway implements TelegramGateway {
     public void editMessage(long tgChatId, long messageId, String newText) {
         mutate(tgChatId, messageId, existing -> new RemoteMessage(existing.messageId(), existing.senderTgUserId(),
                 existing.senderDisplayName(), existing.sentAt(), this.clock.instant(), false, newText,
-                existing.replyToMessageId()));
+                existing.replyToMessageId(), existing.mediaKind(), existing.mediaRemoteFileId()));
     }
 
     public void deleteMessage(long tgChatId, long messageId) {
         mutate(tgChatId, messageId, existing -> new RemoteMessage(existing.messageId(), existing.senderTgUserId(),
                 existing.senderDisplayName(), existing.sentAt(), existing.editedAt(), true, "",
-                existing.replyToMessageId()));
+                existing.replyToMessageId(), null, null));
     }
 
     public RemoteMessage appendMessage(long tgChatId, long senderTgUserId, String senderName, String text) {
         SyntheticChat chat = requireChat(tgChatId);
         long nextId = chat.messages().stream().mapToLong(RemoteMessage::messageId).max().orElse(0L) + 1;
         RemoteMessage message = new RemoteMessage(nextId, senderTgUserId, senderName, this.clock.instant(),
-                null, false, text, null);
+                null, false, text, null, null, null);
         chat.messages().add(message);
         return message;
+    }
+
+    /**
+     * As {@link #appendMessage}, but with a visual preview a test can then fetch through the
+     * real {@code get_message_media} MCP tool exactly the way a caller would for a real photo
+     * or video-thumbnail: {@code mediaKind} is {@code "PHOTO"} or {@code "VIDEO_THUMBNAIL"}, and
+     * {@code mediaBytes} is what {@link #downloadMessageMedia} returns for the reference this
+     * mints and registers -- there is no separate, pre-registered fixture to reuse.
+     */
+    public RemoteMessage appendMessageWithMedia(long tgChatId, long senderTgUserId, String senderName, String text,
+                                                String mediaKind, byte[] mediaBytes) {
+        SyntheticChat chat = requireChat(tgChatId);
+        long nextId = chat.messages().stream().mapToLong(RemoteMessage::messageId).max().orElse(0L) + 1;
+        String remoteFileId = "mock-media-" + tgChatId + "-" + nextId;
+        this.registeredMedia.put(remoteFileId, mediaBytes);
+        RemoteMessage message = new RemoteMessage(nextId, senderTgUserId, senderName, this.clock.instant(),
+                null, false, text, null, mediaKind, remoteFileId);
+        chat.messages().add(message);
+        return message;
+    }
+
+    /** As {@link #appendMessageWithMedia}, using a small placeholder JPEG as the media bytes. */
+    public RemoteMessage appendMessageWithMedia(long tgChatId, long senderTgUserId, String senderName, String text,
+                                                String mediaKind) {
+        return appendMessageWithMedia(tgChatId, senderTgUserId, senderName, text, mediaKind, SYNTHETIC_JPEG_BYTES);
     }
 
     public void addParticipant(long tgChatId, RemoteParticipant participant) {
@@ -248,6 +280,15 @@ public class MockTelegramGateway implements TelegramGateway {
             return Optional.empty();
         }
         return Optional.of("https://t.me/" + chat.username() + "/" + tgMessageId);
+    }
+
+    @Override
+    public Optional<DownloadedMedia> downloadMessageMedia(ConnectionRef ref, String mediaRemoteFileId) {
+        guard();
+        byte[] bytes = this.registeredMedia.get(mediaRemoteFileId);
+        // Mirrors the real adapter: an unrecognised reference degrades to empty, the same
+        // outcome as media Telegram itself no longer resolves, rather than throwing.
+        return bytes == null ? Optional.empty() : Optional.of(new DownloadedMedia(bytes, "image/jpeg"));
     }
 
     private void guard() {

@@ -28,7 +28,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.web.servlet.function.ServerRequest;
 
 /**
- * Wires the MCP server: a stateless Streamable HTTP transport, and the five tools.
+ * Wires the MCP server: a stateless Streamable HTTP transport, and the six tools.
  *
  * <p>Stateless is deliberate. Every MCP request carries its own bearer token, so identity is
  * re-established (and re-authorized) per call rather than captured once at session setup —
@@ -143,7 +143,17 @@ public class McpServerConfiguration {
                         approved range, retention, what has actually been stored, whether backfill \
                         finished, and when the last successful synchronisation happened. Use it \
                         before concluding that something is absent from a chat.""",
-                        McpToolSchemas.getSyncStatus(), responses, tools::getSyncStatus));
+                        McpToolSchemas.getSyncStatus(), responses, tools::getSyncStatus),
+
+                tool(McpToolNames.GET_MESSAGE_MEDIA, "Get message media",
+                        """
+                        Fetches the visual preview for one message that has one, on demand: the photo \
+                        itself for a photo message, or the single representative thumbnail frame \
+                        Telegram already generates for a video, video note or animation -- never the \
+                        full video. Returns an error if the message has no visual preview, or if the \
+                        reference no longer resolves (deleted upstream, or too old). Nothing here is \
+                        ever pre-downloaded or cached; every call fetches fresh.""",
+                        McpToolSchemas.getMessageMedia(), responses, tools::getMessageMedia));
     }
 
     private static McpStatelessServerFeatures.SyncToolSpecification tool(

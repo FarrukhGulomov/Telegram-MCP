@@ -83,7 +83,7 @@ public final class SyntheticDataset {
         };
         for (String[] line : script) {
             chat.messages().add(new RemoteMessage(id, Long.parseLong(line[0]), nameOf(Long.parseLong(line[0])),
-                    base.plus(Duration.ofHours(id - 1000L).plusMinutes(7)), null, false, line[1], null));
+                    base.plus(Duration.ofHours(id - 1000L).plusMinutes(7)), null, false, line[1], null, null, null));
             id++;
         }
         return chat;
@@ -121,7 +121,7 @@ public final class SyntheticDataset {
         };
         for (String[] line : script) {
             chat.messages().add(new RemoteMessage(id, Long.parseLong(line[0]), nameOf(Long.parseLong(line[0])),
-                    base.plus(Duration.ofHours((id - 2000L) * 3L).plusMinutes(13)), null, false, line[1], null));
+                    base.plus(Duration.ofHours((id - 2000L) * 3L).plusMinutes(13)), null, false, line[1], null, null, null));
             id++;
         }
         return chat;
@@ -146,7 +146,7 @@ public final class SyntheticDataset {
         for (String text : script) {
             long sender = (id % 2 == 0) ? ALICE : CHIDI;
             chat.messages().add(new RemoteMessage(id, sender, nameOf(sender),
-                    base.plus(Duration.ofHours(id - 3000L)), null, false, text, null));
+                    base.plus(Duration.ofHours(id - 3000L)), null, false, text, null, null, null));
             id++;
         }
         return chat;

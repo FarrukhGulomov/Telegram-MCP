@@ -497,7 +497,7 @@ class SyncBehaviourTests extends AbstractIntegrationTest {
         // "nothing more to fetch", which is exactly what the old code did.
         RemoteMessage reachedAfterTheBacklog = new RemoteMessage(999L, SyntheticDataset.ALICE,
                 "Alice Nakamura (synthetic)", this.clock.instant().minus(Duration.ofDays(1)), null, false,
-                "finally past the backlog", null);
+                "finally past the backlog", null, null, null);
 
         org.mockito.Mockito.doReturn(new RemoteMessagePage(List.of(), true, 500L))
                 .doReturn(new RemoteMessagePage(List.of(reachedAfterTheBacklog), false, null))

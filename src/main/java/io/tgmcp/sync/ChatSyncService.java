@@ -513,7 +513,7 @@ public class ChatSyncService {
             this.messageRepository.upsert(new StoredMessage(Ids.newId(), tenantId, chat.id(),
                     message.messageId(), message.senderTgUserId(), message.senderDisplayName(),
                     message.sentAt(), message.editedAt(), null, message.text() == null ? "" : message.text(),
-                    message.replyToMessageId(), link));
+                    message.replyToMessageId(), link, message.mediaKind(), message.mediaRemoteFileId()));
             stored++;
             newest = (newest == null || message.messageId() > newest) ? message.messageId() : newest;
             oldest = (oldest == null || message.messageId() < oldest) ? message.messageId() : oldest;

@@ -2,6 +2,7 @@ package io.tgmcp;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -15,6 +16,8 @@ import io.tgmcp.support.Fixtures;
 import io.tgmcp.support.McpTestClient;
 import io.tgmcp.support.TestTokens;
 import io.tgmcp.sync.ChatSyncService;
+import io.tgmcp.telegram.gateway.RemoteMessage;
+import io.tgmcp.telegram.mock.SyntheticDataset;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -87,7 +90,7 @@ class McpProtocolTests extends AbstractIntegrationTest {
     }
 
     @Test
-    void discoversExactlyTheFiveTools() {
+    void discoversExactlyTheSixTools() {
         try (McpTestClient client = connect(tokenFor(readyChat()))) {
             List<McpSchema.Tool> tools = client.listTools().tools();
 
@@ -96,7 +99,8 @@ class McpProtocolTests extends AbstractIntegrationTest {
                     McpToolNames.SEARCH_MESSAGES,
                     McpToolNames.GET_CHAT_HISTORY,
                     McpToolNames.GET_MESSAGE_CONTEXT,
-                    McpToolNames.GET_SYNC_STATUS);
+                    McpToolNames.GET_SYNC_STATUS,
+                    McpToolNames.GET_MESSAGE_MEDIA);
         }
     }
 
@@ -193,6 +197,54 @@ class McpProtocolTests extends AbstractIntegrationTest {
             List<Map<String, Object>> items = items(context);
             assertThat(items).hasSizeLessThanOrEqualTo(5);
             assertThat(items).anySatisfy(item -> assertThat(item.get("isPivot")).isEqualTo(true));
+        }
+    }
+
+    @Test
+    void fetchesAMessagesVisualPreviewAsInlineImageContent() {
+        Fixtures.ReadyChat chat = readyChat();
+        byte[] expectedBytes = {1, 2, 3, 4, 5};
+        RemoteMessage appended = this.mockGateway().appendMessageWithMedia(SyntheticDataset.ENGINEERING_CHAT,
+                SyntheticDataset.ALICE, "Alice Nakamura (synthetic)", "Check this out", "PHOTO", expectedBytes);
+        this.syncService.sync(chat.team().tenant().id(), chat.chat().id());
+
+        try (McpTestClient client = connect(tokenFor(chat))) {
+            McpSchema.CallToolResult result = client.call(McpToolNames.GET_MESSAGE_MEDIA, Map.of(
+                    "chat_id", chat.chat().id().toString(),
+                    "message_id", String.valueOf(appended.messageId())));
+
+            assertThat(result.isError()).isFalse();
+            Map<String, Object> payload = structured(result);
+            assertThat(payload).containsEntry("available", true).containsEntry("previewKind", "PHOTO");
+
+            List<McpSchema.ImageContent> images = result.content().stream()
+                    .filter(McpSchema.ImageContent.class::isInstance)
+                    .map(McpSchema.ImageContent.class::cast)
+                    .toList();
+            assertThat(images).hasSize(1);
+            assertThat(images.get(0).mimeType()).isEqualTo("image/jpeg");
+            assertThat(Base64.getDecoder().decode(images.get(0).data())).isEqualTo(expectedBytes);
+        }
+    }
+
+    @Test
+    void reportsUnavailableForAMessageWithNoVisualPreview() {
+        Fixtures.ReadyChat chat = readyChat();
+        try (McpTestClient client = connect(tokenFor(chat))) {
+            String messageId = (String) items(client.call(McpToolNames.SEARCH_MESSAGES, Map.of(
+                    "chat_ids", List.of(chat.chat().id().toString()),
+                    "query", "backpressure",
+                    "from", this.clock.instant().minus(Duration.ofDays(60)).toString(),
+                    "to", this.clock.instant().toString()))).get(0).get("messageId");
+
+            McpSchema.CallToolResult result = client.call(McpToolNames.GET_MESSAGE_MEDIA, Map.of(
+                    "chat_id", chat.chat().id().toString(),
+                    "message_id", messageId));
+
+            assertThat(result.isError()).isFalse();
+            Map<String, Object> payload = structured(result);
+            assertThat(payload).containsEntry("available", false);
+            assertThat(result.content().stream().anyMatch(McpSchema.ImageContent.class::isInstance)).isFalse();
         }
     }
 

@@ -4,9 +4,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -28,6 +30,9 @@ import io.tgmcp.message.MessageSlice;
 import io.tgmcp.message.StoredMessage;
 import io.tgmcp.ratelimit.RateLimiter;
 import io.tgmcp.sync.SyncCheckpoint;
+import io.tgmcp.telegram.gateway.ConnectionRef;
+import io.tgmcp.telegram.gateway.DownloadedMedia;
+import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.tenancy.AuthenticatedActor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +61,7 @@ public class McpTools {
     private final ToolResponses responses;
     private final AppProperties.Mcp limits;
     private final Clock clock;
+    private final TelegramGateway telegramGateway;
 
     public McpTools(ChatAccessService accessService,
                     MessageRepository messageRepository,
@@ -65,7 +71,8 @@ public class McpTools {
                     AuditService auditService,
                     ToolResponses responses,
                     AppProperties properties,
-                    Clock clock) {
+                    Clock clock,
+                    TelegramGateway telegramGateway) {
         this.accessService = accessService;
         this.messageRepository = messageRepository;
         this.consentService = consentService;
@@ -75,6 +82,7 @@ public class McpTools {
         this.responses = responses;
         this.limits = properties.mcp();
         this.clock = clock;
+        this.telegramGateway = telegramGateway;
     }
 
     // --- tools -------------------------------------------------------------------------
@@ -336,6 +344,88 @@ public class McpTools {
         });
     }
 
+    /**
+     * Fetches a message's visual preview on demand -- never pre-downloaded, never cached
+     * anywhere in this application, so a revoked chat or a withdrawn consent takes effect on
+     * the very next call with nothing left over to separately purge. Follows the identical
+     * authorize -> read -> re-verify shape as {@link #getMessageContext} for the message lookup
+     * itself; the only new step is the actual byte fetch through {@link TelegramGateway}.
+     */
+    public McpSchema.CallToolResult getMessageMedia(McpCallContext context, McpSchema.CallToolRequest request) {
+        return guarded(context, McpToolNames.GET_MESSAGE_MEDIA, request, reportChatIds -> {
+            ToolArguments args = new ToolArguments(request.arguments());
+            args.rejectUnknown(List.of("chat_id", "message_id"));
+
+            UUID chatId = args.requiredUuid("chat_id");
+            reportChatIds.accept(List.of(chatId));
+            long messageId = args.requiredLong("message_id");
+
+            Instant now = this.clock.instant();
+            AuthorizedChat allowed = this.accessService.authorize(context.actor(), chatId,
+                    context.provider(), true);
+            Instant windowStart = allowed.windowStart(now);
+            Instant windowEnd = allowed.windowEnd(now);
+            String contextRevision = allowed.activation().contextRevision();
+
+            StoredMessage message = this.messageRepository.find(context.actor().tenantId(), chatId, messageId)
+                    // Absent, deleted, outside the window, or an ineligible sender are all
+                    // denied identically -- see the matching comment in getMessageContext.
+                    .filter(m -> !m.sentAt().isBefore(windowStart) && !m.sentAt().isAfter(windowEnd))
+                    .filter(m -> this.consentService.authorEligible(context.actor().tenantId(), chatId,
+                            m.senderTgUserId(), contextRevision))
+                    .orElseThrow(ChatAccessException::denied);
+
+            // Bound to the exact authorization snapshot ("allowed") taken above (SEC-05).
+            this.accessService.reverify(context.actor(), List.of(allowed), context.provider());
+
+            if (message.mediaKind() == null) {
+                return this.responses.success(unavailable(chatId, messageId,
+                        "This message has no visual preview to fetch."));
+            }
+
+            ConnectionRef ref = new ConnectionRef(allowed.chat().tenantId(), allowed.chat().connectionId());
+            Optional<DownloadedMedia> media = this.telegramGateway.downloadMessageMedia(
+                    ref, message.mediaRemoteFileId());
+            if (media.isEmpty()) {
+                return this.responses.success(unavailable(chatId, messageId,
+                        "This message's media reference no longer resolves -- deleted upstream, or too old."));
+            }
+            if (media.get().bytes().length > this.limits.maxResponseBytes()) {
+                return this.responses.success(unavailable(chatId, messageId,
+                        "This preview exceeds the response size limit and cannot be returned."));
+            }
+
+            Map<String, Object> payload = envelope();
+            payload.put("chatId", chatId.toString());
+            payload.put("messageId", String.valueOf(messageId));
+            payload.put("available", true);
+            payload.put("previewKind", message.mediaKind());
+            payload.put("notice", "PHOTO".equals(message.mediaKind())
+                    ? "This is the message's own photo."
+                    : "This is a single representative thumbnail frame Telegram already generated for this "
+                            + "video/animation, not the full video -- full video content is never fetched.");
+
+            McpSchema.CallToolResult structured = this.responses.success(payload);
+            List<McpSchema.Content> content = new ArrayList<>(structured.content());
+            content.add(new McpSchema.ImageContent(null,
+                    Base64.getEncoder().encodeToString(media.get().bytes()), media.get().mimeType()));
+            return McpSchema.CallToolResult.builder()
+                    .content(content)
+                    .structuredContent(structured.structuredContent())
+                    .isError(false)
+                    .build();
+        });
+    }
+
+    private Map<String, Object> unavailable(UUID chatId, long messageId, String notice) {
+        Map<String, Object> payload = envelope();
+        payload.put("chatId", chatId.toString());
+        payload.put("messageId", String.valueOf(messageId));
+        payload.put("available", false);
+        payload.put("notice", notice);
+        return payload;
+    }
+
     public McpSchema.CallToolResult getSyncStatus(McpCallContext context, McpSchema.CallToolRequest request) {
         return guarded(context, McpToolNames.GET_SYNC_STATUS, request, reportChatIds -> {
             ToolArguments args = new ToolArguments(request.arguments());
@@ -507,6 +597,12 @@ public class McpTools {
                 "provider", "telegram",
                 "chatType", chat == null ? "UNKNOWN" : chat.chatType(),
                 "contentKind", "text"));
+        // A photo, video, video note or animation: message.mediaKind() names which, and
+        // get_message_media fetches the bytes (the photo itself, or a video's representative
+        // thumbnail frame) fresh -- never pre-downloaded or included here.
+        item.put("media", message.mediaKind() == null ? null : Map.of(
+                "kind", message.mediaKind(),
+                "fetchWith", McpToolNames.GET_MESSAGE_MEDIA));
         return item;
     }
 

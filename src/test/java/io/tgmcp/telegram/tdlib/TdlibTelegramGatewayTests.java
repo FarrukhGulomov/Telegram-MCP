@@ -1,5 +1,8 @@
 package io.tgmcp.telegram.tdlib;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -12,6 +15,7 @@ import java.util.function.Consumer;
 
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.telegram.gateway.ConnectionRef;
+import io.tgmcp.telegram.gateway.DownloadedMedia;
 import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.MessageWindow;
@@ -24,6 +28,7 @@ import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramAuthException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -376,6 +381,82 @@ class TdlibTelegramGatewayTests {
         assertThat(this.gateway.toRemoteMessage(json("""
                 {"id":1,"date":1780000000,"edit_date":0,
                  "content":{"@type":"messageText","text":{"text":"x"}}}""")).editedAt()).isNull();
+    }
+
+    @Test
+    void extractsThePhotosMediumSizeRemoteFileIdAsThePreview() {
+        RemoteMessage message = this.gateway.toRemoteMessage(json("""
+                {"id":1,"date":1780000000,
+                 "content":{"@type":"messagePhoto","photo":{"sizes":[
+                   {"type":"s","photo":{"remote":{"id":"small-id"}}},
+                   {"type":"m","photo":{"remote":{"id":"medium-id"}}},
+                   {"type":"x","photo":{"remote":{"id":"large-id"}}}]}}}"""));
+
+        assertThat(message.mediaKind()).isEqualTo("PHOTO");
+        assertThat(message.mediaRemoteFileId()).isEqualTo("medium-id");
+    }
+
+    @Test
+    void fallsBackToTheFirstPhotoSizeWhenNoMediumSizeIsPresent() {
+        RemoteMessage message = this.gateway.toRemoteMessage(json("""
+                {"id":1,"date":1780000000,
+                 "content":{"@type":"messagePhoto","photo":{"sizes":[
+                   {"type":"s","photo":{"remote":{"id":"small-id"}}},
+                   {"type":"x","photo":{"remote":{"id":"large-id"}}}]}}}"""));
+
+        assertThat(message.mediaKind()).isEqualTo("PHOTO");
+        assertThat(message.mediaRemoteFileId()).isEqualTo("small-id");
+    }
+
+    @Test
+    void extractsAVideosThumbnailAsAVideoThumbnailPreviewNeverTheVideoItself() {
+        RemoteMessage message = this.gateway.toRemoteMessage(json("""
+                {"id":1,"date":1780000000,
+                 "content":{"@type":"messageVideo","video":{
+                   "thumbnail":{"file":{"remote":{"id":"video-thumb-id"}}}}}}"""));
+
+        assertThat(message.mediaKind()).isEqualTo("VIDEO_THUMBNAIL");
+        assertThat(message.mediaRemoteFileId()).isEqualTo("video-thumb-id");
+    }
+
+    @Test
+    void extractsAVideoNotesThumbnailAsAVideoThumbnailPreview() {
+        RemoteMessage message = this.gateway.toRemoteMessage(json("""
+                {"id":1,"date":1780000000,
+                 "content":{"@type":"messageVideoNote","video_note":{
+                   "thumbnail":{"file":{"remote":{"id":"note-thumb-id"}}}}}}"""));
+
+        assertThat(message.mediaKind()).isEqualTo("VIDEO_THUMBNAIL");
+        assertThat(message.mediaRemoteFileId()).isEqualTo("note-thumb-id");
+    }
+
+    @Test
+    void extractsAnAnimationsThumbnailAsAVideoThumbnailPreview() {
+        RemoteMessage message = this.gateway.toRemoteMessage(json("""
+                {"id":1,"date":1780000000,
+                 "content":{"@type":"messageAnimation","animation":{
+                   "thumbnail":{"file":{"remote":{"id":"gif-thumb-id"}}}}}}"""));
+
+        assertThat(message.mediaKind()).isEqualTo("VIDEO_THUMBNAIL");
+        assertThat(message.mediaRemoteFileId()).isEqualTo("gif-thumb-id");
+    }
+
+    @Test
+    void leavesMediaFieldsNullForContentWithNoVisualPreview() {
+        RemoteMessage message = this.gateway.toRemoteMessage(json("""
+                {"id":1,"date":1780000000,"content":{"@type":"messageText","text":{"text":"hi"}}}"""));
+
+        assertThat(message.mediaKind()).isNull();
+        assertThat(message.mediaRemoteFileId()).isNull();
+    }
+
+    @Test
+    void leavesMediaFieldsNullWhenAVideosThumbnailIsMissing() {
+        RemoteMessage message = this.gateway.toRemoteMessage(json("""
+                {"id":1,"date":1780000000,"content":{"@type":"messageVideo","video":{}}}"""));
+
+        assertThat(message.mediaKind()).isNull();
+        assertThat(message.mediaRemoteFileId()).isNull();
     }
 
     @Test
@@ -754,6 +835,70 @@ class TdlibTelegramGatewayTests {
                 .isEmpty();
         assertThat(this.gateway.messageLink(this.ref, new RemoteChat(-1L, "Basic group", "GROUP", null, null), 1L))
                 .isEmpty();
+    }
+
+    // --- On-demand media download -------------------------------------------------------
+
+    @Test
+    void downloadsAnAlreadyCompletedFileWithoutSchedulingADownload(@TempDir Path tempDir) throws IOException {
+        Path file = tempDir.resolve("photo.jpg");
+        byte[] bytes = {1, 2, 3, 4};
+        Files.write(file, bytes);
+
+        this.client.enqueue("""
+                {"@type":"file","id":55,"local":{"is_downloading_completed":true,"path":"%s"}}"""
+                .formatted(file.toString()));
+
+        Optional<DownloadedMedia> media = this.gateway.downloadMessageMedia(this.ref, "remote-id-1");
+
+        assertThat(media).isPresent();
+        assertThat(media.get().bytes()).isEqualTo(bytes);
+        assertThat(media.get().mimeType()).isEqualTo("image/jpeg");
+        assertThat(this.client.timesSent("downloadFile")).isZero();
+    }
+
+    @Test
+    void schedulesADownloadAndPollsUntilItCompletes(@TempDir Path tempDir) throws IOException {
+        Path file = tempDir.resolve("video-thumb.jpg");
+        byte[] bytes = {9, 9, 9};
+        Files.write(file, bytes);
+
+        this.client.enqueue("""
+                {"@type":"file","id":77,"local":{"is_downloading_completed":false,"path":""}}""");
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueue("""
+                {"@type":"file","id":77,"local":{"is_downloading_completed":false,"path":""}}""");
+        this.client.enqueue("""
+                {"@type":"file","id":77,"local":{"is_downloading_completed":true,"path":"%s"}}"""
+                .formatted(file.toString()));
+
+        Optional<DownloadedMedia> media = this.gateway.downloadMessageMedia(this.ref, "remote-id-2");
+
+        assertThat(media).isPresent();
+        assertThat(media.get().bytes()).isEqualTo(bytes);
+        assertThat(this.client.timesSent("downloadFile")).isEqualTo(1);
+        assertThat(this.client.timesSent("getFile")).isEqualTo(2);
+    }
+
+    @Test
+    void returnsEmptyWhenTheRemoteFileReferenceNoLongerResolves() {
+        this.client.enqueueError(400, "FILE_REFERENCE_EXPIRED");
+
+        assertThat(this.gateway.downloadMessageMedia(this.ref, "stale-id")).isEmpty();
+    }
+
+    @Test
+    void returnsEmptyWhenACompletedFileReportsNoLocalPath() {
+        this.client.enqueue("""
+                {"@type":"file","id":88,"local":{"is_downloading_completed":true,"path":""}}""");
+
+        assertThat(this.gateway.downloadMessageMedia(this.ref, "odd-id")).isEmpty();
+    }
+
+    @Test
+    void rejectsDownloadFromAConnectionThatNeverClaimedOwnership() {
+        assertThatThrownBy(() -> this.gateway.downloadMessageMedia(this.foreignRef, "some-id"))
+                .isInstanceOf(TelegramAuthException.class);
     }
 
     // --- SEC-01: shared session ownership ----------------------------------------------

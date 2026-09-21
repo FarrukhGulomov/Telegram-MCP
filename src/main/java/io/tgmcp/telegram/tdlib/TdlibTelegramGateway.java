@@ -1,5 +1,9 @@
 package io.tgmcp.telegram.tdlib;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -16,6 +20,7 @@ import java.util.function.Consumer;
 import io.tgmcp.common.KeyMaterial;
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.telegram.gateway.ConnectionRef;
+import io.tgmcp.telegram.gateway.DownloadedMedia;
 import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
@@ -28,6 +33,7 @@ import io.tgmcp.telegram.gateway.RemoteParticipant;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
+import io.tgmcp.telegram.gateway.TelegramGatewayException;
 import io.tgmcp.telegram.gateway.TelegramPermissionException;
 import io.tgmcp.telegram.gateway.TelegramTransientException;
 import org.slf4j.Logger;
@@ -228,7 +234,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
         long chatId = update.path("chat_id").asLong();
         for (JsonNode idNode : update.path("message_ids")) {
             bufferRevision(chatId, new RemoteMessage(idNode.asLong(), null, null, Instant.EPOCH, null, true, "",
-                    null));
+                    null, null, null));
         }
     }
 
@@ -712,6 +718,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
         Long senderId = "messageSenderUser".equals(sender.path("@type").asString(""))
                 ? sender.path("user_id").asLong() : null;
         long editDate = message.path("edit_date").asLong(0L);
+        MediaRef media = extractMedia(message.path("content"));
         return new RemoteMessage(
                 message.path("id").asLong(),
                 senderId,
@@ -721,7 +728,9 @@ public class TdlibTelegramGateway implements TelegramGateway {
                 false,
                 extractText(message.path("content")),
                 message.path("reply_to").path("message_id").asLong(0L) == 0L
-                        ? null : message.path("reply_to").path("message_id").asLong());
+                        ? null : message.path("reply_to").path("message_id").asLong(),
+                media == null ? null : media.kind(),
+                media == null ? null : media.remoteFileId());
     }
 
     /**
@@ -746,6 +755,54 @@ public class TdlibTelegramGateway implements TelegramGateway {
         }
         String caption = content.path("caption").path("text").asString("");
         return caption.isEmpty() ? label : label + ": " + caption;
+    }
+
+    /** @see RemoteMessage#mediaKind() */
+    private record MediaRef(String kind, String remoteFileId) {
+    }
+
+    /**
+     * Resolves the durable TDLib file reference for a message's visual preview -- the photo
+     * itself, or a video/video-note/animation's already-generated thumbnail frame (never the
+     * full video: see {@link RemoteMessage#mediaKind()}'s javadoc for why). {@code null} for
+     * every other content type, and also when the expected size/thumbnail field is missing
+     * from what TDLib reported (better to have no preview than to store a broken reference).
+     */
+    private static MediaRef extractMedia(JsonNode content) {
+        String type = content.path("@type").asString("");
+        String remoteFileId = switch (type) {
+            case "messagePhoto" -> bestPhotoSizeRemoteId(content.path("photo").path("sizes"));
+            case "messageVideo" -> thumbnailRemoteId(content.path("video").path("thumbnail"));
+            case "messageVideoNote" -> thumbnailRemoteId(content.path("video_note").path("thumbnail"));
+            case "messageAnimation" -> thumbnailRemoteId(content.path("animation").path("thumbnail"));
+            default -> null;
+        };
+        if (remoteFileId == null) {
+            return null;
+        }
+        return new MediaRef("messagePhoto".equals(type) ? "PHOTO" : "VIDEO_THUMBNAIL", remoteFileId);
+    }
+
+    /** Prefers TDLib's "m" (medium, ~320px) size when present; falls back to whichever is first. */
+    private static String bestPhotoSizeRemoteId(JsonNode sizes) {
+        if (!sizes.isArray() || sizes.isEmpty()) {
+            return null;
+        }
+        for (JsonNode size : sizes) {
+            if ("m".equals(size.path("type").asString(""))) {
+                String id = size.path("photo").path("remote").path("id").asString("");
+                if (!id.isEmpty()) {
+                    return id;
+                }
+            }
+        }
+        String id = sizes.get(0).path("photo").path("remote").path("id").asString("");
+        return id.isEmpty() ? null : id;
+    }
+
+    private static String thumbnailRemoteId(JsonNode thumbnail) {
+        String id = thumbnail.path("file").path("remote").path("id").asString("");
+        return id.isEmpty() ? null : id;
     }
 
     private static String mediaLabel(JsonNode content, String type) {
@@ -834,6 +891,66 @@ public class TdlibTelegramGateway implements TelegramGateway {
         if (!this.config.realAccountAccessAuthorized()) {
             throw new TelegramAuthException("Real Telegram account access is not authorized. "
                     + "Set tgmcp.telegram.real-account-access-authorized=true only with explicit permission.");
+        }
+    }
+
+    private static final Duration MEDIA_DOWNLOAD_TIMEOUT = Duration.ofSeconds(8);
+    private static final Duration MEDIA_DOWNLOAD_POLL_INTERVAL = Duration.ofMillis(250);
+    /** Every visual preview this adapter ever fetches (a photo, or a video/animation's
+     * already-generated thumbnail) is a JPEG -- Telegram never uses another format for either. */
+    private static final String MEDIA_MIME_TYPE = "image/jpeg";
+
+    @Override
+    public Optional<DownloadedMedia> downloadMessageMedia(ConnectionRef ref, String mediaRemoteFileId) {
+        requireCurrentOwner(ref);
+        JsonNode file;
+        try {
+            file = this.client.request("getRemoteFile", Map.of("remote_file_id", mediaRemoteFileId));
+        }
+        catch (TelegramGatewayException ex) {
+            // The reference no longer resolves -- deleted upstream, or simply too old. An
+            // ordinary, expected outcome for old media, not a transient failure to retry.
+            return Optional.empty();
+        }
+        if (!file.path("local").path("is_downloading_completed").asBoolean(false)) {
+            int fileId = file.path("id").asInt();
+            this.client.request("downloadFile", Map.of(
+                    "file_id", fileId, "priority", 1, "offset", 0, "limit", 0, "synchronous", false));
+            file = awaitDownloadCompletion(fileId);
+            if (file == null) {
+                return Optional.empty();
+            }
+        }
+        String path = file.path("local").path("path").asString("");
+        if (path.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new DownloadedMedia(Files.readAllBytes(Path.of(path)), MEDIA_MIME_TYPE));
+        }
+        catch (IOException ex) {
+            return Optional.empty();
+        }
+    }
+
+    /** {@code null} once {@link #MEDIA_DOWNLOAD_TIMEOUT} elapses without the download finishing. */
+    private JsonNode awaitDownloadCompletion(int fileId) {
+        long deadline = System.nanoTime() + MEDIA_DOWNLOAD_TIMEOUT.toNanos();
+        while (true) {
+            JsonNode file = this.client.request("getFile", Map.of("file_id", fileId));
+            if (file.path("local").path("is_downloading_completed").asBoolean(false)) {
+                return file;
+            }
+            if (System.nanoTime() >= deadline) {
+                return null;
+            }
+            try {
+                Thread.sleep(MEDIA_DOWNLOAD_POLL_INTERVAL.toMillis());
+            }
+            catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
         }
     }
 }

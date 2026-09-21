@@ -10,6 +10,7 @@ import java.util.function.Consumer;
 import com.sun.jna.Native;
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.telegram.gateway.ConnectionRef;
+import io.tgmcp.telegram.gateway.DownloadedMedia;
 import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.MessageWindow;
@@ -147,5 +148,10 @@ public class RoutedTdlibTelegramGateway implements TelegramGateway {
     @Override
     public Optional<String> messageLink(ConnectionRef ref, RemoteChat chat, long tgMessageId) {
         return forTenant(ref.tenantId()).messageLink(ref, chat, tgMessageId);
+    }
+
+    @Override
+    public Optional<DownloadedMedia> downloadMessageMedia(ConnectionRef ref, String mediaRemoteFileId) {
+        return forTenant(ref.tenantId()).downloadMessageMedia(ref, mediaRemoteFileId);
     }
 }

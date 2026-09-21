@@ -96,4 +96,13 @@ public interface TelegramGateway {
      * the correct underlying session -- resolving the link itself needs no other state from it.
      */
     Optional<String> messageLink(ConnectionRef ref, RemoteChat chat, long tgMessageId);
+
+    /**
+     * Fetches the bytes behind a {@link RemoteMessage#mediaRemoteFileId}, on demand -- never
+     * pre-downloaded or cached by this application (see {@link DownloadedMedia}). Empty when
+     * the reference no longer resolves (the message or its media was deleted upstream, or the
+     * reference expired) rather than throwing, since that is an ordinary, expected outcome for
+     * old media, not a transient failure to retry.
+     */
+    Optional<DownloadedMedia> downloadMessageMedia(ConnectionRef ref, String mediaRemoteFileId);
 }

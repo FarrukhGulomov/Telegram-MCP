@@ -7,7 +7,7 @@ import java.util.Map;
 import io.tgmcp.config.AppProperties;
 
 /**
- * Input schemas for the five tools.
+ * Input schemas for the six tools.
  *
  * <p>Written by hand rather than generated, so that the bounds a client sees are exactly the
  * bounds the server enforces: explicit date ranges, capped page sizes, capped query length.
@@ -59,6 +59,14 @@ public final class McpToolSchemas {
                 limits.maxContextMessages(), 5));
         properties.put("after", integer("Messages to include after the target.", 0,
                 limits.maxContextMessages(), 5));
+        return object(properties, List.of("chat_id", "message_id"));
+    }
+
+    public static Map<String, Object> getMessageMedia() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("chat_id", string("Chat identifier from list_allowed_chats."));
+        properties.put("message_id", string(
+                "Telegram message id, as returned in a message item's messageId field (string)."));
         return object(properties, List.of("chat_id", "message_id"));
     }
 

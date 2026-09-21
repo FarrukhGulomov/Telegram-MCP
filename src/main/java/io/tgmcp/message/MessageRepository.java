@@ -24,7 +24,8 @@ public class MessageRepository {
 
     private static final String COLUMNS = """
             id, tenant_id, chat_id, tg_message_id, sender_tg_user_id, sender_display_name,
-            sent_at, edited_at, deleted_at, content, reply_to_tg_message_id, source_link
+            sent_at, edited_at, deleted_at, content, reply_to_tg_message_id, source_link,
+            media_kind, media_remote_file_id
             """;
 
     private final JdbcClient jdbc;
@@ -42,16 +43,21 @@ public class MessageRepository {
         this.jdbc.sql("""
                         INSERT INTO messages
                             (id, tenant_id, chat_id, tg_message_id, sender_tg_user_id, sender_display_name,
-                             sent_at, edited_at, content, reply_to_tg_message_id, source_link, updated_at)
+                             sent_at, edited_at, content, reply_to_tg_message_id, source_link,
+                             media_kind, media_remote_file_id, updated_at)
                         VALUES
                             (:id, :tenantId, :chatId, :tgMessageId, :senderTgUserId, :senderDisplayName,
-                             :sentAt, :editedAt, :content, :replyTo, :sourceLink, now())
+                             :sentAt, :editedAt, :content, :replyTo, :sourceLink,
+                             :mediaKind, :mediaRemoteFileId, now())
                         ON CONFLICT (tenant_id, chat_id, tg_message_id) DO UPDATE SET
                              sender_display_name = EXCLUDED.sender_display_name,
                              edited_at = EXCLUDED.edited_at,
                              content = CASE WHEN messages.deleted_at IS NULL THEN EXCLUDED.content ELSE '' END,
                              reply_to_tg_message_id = EXCLUDED.reply_to_tg_message_id,
                              source_link = EXCLUDED.source_link,
+                             media_kind = CASE WHEN messages.deleted_at IS NULL THEN EXCLUDED.media_kind ELSE NULL END,
+                             media_remote_file_id = CASE WHEN messages.deleted_at IS NULL
+                                                         THEN EXCLUDED.media_remote_file_id ELSE NULL END,
                              updated_at = now()
                         """)
                 .param("id", message.id())
@@ -65,6 +71,8 @@ public class MessageRepository {
                 .param("content", message.content())
                 .param("replyTo", message.replyToTgMessageId())
                 .param("sourceLink", message.sourceLink())
+                .param("mediaKind", message.mediaKind())
+                .param("mediaRemoteFileId", message.mediaRemoteFileId())
                 .update();
     }
 
@@ -76,7 +84,8 @@ public class MessageRepository {
     public int markDeleted(UUID tenantId, UUID chatId, long tgMessageId, Instant deletedAt) {
         return this.jdbc.sql("""
                         UPDATE messages
-                           SET deleted_at = COALESCE(deleted_at, :deletedAt), content = '', updated_at = now()
+                           SET deleted_at = COALESCE(deleted_at, :deletedAt), content = '',
+                               media_kind = NULL, media_remote_file_id = NULL, updated_at = now()
                          WHERE tenant_id = :tenantId AND chat_id = :chatId AND tg_message_id = :tgMessageId
                         """)
                 .param("tenantId", tenantId)
@@ -346,6 +355,8 @@ public class MessageRepository {
                 Jdbc.instant(rs, "deleted_at"),
                 rs.getString("content"),
                 rs.getObject("reply_to_tg_message_id", Long.class),
-                rs.getString("source_link"));
+                rs.getString("source_link"),
+                rs.getString("media_kind"),
+                rs.getString("media_remote_file_id"));
     }
 }
