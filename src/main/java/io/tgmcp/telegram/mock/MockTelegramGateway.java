@@ -219,7 +219,7 @@ public class MockTelegramGateway implements TelegramGateway {
     }
 
     @Override
-    public Optional<String> messageLink(RemoteChat chat, long tgMessageId) {
+    public Optional<String> messageLink(ConnectionRef ref, RemoteChat chat, long tgMessageId) {
         // Only public chats have a stable https link. We never fabricate one for private chats.
         if (chat.username() == null || chat.username().isBlank()) {
             return Optional.empty();

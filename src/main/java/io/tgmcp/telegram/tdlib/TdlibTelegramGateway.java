@@ -776,7 +776,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
     }
 
     @Override
-    public Optional<String> messageLink(RemoteChat chat, long tgMessageId) {
+    public Optional<String> messageLink(ConnectionRef ref, RemoteChat chat, long tgMessageId) {
         // Real-account testing found getMessageLink answering "Message links are available only
         // for messages in supergroups and channel chats" (code 400) for every single message
         // synced from a private chat or a basic (non-super) group -- a doomed call, not a

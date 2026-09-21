@@ -728,19 +728,19 @@ class TdlibTelegramGatewayTests {
 
         this.client.enqueue("""
                 {"@type":"messageLink","link":"https://t.me/eng/42","is_public":true}""");
-        assertThat(this.gateway.messageLink(chat, 42L)).contains("https://t.me/eng/42");
+        assertThat(this.gateway.messageLink(this.ref, chat, 42L)).contains("https://t.me/eng/42");
 
         // A private link resolves for nobody else, so we hand out nothing rather than a dud.
         this.client.enqueue("""
                 {"@type":"messageLink","link":"https://t.me/c/123/42","is_public":false}""");
-        assertThat(this.gateway.messageLink(chat, 42L)).isEmpty();
+        assertThat(this.gateway.messageLink(this.ref, chat, 42L)).isEmpty();
     }
 
     @Test
     void neverFabricatesALinkWhenTelegramRefuses() {
         this.client.enqueueError(403, "CHANNEL_PRIVATE");
 
-        assertThat(this.gateway.messageLink(new RemoteChat(-100123L, "x", "SUPERGROUP", null, null), 1L))
+        assertThat(this.gateway.messageLink(this.ref, new RemoteChat(-100123L, "x", "SUPERGROUP", null, null), 1L))
                 .isEqualTo(Optional.empty());
     }
 
@@ -750,9 +750,9 @@ class TdlibTelegramGatewayTests {
         // for messages in supergroups and channel chats" for every message in a private chat or
         // a basic group -- a doomed call repeated once per message. No response is enqueued
         // here; ScriptedTdlibClient would throw if the gateway called TDLib at all.
-        assertThat(this.gateway.messageLink(new RemoteChat(5L, "DM", "PRIVATE", null, null), 1L))
+        assertThat(this.gateway.messageLink(this.ref, new RemoteChat(5L, "DM", "PRIVATE", null, null), 1L))
                 .isEmpty();
-        assertThat(this.gateway.messageLink(new RemoteChat(-1L, "Basic group", "GROUP", null, null), 1L))
+        assertThat(this.gateway.messageLink(this.ref, new RemoteChat(-1L, "Basic group", "GROUP", null, null), 1L))
                 .isEmpty();
     }
 

@@ -4,6 +4,7 @@ import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
 import io.tgmcp.telegram.TelegramConnectionService;
 import io.tgmcp.telegram.gateway.LoginMethod;
+import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import org.junit.jupiter.api.Test;
@@ -14,21 +15,22 @@ import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Security-audit finding F01: {@link io.tgmcp.telegram.tdlib.TdlibTelegramGateway} is one
- * native TDLib client shared by the whole process -- its {@code ConnectionRef} parameters are
- * accepted but never used to key any state. Two different owners logging in "at the same time"
- * under that adapter would silently share one real Telegram identity: the second owner's
- * beginLogin would re-authenticate the same native session out from under the first.
+ * Every user account gets its own, fully isolated Telegram connection: this replaces the
+ * previous single-shared-TDLib-session design (security-audit finding SEC-01), where {@link
+ * io.tgmcp.telegram.tdlib.TdlibTelegramGateway} was one native TDLib client shared by the whole
+ * process and {@link TelegramConnectionService} enforced a hard single-connection guard for the
+ * TDLIB adapter -- rejecting a second tenant's login outright while any other tenant's connection
+ * was active.
  *
- * <p>Until a real per-owner native session manager exists, {@link TelegramConnectionService}
- * enforces a hard single-connection guard for the TDLIB adapter: no second owner may start (or
- * continue) a login while another owner's connection is anything but DISCONNECTED. The mock
- * adapter has no shared native state, so the guard only applies when the gateway reports
- * {@link TelegramAdapterKind#TDLIB} -- simulated here by spying the gateway bean, since this
- * environment has no real TDLib binary to exercise the adapter itself against.
+ * <p>{@link io.tgmcp.telegram.tdlib.RoutedTdlibTelegramGateway} now gives each tenant its own
+ * native TDLib client (and its own on-disk session directory) instead, so that guard has been
+ * removed entirely. These tests assert the new invariant it left behind: two different tenants
+ * can each independently connect at the same time, with no cross-tenant interference, whether or
+ * not the configured adapter reports itself as TDLIB -- simulated here by spying the gateway
+ * bean's {@code kind()}, since this environment has no real TDLib binary to exercise
+ * {@code RoutedTdlibTelegramGateway} itself against.
  */
 class TelegramConnectionIsolationTests extends AbstractIntegrationTest {
 
@@ -45,52 +47,49 @@ class TelegramConnectionIsolationTests extends AbstractIntegrationTest {
     }
 
     @Test
-    void secondOwnerCannotBeginLoginWhileAnotherOwnersConnectionIsActiveUnderTdlib() {
+    void twoTenantsCanBothBeginLoginAtTheSameTimeUnderTdlib() {
         Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
         Fixtures.Team teamA = team("isolation-a");
         Fixtures.Team teamB = team("isolation-b");
 
-        this.connectionService.beginLogin(teamA.actor(), LoginMethod.QR_CODE, null);
-
-        assertThatThrownBy(() -> this.connectionService.beginLogin(teamB.actor(), LoginMethod.QR_CODE, null))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("validation.singleConnectionOnly");
+        assertThat(this.connectionService.beginLogin(teamA.actor(), LoginMethod.QR_CODE, null)).isNotNull();
+        assertThat(this.connectionService.beginLogin(teamB.actor(), LoginMethod.QR_CODE, null)).isNotNull();
     }
 
     @Test
-    void secondOwnerCanBeginLoginOnceTheFirstDisconnects() {
+    void disconnectingOneTenantDoesNotAffectAnothersActiveConnection() {
         Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
         Fixtures.Team teamA = team("isolation-c");
         Fixtures.Team teamB = team("isolation-d");
 
         this.connectionService.beginLogin(teamA.actor(), LoginMethod.QR_CODE, null);
+        this.connectionService.beginLogin(teamB.actor(), LoginMethod.QR_CODE, null);
+
         this.connectionService.disconnect(teamA.actor());
 
-        assertThat(this.connectionService.beginLogin(teamB.actor(), LoginMethod.QR_CODE, null)).isNotNull();
+        assertThat(this.connectionService.find(teamA.actor()).orElseThrow().status())
+                .isEqualTo(LoginStage.DISCONNECTED);
+        assertThat(this.connectionService.find(teamB.actor()).orElseThrow().status())
+                .isNotEqualTo(LoginStage.DISCONNECTED);
     }
 
     @Test
-    void theGuardDoesNotApplyToTheMockAdapter() {
+    void theMockAdapterAlsoIsolatesTenantsFromOneAnother() {
         Fixtures.Team teamA = team("isolation-e");
         Fixtures.Team teamB = team("isolation-f");
 
-        this.connectionService.beginLogin(teamA.actor(), LoginMethod.QR_CODE, null);
-
+        assertThat(this.connectionService.beginLogin(teamA.actor(), LoginMethod.QR_CODE, null)).isNotNull();
         assertThat(this.connectionService.beginLogin(teamB.actor(), LoginMethod.QR_CODE, null)).isNotNull();
     }
 
     /**
-     * Security-audit finding SEC-01: {@code requireNoOtherActiveOwner}'s {@code SELECT EXISTS}
-     * used to run with no lock of any kind, so two {@code beginLogin} calls truly overlapping in
-     * time (not just issued one after the other, as every test above does) could both read "no
-     * other active owner" before either had committed, and both would then proceed to claim the
-     * one shared session. {@code TelegramConnectionRepository.acquireSingleOwnerLease()} now
-     * takes a Postgres advisory transaction lock first, serializing every caller of this method
-     * against every other cluster-wide -- this drives two real threads at the guard at the same
-     * moment and asserts exactly one of them wins, the way VT-02 in the audit calls for.
+     * Regression guard for the removed SEC-01 guard: two truly concurrent {@code beginLogin}
+     * calls from different tenants (not just issued one after the other, as the tests above do)
+     * must both succeed -- neither may be rejected as though it were contending for a shared
+     * session that no longer exists.
      */
     @Test
-    void trulyConcurrentBeginLoginAttemptsAreSerializedAndExactlyOneWins() throws Exception {
+    void trulyConcurrentBeginLoginAttemptsFromDifferentTenantsBothSucceed() throws Exception {
         Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
         Fixtures.Team teamA = team("isolation-g");
         Fixtures.Team teamB = team("isolation-h");
@@ -119,12 +118,16 @@ class TelegramConnectionIsolationTests extends AbstractIntegrationTest {
                 }
             });
 
-            boolean aWon = resultA.get(10, java.util.concurrent.TimeUnit.SECONDS);
-            boolean bWon = resultB.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            boolean aSucceeded = resultA.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            boolean bSucceeded = resultB.get(10, java.util.concurrent.TimeUnit.SECONDS);
 
-            assertThat(aWon ^ bWon)
-                    .as("exactly one truly-concurrent beginLogin attempt must win the shared session, never "
-                            + "both and never neither")
+            assertThat(aSucceeded)
+                    .as("a different tenant's concurrent login must never be rejected as contending "
+                            + "for a shared session")
+                    .isTrue();
+            assertThat(bSucceeded)
+                    .as("a different tenant's concurrent login must never be rejected as contending "
+                            + "for a shared session")
                     .isTrue();
         }
         finally {

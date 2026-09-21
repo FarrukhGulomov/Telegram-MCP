@@ -387,7 +387,7 @@ public class ChatSyncService {
             RemoteMessagePage remotePage = this.gateway.fetchMessages(ref, chat.tgChatId(), window);
             if (!remotePage.messages().isEmpty()) {
                 requireNotFenced(tenantId, chat.id(), epoch);
-                ingested += store(tenantId, chat, remotePage.messages(), contextRevision);
+                ingested += store(tenantId, chat, ref, remotePage.messages(), contextRevision);
                 afterId = remotePage.messages().get(remotePage.messages().size() - 1).messageId();
             }
             resumeFrom = remotePage.resumeCursor();
@@ -414,7 +414,7 @@ public class ChatSyncService {
             RemoteMessagePage remotePage = this.gateway.fetchMessages(ref, chat.tgChatId(), window);
             if (!remotePage.messages().isEmpty()) {
                 requireNotFenced(tenantId, chat.id(), epoch);
-                ingested += store(tenantId, chat, remotePage.messages(), contextRevision);
+                ingested += store(tenantId, chat, ref, remotePage.messages(), contextRevision);
                 cursor = remotePage.messages().get(0).messageId();
             }
             if (remotePage.resumeCursor() != null) {
@@ -451,7 +451,7 @@ public class ChatSyncService {
                 applied += this.messageRepository.markDeleted(tenantId, chat.id(), revision.messageId(), now);
             }
             else {
-                store(tenantId, chat, List.of(revision), contextRevision);
+                store(tenantId, chat, ref, List.of(revision), contextRevision);
                 applied++;
             }
         }
@@ -487,7 +487,8 @@ public class ChatSyncService {
      * quarantined here instead of being written: rejected rather than automatically accepted,
      * as the audit's own remediation text requires for an unknown author.
      */
-    private int store(UUID tenantId, Chat chat, List<RemoteMessage> messages, String contextRevision) {
+    private int store(UUID tenantId, Chat chat, ConnectionRef ref, List<RemoteMessage> messages,
+                      String contextRevision) {
         RemoteChat descriptor = new RemoteChat(chat.tgChatId(), chat.title(), chat.chatType(),
                 chat.username(), chat.memberCount());
         int stored = 0;
@@ -508,7 +509,7 @@ public class ChatSyncService {
                 quarantined++;
                 continue;
             }
-            String link = this.gateway.messageLink(descriptor, message.messageId()).orElse(null);
+            String link = this.gateway.messageLink(ref, descriptor, message.messageId()).orElse(null);
             this.messageRepository.upsert(new StoredMessage(Ids.newId(), tenantId, chat.id(),
                     message.messageId(), message.senderTgUserId(), message.senderDisplayName(),
                     message.sentAt(), message.editedAt(), null, message.text() == null ? "" : message.text(),

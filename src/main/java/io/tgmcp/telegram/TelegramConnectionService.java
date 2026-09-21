@@ -22,7 +22,6 @@ import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.RemoteChat;
-import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.session.SessionCipher;
@@ -100,7 +99,6 @@ public class TelegramConnectionService {
             // unexpected" -- a confusing error for something that was never actually a failure.
             return LoginState.of(LoginStage.READY, "login.tdlib.ready");
         }
-        requireNoOtherActiveOwner(actor);
         // Security-audit finding F13: QR-code confirmation happens out of band (the user scans
         // on another device), so it can complete well after this call returns with no request
         // of its own to persist it. Registered before beginLogin() so no transition -- READY
@@ -315,37 +313,6 @@ public class TelegramConnectionService {
         this.auditService.record(actor, AuditAction.CHAT_DISCOVERED, null, AuditService.ALLOWED,
                 Map.of("chatsVisible", chats.size()));
         return chats;
-    }
-
-    /**
-     * F01 mitigation, hardened per security-audit finding SEC-01: {@code TdlibTelegramGateway}
-     * is one native client shared by the whole process, keyed by nothing on its own -- every
-     * {@code ConnectionRef} it receives talks to the same underlying Telegram identity unless
-     * the gateway itself rejects a mismatched one (see {@code TdlibTelegramGateway
-     * .requireCurrentOwner}, the other half of this fix). Until a real per-owner session
-     * manager exists, letting a second owner start (or continue) a login while another owner's
-     * connection is anything but DISCONNECTED would silently mix the two accounts' logins, chat
-     * lists and logouts.
-     *
-     * <p>{@code acquireSingleOwnerLease()} must run first, inside the same transaction as this
-     * check and everything {@code beginLogin} does afterward: the {@code SELECT EXISTS} below
-     * was previously not atomic with that surrounding transaction at all, so two concurrent
-     * {@code beginLogin} calls could both observe "no other active owner" before either had
-     * committed. The advisory lock it takes serializes every caller of this method against
-     * every other, cluster-wide, released automatically when this transaction ends -- the
-     * second caller blocks here until the first has fully committed (or rolled back), then
-     * re-reads current, authoritative state.
-     *
-     * <p>The mock adapter has no shared native state, so this only applies to TDLIB.
-     */
-    private void requireNoOtherActiveOwner(AuthenticatedActor actor) {
-        if (this.gateway.kind() != TelegramAdapterKind.TDLIB) {
-            return;
-        }
-        this.connectionRepository.acquireSingleOwnerLease();
-        if (this.connectionRepository.existsActiveForOtherOwner(actor.tenantId(), actor.userId())) {
-            throw new IllegalStateException("validation.singleConnectionOnly");
-        }
     }
 
     private void persist(AuthenticatedActor actor, TelegramConnection connection, LoginState state) {

@@ -4,9 +4,7 @@ import java.time.Clock;
 
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.mock.MockTelegramGateway;
-import io.tgmcp.telegram.tdlib.NativeTdlibClient;
-import io.tgmcp.telegram.tdlib.TdlibClient;
-import io.tgmcp.telegram.tdlib.TdlibTelegramGateway;
+import io.tgmcp.telegram.tdlib.RoutedTdlibTelegramGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
@@ -57,8 +55,12 @@ public class TelegramConfiguration {
                         + "updateDeleteMessages) has never been verified against a real Telegram account "
                         + "(see docs/production-prerequisites.md). Treat edit/delete sync as unproven for "
                         + "any deployment where it matters until that verification has been done.");
-                TdlibClient client = new NativeTdlibClient("tdjson", objectMapper, 30);
-                yield new TdlibTelegramGateway(client, config, properties.secrets().sessionEncryptionKey());
+                // Each tenant gets its own native TDLib client and session directory, created
+                // lazily on first use -- see RoutedTdlibTelegramGateway's own javadoc for why the
+                // previous single-shared-client design (security-audit finding SEC-01) was
+                // replaced rather than merely guarded.
+                yield new RoutedTdlibTelegramGateway(config, properties.secrets().sessionEncryptionKey(),
+                        objectMapper, "tdjson", 30);
             }
         };
     }

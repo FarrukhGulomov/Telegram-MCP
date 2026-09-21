@@ -84,7 +84,9 @@ public interface TelegramGateway {
 
     /**
      * A deep link to the original message, or empty when no valid public link exists.
-     * Implementations must never synthesise a link they cannot vouch for.
+     * Implementations must never synthesise a link they cannot vouch for. Takes {@code ref} (as
+     * every other method here does) so a multi-tenant implementation can route the lookup to
+     * the correct underlying session -- resolving the link itself needs no other state from it.
      */
-    Optional<String> messageLink(RemoteChat chat, long tgMessageId);
+    Optional<String> messageLink(ConnectionRef ref, RemoteChat chat, long tgMessageId);
 }

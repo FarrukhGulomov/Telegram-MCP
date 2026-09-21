@@ -49,55 +49,6 @@ public class TelegramConnectionRepository {
                 .list();
     }
 
-    /**
-     * Security-audit finding SEC-01: {@code existsActiveForOtherOwner} below is a plain
-     * {@code SELECT}, not an atomic lease acquisition -- two concurrent {@code beginLogin}
-     * transactions could both read "no other active owner" before either had committed, and
-     * both then proceed to claim the one shared native session. {@code
-     * pg_advisory_xact_lock} serializes every caller of this method against every other,
-     * cluster-wide, for the lifetime of the calling transaction (released automatically on
-     * commit or rollback) -- there is no data row to lock instead, since the very first login
-     * ever attempted has none yet. Must be called inside the same transaction that then checks
-     * {@link #existsActiveForOtherOwner} and persists the new owner, or it protects nothing.
-     * The key is an arbitrary constant distinguishing this lock from any other advisory lock
-     * this application might take in the future.
-     */
-    private static final long SINGLE_OWNER_LEASE_LOCK_KEY = 7_285_014_419_581_223_001L;
-
-    public void acquireSingleOwnerLease() {
-        // pg_advisory_xact_lock returns void; cast to text so the driver reports an ordinary
-        // mappable column instead of one Spring has no RowMapper for. The value is discarded --
-        // only the side effect (blocking until the lock is held) matters.
-        jdbc.sql("SELECT pg_advisory_xact_lock(:key)::text")
-                .param("key", SINGLE_OWNER_LEASE_LOCK_KEY)
-                .query(String.class)
-                .single();
-    }
-
-    /**
-     * Whether some owner other than (tenantId, ownerUserId) currently has a non-disconnected
-     * session. The TDLIB adapter is one native client shared process-wide — see {@link
-     * io.tgmcp.telegram.tdlib.TdlibTelegramGateway} — so two owners mid-login (or logged in)
-     * at once would silently share that single Telegram identity. Used to enforce a hard
-     * single-connection guard for that adapter until per-owner native session isolation
-     * exists. Callers must hold {@link #acquireSingleOwnerLease()} first for this check (and
-     * whatever it decides) to be atomic rather than a check-then-act race.
-     */
-    public boolean existsActiveForOtherOwner(UUID tenantId, UUID ownerUserId) {
-        Boolean exists = jdbc.sql("""
-                        SELECT EXISTS (
-                            SELECT 1 FROM telegram_connections
-                             WHERE status <> 'DISCONNECTED'
-                               AND NOT (tenant_id = :tenantId AND owner_user_id = :ownerUserId)
-                        )
-                        """)
-                .param("tenantId", tenantId)
-                .param("ownerUserId", ownerUserId)
-                .query(Boolean.class)
-                .single();
-        return Boolean.TRUE.equals(exists);
-    }
-
     public void insert(TelegramConnection connection) {
         jdbc.sql("""
                         INSERT INTO telegram_connections

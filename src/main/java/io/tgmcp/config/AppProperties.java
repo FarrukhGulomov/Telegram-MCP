@@ -46,6 +46,16 @@ public record AppProperties(@DefaultValue Telegram telegram,
                             * discovered surprise.
                             */
                            @DefaultValue("false") boolean acknowledgeMissingEditDeletionPipeline) {
+
+        /**
+         * A copy of this config scoped to one tenant's own TDLib session directory, so that
+         * per-tenant isolation ({@code RoutedTdlibTelegramGateway}) never lets two tenants'
+         * native clients share on-disk session state.
+         */
+        public Telegram withDatabaseDirectory(String tenantDatabaseDirectory) {
+            return new Telegram(this.adapter, this.apiId, this.apiHash, tenantDatabaseDirectory,
+                    this.realAccountAccessAuthorized, this.acknowledgeMissingEditDeletionPipeline);
+        }
     }
 
     /**
