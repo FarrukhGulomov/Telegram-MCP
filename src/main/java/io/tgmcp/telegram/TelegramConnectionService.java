@@ -103,8 +103,7 @@ public class TelegramConnectionService {
         // on another device), so it can complete well after this call returns with no request
         // of its own to persist it. Registered before beginLogin() so no transition -- READY
         // included -- can be missed.
-        this.gateway.onStateChange(connection.ref(),
-                asyncState -> applyAsyncStateChange(actor, connection, asyncState));
+        reclaimOwnership(actor, connection);
         LoginState state = this.gateway.beginLogin(connection.ref(), method, phoneNumber);
         persist(actor, connection, state);
         // Deliberately records the method, never the phone number.
@@ -182,6 +181,7 @@ public class TelegramConnectionService {
     @Transactional
     public LoginState submitCode(AuthenticatedActor actor, String code) {
         TelegramConnection connection = getOrCreate(actor);
+        reclaimOwnership(actor, connection);
         LoginState state = this.gateway.submitCode(connection.ref(), code);
         persist(actor, connection, state);
         return state;
@@ -190,6 +190,7 @@ public class TelegramConnectionService {
     @Transactional
     public LoginState resendCode(AuthenticatedActor actor) {
         TelegramConnection connection = getOrCreate(actor);
+        reclaimOwnership(actor, connection);
         LoginState state = this.gateway.resendCode(connection.ref());
         persist(actor, connection, state);
         return state;
@@ -198,9 +199,30 @@ public class TelegramConnectionService {
     @Transactional
     public LoginState submitPassword(AuthenticatedActor actor, String password) {
         TelegramConnection connection = getOrCreate(actor);
+        reclaimOwnership(actor, connection);
         LoginState state = this.gateway.submitPassword(connection.ref(), password);
         persist(actor, connection, state);
         return state;
+    }
+
+    /**
+     * Confirmed from live production logs: {@code TdlibTelegramGateway.currentOwner} (and, since
+     * the per-tenant TDLib routing refactor, the very existence of that tenant's {@code
+     * TdlibTelegramGateway} instance) is in-memory only and gone after any restart -- a resend
+     * or code/password submission reaching a freshly (re)created instance whose {@code
+     * currentOwner} is still {@code null} threw {@link TelegramAuthException} outright,
+     * surfacing as an unhandled error instead of the ordinary retry it actually is. Re-registers
+     * the same real listener {@link #beginLogin} does (not a no-op, unlike {@link
+     * #reclaimOwnershipIfPersistedAsOwner}'s use for {@link #disconnect}) so a later async
+     * transition -- in particular the {@code authorizationStateReady} that submitting a correct
+     * code or password triggers moments after this call returns -- still reaches {@link
+     * #applyAsyncStateChange} and gets persisted, rather than silently going nowhere.
+     * Idempotent when ownership was never lost: {@code onStateChange} just re-affirms the same
+     * ref and re-sends TDLib parameters only if they were not already sent for this epoch.
+     */
+    private void reclaimOwnership(AuthenticatedActor actor, TelegramConnection connection) {
+        this.gateway.onStateChange(connection.ref(),
+                asyncState -> applyAsyncStateChange(actor, connection, asyncState));
     }
 
     public LoginState status(AuthenticatedActor actor) {
@@ -253,12 +275,10 @@ public class TelegramConnectionService {
      *
      * <p>Reclaims ownership for this ref only when its own persisted row proves it previously
      * engaged in a real login (anything but {@code DISCONNECTED}) -- never unconditionally,
-     * which would let a tenant who merely visited {@code /connect} (a still-{@code
-     * DISCONNECTED} row) disconnect whatever real account another tenant is legitimately using,
-     * exactly the multi-tenant-bleed finding SEC-01 exists to prevent.
-     * TelegramConnectionService#beginLogin's own {@code requireNoOtherActiveOwner} already
-     * guarantees at most one connection is ever persisted past {@code DISCONNECTED} at a time,
-     * so this reclaim can never conflict with a different, currently-legitimate owner.
+     * which would claim a shared native session on behalf of a tenant who merely visited
+     * {@code /connect} (a still-{@code DISCONNECTED} row) with nothing of their own to reclaim.
+     * Each tenant now has its own {@code TdlibTelegramGateway} instance (per-tenant TDLib
+     * routing), so this can never conflict with a different tenant's ownership regardless.
      */
     private void reclaimOwnershipIfPersistedAsOwner(TelegramConnection connection) {
         if (connection.status() != LoginStage.DISCONNECTED) {
