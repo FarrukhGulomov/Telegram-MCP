@@ -27,6 +27,10 @@ public class ChatAccessException extends RuntimeException {
         return new ChatAccessException(AccessErrorCode.SYNC_PENDING, detail);
     }
 
+    public static ChatAccessException connectionUnavailable(String detail) {
+        return new ChatAccessException(AccessErrorCode.CONNECTION_UNAVAILABLE, detail);
+    }
+
     public static ChatAccessException invalidArgument(String detail) {
         return new ChatAccessException(AccessErrorCode.INVALID_ARGUMENT, detail);
     }

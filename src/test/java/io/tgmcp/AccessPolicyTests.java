@@ -18,6 +18,8 @@ import io.tgmcp.security.McpScopes;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
 import io.tgmcp.sync.ChatSyncService;
+import io.tgmcp.telegram.TelegramConnectionRepository;
+import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.mock.SyntheticDataset;
 import io.tgmcp.tenancy.AuthenticatedActor;
 import org.junit.jupiter.api.Test;
@@ -47,6 +49,9 @@ class AccessPolicyTests extends AbstractIntegrationTest {
 
     @Autowired
     private ChatActivationRepository activations;
+
+    @Autowired
+    private TelegramConnectionRepository connections;
 
     private McpCallContext contextFor(Fixtures.Team team) {
         return new McpCallContext(team.actor(), McpScopes.ANTHROPIC_CLAUDE);
@@ -142,6 +147,28 @@ class AccessPolicyTests extends AbstractIntegrationTest {
         McpSchema.CallToolResult result = history(chat.team(), chat.chat().id());
         assertThat(result.isError()).isTrue();
         assertThat(errorCode(result)).isEqualTo("CONSENT_REQUIRED");
+    }
+
+    /**
+     * Security-audit finding SEC-R03: the freshness check above only ever fires once staleness
+     * has accumulated for a full budget window -- it says nothing about a connection known to be
+     * down *right now* (e.g. mid re-login, after {@code PreAuthLoginService#begin}'s {@code
+     * prepareForFreshLogin} tears it down before re-authenticating). A chat must stop being
+     * readable the instant its tenant's Telegram connection is not READY, not only after the
+     * freshness budget has separately expired.
+     */
+    @Test
+    void blocksReadsWhileTheTenantsTelegramConnectionIsNotReady() {
+        Fixtures.ReadyChat chat = readyAndSynced("sec-r03-disconnected");
+        assertThat(history(chat.team(), chat.chat().id()).isError())
+                .as("connected and freshly synced, this chat is readable").isFalse();
+
+        this.connections.updateStatus(chat.team().tenant().id(), chat.team().connection().id(),
+                LoginStage.WAIT_CODE, null, null, null, null);
+
+        McpSchema.CallToolResult result = history(chat.team(), chat.chat().id());
+        assertThat(result.isError()).isTrue();
+        assertThat(errorCode(result)).isEqualTo("CONNECTION_UNAVAILABLE");
     }
 
     @Test

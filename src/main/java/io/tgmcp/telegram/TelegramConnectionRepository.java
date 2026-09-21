@@ -26,6 +26,19 @@ public class TelegramConnectionRepository {
         this.jdbc = jdbc;
     }
 
+    /**
+     * The tenant's one shared Telegram connection, regardless of which of its users' logins
+     * created it -- every chat, activation, and consent record is scoped by tenant alone, not
+     * by which specific user signed the connection in, so callers that only know the tenant
+     * (MCP access checks in particular) need to reach it without also knowing the owner.
+     */
+    public Optional<TelegramConnection> findByTenant(UUID tenantId) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM telegram_connections WHERE tenant_id = :tenantId")
+                .param("tenantId", tenantId)
+                .query(this::map)
+                .optional();
+    }
+
     public Optional<TelegramConnection> findByOwner(UUID tenantId, UUID ownerUserId) {
         return jdbc.sql("SELECT " + COLUMNS
                         + " FROM telegram_connections WHERE tenant_id = :tenantId AND owner_user_id = :ownerUserId")

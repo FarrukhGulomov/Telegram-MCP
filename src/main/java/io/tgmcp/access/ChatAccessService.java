@@ -21,6 +21,8 @@ import io.tgmcp.consent.ConsentCoverage;
 import io.tgmcp.consent.ConsentService;
 import io.tgmcp.sync.SyncCheckpoint;
 import io.tgmcp.sync.SyncCheckpointRepository;
+import io.tgmcp.telegram.TelegramConnectionRepository;
+import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.tenancy.AuthenticatedActor;
 
 import org.springframework.stereotype.Service;
@@ -42,6 +44,7 @@ public class ChatAccessService {
     private final ChatActivationRepository activationRepository;
     private final ConsentService consentService;
     private final SyncCheckpointRepository checkpointRepository;
+    private final TelegramConnectionRepository connectionRepository;
     private final Duration membershipFreshnessBudget;
     private final Clock clock;
 
@@ -49,12 +52,14 @@ public class ChatAccessService {
                              ChatActivationRepository activationRepository,
                              ConsentService consentService,
                              SyncCheckpointRepository checkpointRepository,
+                             TelegramConnectionRepository connectionRepository,
                              AppProperties properties,
                              Clock clock) {
         this.chatRepository = chatRepository;
         this.activationRepository = activationRepository;
         this.consentService = consentService;
         this.checkpointRepository = checkpointRepository;
+        this.connectionRepository = connectionRepository;
         this.membershipFreshnessBudget = properties.sync().membershipFreshnessBudget();
         this.clock = clock;
     }
@@ -85,6 +90,9 @@ public class ChatAccessService {
             SyncCheckpoint checkpoint = this.checkpointRepository
                     .find(actor.tenantId(), activation.chatId()).orElse(null);
             if (checkpoint != null && checkpoint.everSucceeded() && membershipStale(checkpoint)) {
+                continue;
+            }
+            if (!connectionReady(actor.tenantId())) {
                 continue;
             }
             allowed.add(new AuthorizedChat(chat.get(), activation, coverage, checkpoint));
@@ -152,6 +160,20 @@ public class ChatAccessService {
                         "Membership could not be reconfirmed recently enough to trust; this chat will become "
                                 + "readable again once synchronisation succeeds.");
             }
+            // Security-audit finding SEC-R03: the freshness check above only ever catches
+            // staleness that has already accumulated for a full budget window (default 24h) --
+            // it says nothing about whether the connection is live *right now*. A returning
+            // account's fresh login (PreAuthLoginService#begin -> prepareForFreshLogin) tears
+            // the connection down before re-authenticating it, which can otherwise leave a chat
+            // fully ACTIVE and still "fresh enough" by the clock while nothing could actually
+            // reconfirm membership or permissions if it needed to. Blocking reads the instant
+            // the connection is known not to be READY closes that gap immediately rather than
+            // waiting out the freshness budget.
+            if (!connectionReady(actor.tenantId())) {
+                throw ChatAccessException.connectionUnavailable(
+                        "This account's Telegram connection is not currently active; this chat will become "
+                                + "readable again once it reconnects.");
+            }
         }
         return new AuthorizedChat(chat, activation, coverage, checkpoint);
     }
@@ -162,6 +184,12 @@ public class ChatAccessService {
         }
         return Duration.between(checkpoint.lastSuccessAt(), this.clock.instant())
                 .compareTo(this.membershipFreshnessBudget) > 0;
+    }
+
+    private boolean connectionReady(UUID tenantId) {
+        return this.connectionRepository.findByTenant(tenantId)
+                .map(connection -> connection.status() == LoginStage.READY)
+                .orElse(false);
     }
 
     /**
