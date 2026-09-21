@@ -160,16 +160,28 @@ Also outstanding:
   the surrounding request, so a burst of concurrent state-changing calls could exhaust it while
   waiting on their own audit write -- this needs load testing against a real deployment's
   expected concurrency, not a change this codebase can safely make blind.
-- **Release pipeline coverage beyond the test gate (security-audit finding SEC-18).** CI now
-  enforces the test suite and builds a report-only container vulnerability scan (Trivy,
-  `CRITICAL,HIGH`, non-blocking); it does not yet: fail the build on unresolved High/Critical
-  findings (this needs the current findings triaged first, so day-one noise doesn't make the
-  gate impractical); run targeted concurrency/race tests as their own suite; generate an SBOM;
-  verify TDLib native-library provenance; publish images by immutable digest with signing
-  (e.g. cosign) rather than a mutable tag; or enforce branch protection requiring this workflow
-  to pass before merge, which is a GitHub repository setting outside this codebase's control.
-  These are real gaps in the audit's fuller remediation, left as explicit operational follow-up
-  rather than pipeline steps added without anything to verify them against in this environment.
+- **Release pipeline coverage beyond the test gate (security-audit findings SEC-18, SEC-R11,
+  SEC-R12).** CI enforces the test suite, fails the build on any CRITICAL/HIGH container
+  vulnerability that has a known fix available (Trivy, `ignore-unfixed: true`, blocking) with
+  a separate always-on report-only pass over everything else for visibility, and fails the
+  build on any secret Gitleaks finds anywhere in the commit history. The previous
+  report-only-everything stance was deliberately narrowed rather than removed: a finding with
+  no fix to apply yet still cannot block a release (there is nothing actionable to do about it
+  before shipping), so it stays report-only; a finding a base-image or dependency bump would
+  resolve has no such excuse. **This blocking gate has not been validated against this
+  codebase's actual current image** -- it was added and wired up without a local Docker daemon
+  available to run Trivy/Gitleaks against the real build first, so the very first CI run after
+  this change is the first time either scan has actually executed against this repository's
+  images and history. If it fails on a genuine pre-existing finding rather than something this
+  change introduced, that is expected first-run noise to triage (bump the flagged package/base
+  image, or add a narrowly-scoped, commented Trivy/Gitleaks ignore entry for a finding that
+  cannot yet be fixed), not evidence the gate itself is wrong. It does not yet: run targeted
+  concurrency/race tests as their own suite; generate an SBOM; verify TDLib native-library
+  provenance; publish images by immutable digest with signing (e.g. cosign) rather than a
+  mutable tag; or enforce branch protection requiring this workflow to pass before merge, which
+  is a GitHub repository setting outside this codebase's control. These are real gaps in the
+  audit's fuller remediation, left as explicit operational follow-up rather than pipeline steps
+  added without anything to verify them against in this environment.
 - **Key rotation and recovery beyond OAuth token overlap (security-audit finding SEC-17).**
   `tgmcp.secrets.retiring-oauth-verification-keys` now gives OAuth access tokens an actual
   rotation overlap window (see section 4). Three related gaps remain unaddressed: (1)

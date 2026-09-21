@@ -7,8 +7,14 @@ name: CI
 # test added across the F01-F20 and SEC-01-SEC-16 remediation passes) must pass against a real
 # PostgreSQL instance before a release image is even built.
 on:
+  # This repository's actual default branch is `claude/telegram-mcp-consent-d67byz`, not
+  # `main`/`master` -- every change lands there by a direct push with no pull request. A
+  # `branches: [main, master]` filter here would mean this workflow's push trigger never
+  # fires on this repository at all, silently defeating SEC-18's whole premise ("the full
+  # test suite ... must pass ... before a release image is even built"). Naming the real
+  # default branch explicitly, alongside the conventional ones for a future rename or fork.
   push:
-    branches: [main, master]
+    branches: [main, master, claude/telegram-mcp-consent-d67byz]
   pull_request:
 
 permissions:
@@ -67,14 +73,46 @@ jobs:
       - name: Build image (not pushed)
         run: docker build -t telegram-consent-mcp:ci .
 
-      # Security-audit finding SEC-18: dependency and container scanning. Report-only for now
-      # (exit-code 0) -- this is the first pass at wiring scanning in at all, and turning it
-      # into a hard merge gate needs the findings triaged first (see
-      # docs/production-prerequisites.md) so day-one noise doesn't make the gate impractical.
-      - name: Scan image for known vulnerabilities (report-only)
+      # Security-audit findings SEC-18/SEC-R11: dependency and container scanning. Blocking
+      # on CRITICAL/HIGH findings that have a known fix available (ignore-unfixed: true) --
+      # the "day-one noise" concern that originally kept this report-only was specifically
+      # about findings with no fix to apply yet; a finding a fixed base image or dependency
+      # bump would resolve has no such excuse, so failing the build on those costs nothing
+      # while catching real, actionable regressions before a release image ships.
+      - name: Scan image for known, fixable vulnerabilities (blocking)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: telegram-consent-mcp:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      # Report-only pass over everything else (including not-yet-fixable findings), purely
+      # for visibility -- never blocks the build.
+      - name: Scan image for known vulnerabilities (report-only, includes unfixed)
+        if: always()
         uses: aquasecurity/trivy-action@0.29.0
         with:
           image-ref: telegram-consent-mcp:ci
           format: table
           severity: CRITICAL,HIGH
           exit-code: '0'
+
+  secret-scan:
+    name: Scan for committed secrets (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Security-audit finding SEC-R12: scans the full commit history, not just the
+          # current working tree, so a secret committed and later removed is still caught.
+          fetch-depth: 0
+
+      # Runs the open-source gitleaks CLI directly via its official image rather than a
+      # third-party GitHub Action wrapper, so this has no license requirement regardless of
+      # repository visibility.
+      - name: Run gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source /repo -v --redact --exit-code 1
