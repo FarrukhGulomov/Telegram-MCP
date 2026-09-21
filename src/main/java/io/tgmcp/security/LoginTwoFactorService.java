@@ -20,12 +20,12 @@ import io.tgmcp.tenancy.AppUser;
 import org.springframework.stereotype.Service;
 
 /**
- * The second factor required to actually establish a session: after a password check ({@code
- * WebSecurityConfig}'s form login) or a Telegram widget confirmation ({@code
- * TelegramLoginController}), a short numeric code sent to the account's linked Telegram chat
- * must also be entered. Neither of those two proves the visitor currently has access to that
- * Telegram account -- a password can be guessed or reused elsewhere, and the widget confirms
- * only whichever Telegram session happens to be logged into the browser -- this closes that gap.
+ * Sends and verifies the short numeric code delivered to an account's linked Telegram chat --
+ * three different call sites reach it for three different reasons: a password check ({@code
+ * WebSecurityConfig}'s form-login success handler) that alone never proves the visitor currently
+ * has access to that Telegram account, a just-completed registration ({@code
+ * RegistrationController}), and "sign in with a Telegram code" ({@code
+ * TelegramCodeLoginController}), where the code is the entire login rather than a second factor.
  *
  * <p>"Pending" state (which {@link AppUser} is one code entry away from a session) lives in the
  * {@link HttpSession} attribute {@link #SESSION_KEY}, deliberately never in

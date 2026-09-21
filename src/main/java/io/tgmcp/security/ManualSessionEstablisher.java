@@ -17,9 +17,9 @@ import org.springframework.stereotype.Component;
 /**
  * Establishes or clears a signed-in {@link SecurityContext} outside the normal username/password
  * form-login path -- used once a visitor has actually proven who they are through some other
- * means ({@code TelegramLoginController}'s widget callback, or {@code LoginVerificationController}
- * after a second-factor code), and, in the other direction, to immediately undo the session a
- * password check alone established while a second factor is still outstanding.
+ * means ({@code LoginVerificationController}, once a Telegram-delivered code checks out), and,
+ * in the other direction, to immediately undo the session a password check alone established
+ * while a second factor is still outstanding.
  */
 @Component
 public class ManualSessionEstablisher {

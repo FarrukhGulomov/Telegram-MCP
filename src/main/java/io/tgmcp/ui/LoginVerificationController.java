@@ -10,14 +10,12 @@ import io.tgmcp.security.ManualSessionEstablisher;
 import io.tgmcp.security.TelegramBotMessageException;
 import io.tgmcp.tenancy.AppUser;
 import io.tgmcp.tenancy.AppUserRepository;
-import io.tgmcp.telegram.TelegramConnectionService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Controller;
-import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -28,28 +26,27 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
  * code to must enter it here before a session actually exists. Reachable without any
  * authentication (like {@link RegistrationController}), so it handles its own errors locally
  * rather than through {@link UiExceptionHandler}.
+ *
+ * <p>The same entry point closes out three different starting points -- a password check that
+ * required a second factor, a "sign in with a Telegram code" attempt ({@link
+ * TelegramCodeLoginController}), and a just-completed registration -- all of which end the same
+ * way once the code checks out: an ordinary signed-in session, landing on the dashboard.
  */
 @Controller
 public class LoginVerificationController {
 
     private static final Logger log = LoggerFactory.getLogger(LoginVerificationController.class);
 
-    /** Set by {@code TelegramLoginController} for a brand-new "Sign in with Telegram" signup only. */
-    static final String AUTOSTART_QR_SESSION_KEY = "tgmcp.autoStartQrAfterVerification";
-
     private final LoginTwoFactorService twoFactorService;
     private final AppUserRepository users;
     private final ManualSessionEstablisher sessionEstablisher;
-    private final TelegramConnectionService connectionService;
     private final MessageSource messages;
 
     public LoginVerificationController(LoginTwoFactorService twoFactorService, AppUserRepository users,
-                                       ManualSessionEstablisher sessionEstablisher,
-                                       TelegramConnectionService connectionService, MessageSource messages) {
+                                       ManualSessionEstablisher sessionEstablisher, MessageSource messages) {
         this.twoFactorService = twoFactorService;
         this.users = users;
         this.sessionEstablisher = sessionEstablisher;
-        this.connectionService = connectionService;
         this.messages = messages;
     }
 
@@ -80,12 +77,6 @@ public class LoginVerificationController {
             return "redirect:/login?telegramError";
         }
         this.sessionEstablisher.signIn(user, request, response);
-        Object autoStartQr = request.getSession().getAttribute(AUTOSTART_QR_SESSION_KEY);
-        request.getSession().removeAttribute(AUTOSTART_QR_SESSION_KEY);
-        if (Boolean.TRUE.equals(autoStartQr)) {
-            return TelegramLoginController.startQrConnectionFor(user, this.connectionService, this.messages,
-                    redirectAttributes);
-        }
         return "redirect:/";
     }
 

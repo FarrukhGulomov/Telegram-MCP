@@ -96,9 +96,29 @@ public class WebSecurityConfig {
         return http.build();
     }
 
-    /** Management UI: form login, session cookie, CSRF protection, conservative headers. */
+    /**
+     * The Telegram bot webhook ({@code TelegramBotWebhookController}): stateless, no CSRF (a
+     * webhook delivery carries no session cookie or CSRF token to present), authenticated only
+     * by {@link TelegramWebhookSecret} inside the controller itself -- same reasoning as {@link
+     * #mcpFilterChain} for why this needs its own chain rather than living inside {@link
+     * #managementUiFilterChain}'s session-and-CSRF-oriented one.
+     */
     @Bean
     @Order(3)
+    public SecurityFilterChain telegramWebhookFilterChain(HttpSecurity http) throws Exception {
+        http.securityMatcher("/telegram/bot-webhook")
+                .authorizeHttpRequests(requests -> requests.anyRequest().permitAll())
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .csrf(org.springframework.security.config.annotation.web.configurers.CsrfConfigurer::disable)
+                .headers(headers -> headers
+                        .referrerPolicy(referrer -> referrer
+                                .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)));
+        return http.build();
+    }
+
+    /** Management UI: form login, session cookie, CSRF protection, conservative headers. */
+    @Bean
+    @Order(4)
     public SecurityFilterChain managementUiFilterChain(HttpSecurity http, AppProperties properties,
                                                         java.time.Clock clock,
                                                         SecurityContextRepository securityContextRepository,
@@ -120,10 +140,6 @@ public class WebSecurityConfig {
                 properties.abuseControls().selfRegistrationsPerHourPerIp(), java.time.Duration.ofHours(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/register", registrationLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
-        io.tgmcp.ratelimit.RateLimiter telegramLoginLimiter = new io.tgmcp.ratelimit.RateLimiter(
-                properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
-        http.addFilterBefore(new PreAuthRateLimitFilter("GET", "/login/telegram/callback", telegramLoginLimiter),
-                org.springframework.security.web.context.SecurityContextHolderFilter.class);
         // The second-factor code entry is exactly as guessable-by-brute-force as a password
         // would be if nothing budgeted attempts against it independently of the per-code
         // attempt cap LoginTwoFactorService already enforces -- IP-keyed, same budget and
@@ -132,10 +148,17 @@ public class WebSecurityConfig {
                 properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/verify", verifyLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
+        // "Sign in with a Telegram code" is, like /login, unauthenticated by definition -- same
+        // budget and reasoning as loginLimiter above.
+        io.tgmcp.ratelimit.RateLimiter telegramCodeLoginLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/telegram-code", telegramCodeLoginLimiter),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
         http.securityContext(context -> context.securityContextRepository(securityContextRepository));
         http.authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/login", "/login/telegram", "/login/telegram/callback",
-                                "/login/verify", "/login/verify/resend", "/register", "/register/link-telegram",
+                        .requestMatchers("/login", "/login/verify", "/login/verify/resend",
+                                "/login/telegram-code", "/register", "/register/link-telegram",
+                                "/register/link-telegram/status",
                                 "/css/**", "/js/**", "/actuator/health").permitAll()
                         // Security-audit finding F17: AppUser carries an OWNER/ADMIN/MEMBER
                         // role, and DatabaseUserDetailsService already turns it into a granted
@@ -233,11 +256,11 @@ public class WebSecurityConfig {
     }
 
     /**
-     * Shared with {@link io.tgmcp.ui.TelegramLoginController} (via {@code managementUiFilterChain}'s
-     * explicit {@code .securityContext(...)} wiring below) so that a Telegram sign-in, which has
-     * no password to hand {@code AuthenticationManager} and must establish the session's {@link
-     * SecurityContext} directly, persists it exactly the way this same filter chain reads it
-     * back on every later request.
+     * Shared with {@link ManualSessionEstablisher} (via {@code managementUiFilterChain}'s
+     * explicit {@code .securityContext(...)} wiring below) so that a session established outside
+     * the normal password check -- after a Telegram-delivered code, which has no password to
+     * hand {@code AuthenticationManager} -- persists its {@link SecurityContext} exactly the way
+     * this same filter chain reads it back on every later request.
      */
     @Bean
     public SecurityContextRepository securityContextRepository() {

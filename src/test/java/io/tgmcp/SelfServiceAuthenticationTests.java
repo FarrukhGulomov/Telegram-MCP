@@ -1,15 +1,9 @@
 package io.tgmcp;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.time.Duration;
-import java.util.HexFormat;
-import java.util.SortedMap;
-import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-
+import io.tgmcp.security.TelegramWebhookSecret;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.tenancy.AppUser;
 import io.tgmcp.tenancy.AppUserRepository;
@@ -17,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
@@ -34,12 +29,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Users change frequently, so an operator should not have to create every account by hand: an
- * email/password sign-up form, and a redirect-based "Sign in with Telegram" that provisions its
- * own account on first use. Once "Sign in with Telegram" is configured, neither path alone is
- * sufficient any more: registration also links a Telegram identity before the account is
- * created at all, and every sign-in (password or widget) ends at a mandatory Telegram-delivered
- * code before a session actually exists. See {@link io.tgmcp.tenancy.SelfRegistrationService},
- * {@link io.tgmcp.ui.TelegramLoginController} and {@link io.tgmcp.security.LoginTwoFactorService}.
+ * email/password sign-up form that also links a Telegram identity, and a passwordless "sign in
+ * with a Telegram code" for any account that identity is linked to. Neither a correct password
+ * nor a correct code is ever sufficient by itself in the same way: a password check always ends
+ * with a mandatory Telegram-delivered code ({@code LoginTwoFactorService}), while "sign in with
+ * a Telegram code" needs nothing further -- proving control of that Telegram account already is
+ * the whole login. See {@link io.tgmcp.tenancy.SelfRegistrationService}, {@link
+ * io.tgmcp.security.TelegramLinkingService} and {@link io.tgmcp.ui.TelegramBotWebhookController}.
  */
 @AutoConfigureMockMvc
 @TestPropertySource(properties = {
@@ -48,7 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
 
-    private static final String BOT_TOKEN = "123456789:test-bot-token-not-a-real-secret";
+    private static final Pattern TOKEN_PATTERN = Pattern.compile("data-link-token=\"([^\"]+)\"");
 
     @Autowired
     private MockMvc mockMvc;
@@ -57,10 +53,10 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
     private AppUserRepository users;
 
     @Autowired
-    private io.tgmcp.telegram.TelegramConnectionRepository connections;
+    private TelegramWebhookSecret webhookSecret;
 
     @Test
-    void selfRegistrationLinksTelegramVerifiesACodeAndThenSignsIn() throws Exception {
+    void selfRegistrationLinksTelegramViaTheBotThenVerifiesACodeAndSignsIn() throws Exception {
         MvcResult registered = this.mockMvc.perform(post("/register").with(csrf())
                         .param("workspaceName", "Orbital Widgets")
                         .param("email", "new-owner@example.invalid")
@@ -73,54 +69,56 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
         // Nothing is created until the Telegram step actually completes.
         assertThat(this.users.findByEmail("new-owner@example.invalid")).isEmpty();
 
+        String token = fetchLinkToken(session);
+        assertThat(fetchLinkStatus(token, session)).isEmpty();
+
         long telegramUserId = 777_001L;
-        this.mockMvc.perform(get("/login/telegram/callback").session(session)
-                        .params(signedTelegramParams(telegramUserId, "Grace", "Hopper", "grace")))
-                .andExpect(redirectedUrl("/login/verify"));
+        sendStartCommand(token, telegramUserId, "grace");
+
+        String redirectTo = fetchLinkStatus(token, session);
+        assertThat(redirectTo).isEqualTo("/login/verify");
 
         AppUser created = this.users.findByEmail("new-owner@example.invalid").orElseThrow();
         assertThat(created.role()).isEqualTo("OWNER");
         assertThat(created.telegramUserId()).isEqualTo(telegramUserId);
-        // A session was never established by the Telegram step alone.
+        assertThat(created.telegramUsername()).isEqualTo("grace");
+        // A session was never established by the linking step alone.
         assertThat(session.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY))
                 .isNull();
+
+        Long accountCount = this.jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM app_users WHERE telegram_user_id = ?", Long.class, telegramUserId);
+        assertThat(accountCount).isEqualTo(1L);
 
         String code = this.telegramBotMessenger.latestCodeFor(telegramUserId);
         this.mockMvc.perform(post("/login/verify").session(session).with(csrf())
                         .param("code", code))
                 .andExpect(redirectedUrl("/"));
-
         SecurityContext context = (SecurityContext) session.getAttribute(
                 HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
         assertThat(context).isNotNull();
         assertThat(context.getAuthentication().getName()).isEqualTo(created.email());
-
-        // A fresh tenant, with no chats -- distinct from whatever other tenants exist.
-        Long tenantCount = this.jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM tenants WHERE id = ?", Long.class, created.tenantId());
-        assertThat(tenantCount).isEqualTo(1L);
     }
 
     @Test
-    void aWrongCodeIsRejectedAndDoesNotSignIn() throws Exception {
+    void aTelegramIdentityAlreadyLinkedToAnotherAccountCannotLinkASecondOne() throws Exception {
+        long telegramUserId = 777_002L;
+        registerAndLink("first-owner@example.invalid", telegramUserId, "shared");
+
         MvcResult registered = this.mockMvc.perform(post("/register").with(csrf())
-                        .param("workspaceName", "Wrong Code Co")
-                        .param("email", "wrong-code@example.invalid")
+                        .param("workspaceName", "Second Team")
+                        .param("email", "second-owner@example.invalid")
                         .param("password", "a-strong-password")
                         .param("passwordConfirm", "a-strong-password"))
                 .andReturn();
         MockHttpSession session = (MockHttpSession) registered.getRequest().getSession(false);
+        String token = fetchLinkToken(session);
 
-        long telegramUserId = 777_002L;
-        this.mockMvc.perform(get("/login/telegram/callback").session(session)
-                .params(signedTelegramParams(telegramUserId, "Wrong", "Code", "wrongcode")));
-
-        this.mockMvc.perform(post("/login/verify").session(session).with(csrf())
-                        .param("code", "000000"))
-                .andExpect(redirectedUrl("/login/verify"))
-                .andExpect(flash().attributeExists("error"));
-        assertThat(session.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY))
-                .isNull();
+        // The webhook update itself is accepted (an unrelated, already-claimed token is simply
+        // ignored -- see TelegramLinkTokenRepository#claim), but this NEW token was never
+        // claimed by that identity, so the second registration just keeps waiting.
+        assertThat(fetchLinkStatus(token, session)).isEmpty();
+        assertThat(this.users.findByEmail("second-owner@example.invalid")).isEmpty();
     }
 
     @Test
@@ -168,178 +166,110 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
     }
 
     @Test
-    void telegramSignInSendsACodeThenProvisionsAndStartsAQrConnection() throws Exception {
-        long telegramUserId = 555_001L;
-        // A brand-new Telegram identity: the widget alone only proves identity, so this lands
-        // on the code-entry step rather than an authenticated session.
-        MvcResult first = this.mockMvc.perform(get("/login/telegram/callback")
-                        .params(signedTelegramParams(telegramUserId, "Ada", "Lovelace", "ada")))
+    void signingInWithATelegramCodeByEmailNeedsNoFurtherConfirmation() throws Exception {
+        long telegramUserId = 777_003L;
+        registerAndLink("code-login@example.invalid", telegramUserId, "codeuser");
+        this.telegramBotMessenger.reset();
+
+        MvcResult sent = this.mockMvc.perform(post("/login/telegram-code").with(csrf())
+                        .param("identifier", "code-login@example.invalid"))
                 .andExpect(redirectedUrl("/login/verify"))
                 .andReturn();
-        AppUser provisioned = this.users.findByTelegramUserId(telegramUserId).orElseThrow();
-        assertThat(provisioned.role()).isEqualTo("OWNER");
-        assertThat(provisioned.enabled()).isTrue();
+        MockHttpSession session = (MockHttpSession) sent.getRequest().getSession(false);
 
-        MockHttpSession session = (MockHttpSession) first.getRequest().getSession(false);
-        assertThat(session).isNotNull();
-        assertThat(session.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY))
-                .isNull();
-
-        // Entering the code is what actually establishes the session AND (for this brand-new
-        // signup only) starts the QR handshake, rather than an empty dashboard with a
-        // Connection tab still to find.
         String code = this.telegramBotMessenger.latestCodeFor(telegramUserId);
         this.mockMvc.perform(post("/login/verify").session(session).with(csrf())
                         .param("code", code))
-                .andExpect(redirectedUrl("/connect"));
-
+                .andExpect(redirectedUrl("/"));
         SecurityContext context = (SecurityContext) session.getAttribute(
                 HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
         assertThat(context).isNotNull();
-        assertThat(context.getAuthentication().getName()).isEqualTo(provisioned.email());
-
-        this.mockMvc.perform(get("/connect").session(session)).andExpect(status().isOk());
-        io.tgmcp.telegram.TelegramConnection connection = this.connections
-                .findByOwner(provisioned.tenantId(), provisioned.id()).orElseThrow();
-        assertThat(connection.status()).isEqualTo(io.tgmcp.telegram.gateway.LoginStage.WAIT_QR_SCAN);
+        assertThat(context.getAuthentication().getName()).isEqualTo("code-login@example.invalid");
     }
 
     @Test
-    void aReturningTelegramIdentityResolvesToTheSameAccountNotASecondOne() throws Exception {
-        long telegramUserId = 555_002L;
-        this.mockMvc.perform(get("/login/telegram/callback")
-                .params(signedTelegramParams(telegramUserId, "Ada", "Lovelace", "ada")));
+    void signingInWithATelegramCodeByUsernameAlsoWorks() throws Exception {
+        long telegramUserId = 777_004L;
+        registerAndLink("username-login@example.invalid", telegramUserId, "UsernameLogin");
+        this.telegramBotMessenger.reset();
 
-        // A second widget confirmation for the same identity still only reaches the code step
-        // (a returning identity does not auto-start a QR connection again), never a second row.
-        this.mockMvc.perform(get("/login/telegram/callback")
-                        .params(signedTelegramParams(telegramUserId, "Ada", "Lovelace", "ada")))
+        this.mockMvc.perform(post("/login/telegram-code").with(csrf())
+                        .param("identifier", "@usernamelogin"))
                 .andExpect(redirectedUrl("/login/verify"));
 
-        Long accountsForThisTelegramId = this.jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM app_users WHERE telegram_user_id = ?", Long.class, telegramUserId);
-        assertThat(accountsForThisTelegramId).isEqualTo(1L);
+        assertThat(this.telegramBotMessenger.latestCodeFor(telegramUserId)).isNotBlank();
     }
 
     @Test
-    void aCorrectPasswordAloneNoLongerSignsInAnAccountWithTelegramLinked() throws Exception {
+    void signingInWithATelegramCodeForAnUnknownIdentifierGivesNoIndicationEitherWay() throws Exception {
+        this.mockMvc.perform(post("/login/telegram-code").with(csrf())
+                        .param("identifier", "nobody@example.invalid"))
+                .andExpect(redirectedUrl("/login/telegram-code"))
+                .andExpect(flash().attribute("message", org.hamcrest.Matchers.notNullValue()));
+    }
+
+    @Test
+    void aWrongCodeIsRejectedAndDoesNotSignIn() throws Exception {
+        long telegramUserId = 777_005L;
+        MockHttpSession session = registerAndLink("wrong-code@example.invalid", telegramUserId, "wrongcode");
+
+        this.mockMvc.perform(post("/login/verify").session(session).with(csrf())
+                        .param("code", "000000"))
+                .andExpect(redirectedUrl("/login/verify"))
+                .andExpect(flash().attributeExists("error"));
+    }
+
+    /**
+     * Registers and links an account, leaving it right where a fresh registration lands: the
+     * account exists and a second-factor code is pending in the returned session, but nothing
+     * has verified it yet.
+     */
+    private MockHttpSession registerAndLink(String email, long telegramUserId, String username) throws Exception {
         MvcResult registered = this.mockMvc.perform(post("/register").with(csrf())
-                        .param("workspaceName", "Two Factor Co")
-                        .param("email", "two-factor@example.invalid")
+                        .param("workspaceName", "Team for " + email)
+                        .param("email", email)
                         .param("password", "a-strong-password")
                         .param("passwordConfirm", "a-strong-password"))
                 .andReturn();
-        MockHttpSession registrationSession = (MockHttpSession) registered.getRequest().getSession(false);
-        long telegramUserId = 555_003L;
-        this.mockMvc.perform(get("/login/telegram/callback").session(registrationSession)
-                .params(signedTelegramParams(telegramUserId, "Marie", "Curie", "marie")));
-        this.telegramBotMessenger.reset();
+        MockHttpSession session = (MockHttpSession) registered.getRequest().getSession(false);
+        String token = fetchLinkToken(session);
+        sendStartCommand(token, telegramUserId, username);
+        String redirectTo = fetchLinkStatus(token, session);
+        assertThat(redirectTo).isEqualTo("/login/verify");
+        return session;
+    }
 
-        // A correct password check alone (a fresh session, nothing carried over from
-        // registration) lands on the code step, not an authenticated session.
-        MvcResult passwordAttempt = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", "two-factor@example.invalid")
-                        .param("password", "a-strong-password"))
-                .andExpect(redirectedUrl("/login/verify"))
+    private String fetchLinkToken(MockHttpSession session) throws Exception {
+        MvcResult page = this.mockMvc.perform(get("/register/link-telegram").session(session))
+                .andExpect(status().isOk())
                 .andReturn();
-        MockHttpSession loginSession = (MockHttpSession) passwordAttempt.getRequest().getSession(false);
-        assertThat(loginSession).isNotNull();
-        assertThat(loginSession.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY))
-                .isNull();
-
-        String code = this.telegramBotMessenger.latestCodeFor(telegramUserId);
-        this.mockMvc.perform(post("/login/verify").session(loginSession).with(csrf())
-                        .param("code", code))
-                .andExpect(redirectedUrl("/"));
-        SecurityContext context = (SecurityContext) loginSession.getAttribute(
-                HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
-        assertThat(context).isNotNull();
-        assertThat(context.getAuthentication().getName()).isEqualTo("two-factor@example.invalid");
+        Matcher matcher = TOKEN_PATTERN.matcher(page.getResponse().getContentAsString());
+        assertThat(matcher.find()).as("link token present in the rendered page").isTrue();
+        return matcher.group(1);
     }
 
-    @Test
-    void whenTelegramBotCannotDeliverTheCodeSignInFailsRatherThanSkippingTheSecondFactor() throws Exception {
-        long telegramUserId = 555_004L;
-        this.telegramBotMessenger.blockChat(telegramUserId);
-
-        this.mockMvc.perform(get("/login/telegram/callback")
-                        .params(signedTelegramParams(telegramUserId, "Rejected", "Delivery", "blocked")))
-                .andExpect(redirectedUrl("/login?telegramCodeError"));
+    private String fetchLinkStatus(String token, MockHttpSession session) throws Exception {
+        MvcResult result = this.mockMvc.perform(get("/register/link-telegram/status")
+                        .session(session)
+                        .param("token", token))
+                .andExpect(status().isOk())
+                .andReturn();
+        String body = result.getResponse().getContentAsString();
+        Matcher matcher = Pattern.compile("\"redirectTo\"\\s*:\\s*\"([^\"]*)\"").matcher(body);
+        assertThat(matcher.find()).as("well-formed status response").isTrue();
+        return matcher.group(1);
     }
 
-    @Test
-    void telegramSignInRejectsATamperedHash() throws Exception {
-        org.springframework.util.MultiValueMap<String, String> params = signedTelegramParams(555_005L, "Eve", "",
-                "eve");
-        params.set("first_name", "Mallory"); // Changed after signing -- the hash no longer matches.
-
-        this.mockMvc.perform(get("/login/telegram/callback").params(params))
-                .andExpect(redirectedUrl("/login?telegramError"));
-
-        assertThat(this.users.findByTelegramUserId(555_005L)).isEmpty();
-    }
-
-    @Test
-    void telegramSignInRejectsAStaleAuthDate() throws Exception {
-        long telegramUserId = 555_006L;
-        long staleAuthDate = this.clock.instant().minus(Duration.ofHours(2)).getEpochSecond();
-
-        SortedMap<String, String> fields = new TreeMap<>();
-        fields.put("id", String.valueOf(telegramUserId));
-        fields.put("first_name", "Stale");
-        fields.put("username", "stale");
-        fields.put("auth_date", String.valueOf(staleAuthDate));
-        String hash = telegramHash(fields);
-
-        org.springframework.util.LinkedMultiValueMap<String, String> params = new org.springframework.util
-                .LinkedMultiValueMap<>();
-        fields.forEach(params::add);
-        params.add("hash", hash);
-
-        this.mockMvc.perform(get("/login/telegram/callback").params(params))
-                .andExpect(redirectedUrl("/login?telegramError"));
-
-        assertThat(this.users.findByTelegramUserId(telegramUserId)).isEmpty();
-    }
-
-    private org.springframework.util.LinkedMultiValueMap<String, String> signedTelegramParams(long telegramUserId,
-            String firstName, String lastName, String username) {
-        SortedMap<String, String> fields = new TreeMap<>();
-        fields.put("id", String.valueOf(telegramUserId));
-        fields.put("first_name", firstName);
-        if (lastName != null && !lastName.isBlank()) {
-            fields.put("last_name", lastName);
-        }
-        fields.put("username", username);
-        fields.put("auth_date", String.valueOf(this.clock.instant().getEpochSecond()));
-        String hash = telegramHash(fields);
-
-        org.springframework.util.LinkedMultiValueMap<String, String> params = new org.springframework.util
-                .LinkedMultiValueMap<>();
-        fields.forEach(params::add);
-        params.add("hash", hash);
-        return params;
-    }
-
-    /** Mirrors TelegramLoginController#verify's data-check-string and HMAC construction exactly. */
-    private static String telegramHash(SortedMap<String, String> fields) {
-        StringBuilder dataCheckString = new StringBuilder();
-        for (var entry : fields.entrySet()) {
-            if (!dataCheckString.isEmpty()) {
-                dataCheckString.append('\n');
-            }
-            dataCheckString.append(entry.getKey()).append('=').append(entry.getValue());
-        }
-        try {
-            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-            byte[] secretKey = sha256.digest(BOT_TOKEN.getBytes(StandardCharsets.UTF_8));
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(secretKey, "HmacSHA256"));
-            byte[] computed = mac.doFinal(dataCheckString.toString().getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(computed);
-        }
-        catch (Exception ex) {
-            throw new IllegalStateException(ex);
-        }
+    private void sendStartCommand(String token, long telegramUserId, String username) throws Exception {
+        String body = """
+                {"update_id":1,"message":{"message_id":1,"date":0,\
+                "from":{"id":%d,"is_bot":false,"first_name":"Test","username":"%s"},\
+                "chat":{"id":%d,"type":"private"},"text":"/start %s"}}
+                """.formatted(telegramUserId, username, telegramUserId, token);
+        this.mockMvc.perform(post("/telegram/bot-webhook")
+                        .header("X-Telegram-Bot-Api-Secret-Token", this.webhookSecret.value())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk());
     }
 }

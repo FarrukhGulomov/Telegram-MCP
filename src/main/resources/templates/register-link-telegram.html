@@ -22,17 +22,14 @@
   <h1 th:text="#{register.linkTelegram.heading}">Link your Telegram account</h1>
 
   <main class="card">
-    <p class="muted" th:text="#{register.linkTelegram.hint}">One last step: confirm your Telegram account. It becomes the second factor for signing in.</p>
+    <p class="muted" th:text="#{register.linkTelegram.hint}">Open the bot and press Start; this page continues automatically once it's linked.</p>
 
-    <div class="flash err" th:if="${telegramTaken}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-      <span th:text="#{register.linkTelegram.error.taken}">That Telegram account is already linked to another workspace.</span>
-    </div>
-
-    <a th:href="@{/login/telegram}" th:text="#{login.continueWithTelegram}">Continue with Telegram</a>
+    <a th:href="${deepLink}" th:text="#{register.linkTelegram.button}" data-link-telegram-deeplink>Open Telegram</a>
+    <p class="hint" id="link-telegram-status" th:text="#{register.linkTelegram.waiting}">Waiting…</p>
   </main>
 </div>
-<script src="/js/forms.js" defer></script>
+<script th:attr="data-link-token=${token}" id="link-telegram-config"></script>
+<script src="/js/link-telegram.js" defer></script>
 <script src="/js/lang.js" defer></script>
 </body>
 </html>

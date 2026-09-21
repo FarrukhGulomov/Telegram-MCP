@@ -84,7 +84,7 @@ public class Fixtures {
         UUID tenantId = Ids.newId();
         this.tenants.insert(new Tenant(tenantId, slug, slug + " team", true, null));
         AppUser user = new AppUser(Ids.newId(), tenantId, email, encodedPassword,
-                slug + " " + role.toLowerCase(java.util.Locale.ROOT), role, true, null);
+                slug + " " + role.toLowerCase(java.util.Locale.ROOT), role, true, null, null);
         this.users.insert(user);
         AuthenticatedActor actor = new AuthenticatedActor(tenantId, user.id(), user.email(),
                 ActorType.UI_USER, java.util.Set.of("ui:manage"), null);
@@ -95,7 +95,7 @@ public class Fixtures {
         UUID tenantId = Ids.newId();
         this.tenants.insert(new Tenant(tenantId, slug, slug + " team", true, null));
         AppUser user = new AppUser(Ids.newId(), tenantId, "owner@" + slug + ".invalid",
-                "{noop}pw", slug + " owner", "OWNER", true, null);
+                "{noop}pw", slug + " owner", "OWNER", true, null, null);
         this.users.insert(user);
 
         TelegramConnection connection = new TelegramConnection(Ids.newId(), tenantId, user.id(),

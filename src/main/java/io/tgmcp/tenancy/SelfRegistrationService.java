@@ -73,7 +73,8 @@ public class SelfRegistrationService {
      * @param telegramUserId the Telegram identity this account is linked to, or {@code null} on
      *                        a deployment where Telegram sign-in is not configured at all.
      */
-    public AppUser completeRegistration(PendingRegistration pending, Long telegramUserId) {
+    public AppUser completeRegistration(PendingRegistration pending, Long telegramUserId,
+                                        String telegramUsername) {
         if (this.users.findByEmail(pending.normalizedEmail()).isPresent()) {
             throw new IllegalArgumentException("register.emailTaken");
         }
@@ -84,7 +85,7 @@ public class SelfRegistrationService {
         this.tenants.insert(new Tenant(tenantId, uniqueSlug(pending.workspaceName()), pending.workspaceName(),
                 false, null));
         AppUser user = new AppUser(Ids.newId(), tenantId, pending.normalizedEmail(), pending.passwordHash(),
-                pending.workspaceName(), "OWNER", true, telegramUserId);
+                pending.workspaceName(), "OWNER", true, telegramUserId, telegramUsername);
         this.users.insert(user);
         return user;
     }

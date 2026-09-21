@@ -1,21 +1,26 @@
 package io.tgmcp.support;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import io.tgmcp.security.TelegramBotApiCaller;
 import io.tgmcp.security.TelegramBotMessageException;
 import io.tgmcp.security.TelegramBotMessenger;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Records every message a test's login flow would have sent through the real Bot API, instead
  * of ever making that HTTP call -- and lets a test simulate delivery failure (the account has
- * never opened a chat with the bot) for one chat id.
+ * never opened a chat with the bot) for one chat id. Also stands in for {@link
+ * TelegramBotApiCaller} so {@code TelegramWebhookRegistrar}'s startup {@code setWebhook} call
+ * never reaches the real Bot API either.
  */
-public class FakeTelegramBotMessenger implements TelegramBotMessenger {
+public class FakeTelegramBotMessenger implements TelegramBotMessenger, TelegramBotApiCaller {
 
     private static final Pattern CODE_PATTERN = Pattern.compile("\\b(\\d{6})\\b");
 
@@ -58,5 +63,11 @@ public class FakeTelegramBotMessenger implements TelegramBotMessenger {
     public void reset() {
         this.sent.clear();
         this.blockedChatIds.clear();
+    }
+
+    /** {@code TelegramWebhookRegistrar}'s startup {@code setWebhook} call; nothing reads the return value. */
+    @Override
+    public JsonNode call(String method, Map<String, Object> params) {
+        return null;
     }
 }

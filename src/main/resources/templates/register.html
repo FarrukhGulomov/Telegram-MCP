@@ -44,12 +44,7 @@
 
       <button type="submit" th:text="#{register.createAccount}">Create account</button>
     </form>
-
-    <div th:if="${telegramLoginEnabled}" class="auth-alt">
-      <p class="auth-divider" th:text="#{register.orDivider}">Or</p>
-      <a th:href="@{/login/telegram}" th:text="#{login.continueWithTelegram}">Continue with Telegram</a>
-      <p class="hint" th:text="#{login.telegramHint}">Sign in with Telegram — no password needed.</p>
-    </div>
+    <p class="hint" th:if="${telegramLoginEnabled}" th:text="#{register.telegramLinkNotice}">You'll link a Telegram account as the next step.</p>
 
     <p class="muted auth-note">
       <span th:text="#{register.alreadyHaveAccount}">Already have an account?</span>

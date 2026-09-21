@@ -10,7 +10,8 @@ import org.springframework.stereotype.Repository;
 public class AppUserRepository {
 
     private static final String COLUMNS =
-            "id, tenant_id, email, password_hash, display_name, role, enabled, telegram_user_id";
+            "id, tenant_id, email, password_hash, display_name, role, enabled, telegram_user_id, "
+                    + "telegram_username";
 
     private final JdbcClient jdbc;
 
@@ -40,12 +41,20 @@ public class AppUserRepository {
                 .optional();
     }
 
+    /** Used by the "sign in with a Telegram code" entry point when a username, not an email, is entered. */
+    public Optional<AppUser> findByTelegramUsername(String telegramUsername) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM app_users WHERE lower(telegram_username) = lower(:username)")
+                .param("username", telegramUsername)
+                .query(AppUser.class)
+                .optional();
+    }
+
     public void insert(AppUser user) {
         jdbc.sql("""
                         INSERT INTO app_users (id, tenant_id, email, password_hash, display_name, role, enabled,
-                                               telegram_user_id)
+                                               telegram_user_id, telegram_username)
                         VALUES (:id, :tenantId, :email, :passwordHash, :displayName, :role, :enabled,
-                                :telegramUserId)
+                                :telegramUserId, :telegramUsername)
                         """)
                 .param("id", user.id())
                 .param("tenantId", user.tenantId())
@@ -55,6 +64,7 @@ public class AppUserRepository {
                 .param("role", user.role())
                 .param("enabled", user.enabled())
                 .param("telegramUserId", user.telegramUserId())
+                .param("telegramUsername", user.telegramUsername())
                 .update();
     }
 }
