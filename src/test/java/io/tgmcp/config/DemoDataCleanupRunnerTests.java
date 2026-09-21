@@ -1,9 +1,12 @@
 package io.tgmcp.config;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+import io.tgmcp.audit.AuditService;
 import io.tgmcp.support.AbstractIntegrationTest;
+import io.tgmcp.tenancy.ActorType;
 import io.tgmcp.tenancy.Tenant;
 import io.tgmcp.tenancy.TenantRepository;
 import io.tgmcp.telegram.gateway.TelegramAdapterKind;
@@ -34,6 +37,9 @@ class DemoDataCleanupRunnerTests extends AbstractIntegrationTest {
 
     @Autowired
     private RegisteredClientRepository clients;
+
+    @Autowired
+    private AuditService auditService;
 
     private AppProperties properties(boolean cleanupEnabled) {
         AppProperties.Telegram telegram = new AppProperties.Telegram(TelegramAdapterKind.MOCK, null, null,
@@ -130,6 +136,26 @@ class DemoDataCleanupRunnerTests extends AbstractIntegrationTest {
         assertThat(this.clients.findByClientId("a-real-registered-client")).isNotNull();
         assertThat(countAuthorizationsFor(realClient)).isEqualTo(1);
         assertThat(countConsentsFor(realClient)).isEqualTo(1);
+    }
+
+    /**
+     * Security-audit finding SEC-R09: audit_events (migration V11) refuses direct updates and
+     * deletes, but a demo tenant's own audit trail must still disappear along with the rest of
+     * its data when this cleanup removes it -- the trigger tells the two apart by whether the
+     * delete reaches audit_events directly or only as a side effect of the tenant cascade.
+     */
+    @Test
+    void removesAuditEventsBelongingToADeletedDemoTenant() {
+        UUID demoTenantId = UUID.randomUUID();
+        this.tenants.insert(new Tenant(demoTenantId, "leftover-demo", "Leftover Demo", true, null));
+        this.auditService.record(demoTenantId, ActorType.SYSTEM, "test", "TEST_ACTION", null,
+                AuditService.ALLOWED, Map.of());
+
+        new DemoDataCleanupRunner(properties(true), this.jdbcTemplate);
+
+        Integer remaining = this.jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM audit_events WHERE tenant_id = ?", Integer.class, demoTenantId);
+        assertThat(remaining).isZero();
     }
 
     @Test
