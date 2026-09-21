@@ -181,7 +181,24 @@ public record AppProperties(@DefaultValue Telegram telegram,
                                  * OAuth authorization). Per-user, not per-IP, since the caller is
                                  * already authenticated by the time this applies.
                                  */
-                                @DefaultValue("10") int accountActionsPerMinutePerUser) {
+                                @DefaultValue("10") int accountActionsPerMinutePerUser,
+                                /**
+                                 * Security-audit finding SEC-R02: the IP-keyed budget above still
+                                 * lets one attacker who knows a victim's phone number (rotating
+                                 * source IPs, or just waiting out the per-IP window) repeatedly
+                                 * call {@code POST /login/start} for that number, each attempt
+                                 * tearing down the victim's existing Telegram connection via
+                                 * {@code PreAuthLoginService#begin}'s {@code
+                                 * prepareForFreshLogin} before any proof of ownership. Keyed by
+                                 * the normalized phone number itself rather than the caller's IP,
+                                 * this bounds how often any single number's connection can be
+                                 * disrupted at all, regardless of how many different addresses an
+                                 * attacker spreads attempts across. Deliberately a small
+                                 * long-window budget: a real device retrying its own login within
+                                 * a minute or two is common, but sustained repeated teardown of
+                                 * the same number many times an hour is not.
+                                 */
+                                @DefaultValue("5") int loginAttemptsPerHourPerPhone) {
     }
 
     /**

@@ -59,3 +59,4 @@ tgmcp:
     oauth-registrations-per-hour-per-ip: 1000
     connect-actions-per-minute-per-user: 1000
     self-registrations-per-hour-per-ip: 1000
+    login-attempts-per-hour-per-phone: 1000

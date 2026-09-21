@@ -109,6 +109,22 @@ public class WebSecurityConfig {
                 properties.abuseControls().selfRegistrationsPerHourPerIp(), java.time.Duration.ofHours(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/start", loginStartLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
+        // Security-audit finding SEC-R02: a returning phone number's fresh-login attempt tears
+        // down its existing Telegram connection (PreAuthLoginService#begin ->
+        // prepareForFreshLogin) before proving ownership of that number. The IP-keyed budget
+        // above cannot bound how often any one *number* gets disrupted this way -- an attacker
+        // who knows a victim's number can rotate source addresses freely. This second budget is
+        // keyed by the normalized phone number itself, so the same number can only be
+        // (re)connected this often regardless of how many different addresses attempt it.
+        io.tgmcp.ratelimit.RateLimiter loginStartPerPhoneLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().loginAttemptsPerHourPerPhone(), java.time.Duration.ofHours(1), clock);
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/start", loginStartPerPhoneLimiter,
+                        request -> {
+                            String raw = request.getParameter("phoneNumber");
+                            String normalized = PreAuthLoginService.normalizePhoneNumber(raw);
+                            return normalized.isBlank() ? null : normalized;
+                        }),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
         // The code and two-factor-password steps are each exactly as guessable-by-brute-force
         // as a password would be if nothing budgeted attempts against them independently of
         // whatever cap Telegram's own backend enforces -- IP-keyed, same reasoning as above.

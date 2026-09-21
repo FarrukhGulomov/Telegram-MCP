@@ -168,6 +168,7 @@ tgmcp:
     oauth-registrations-per-hour-per-ip: 5
     connect-actions-per-minute-per-user: 30
     self-registrations-per-hour-per-ip: 5
+    login-attempts-per-hour-per-phone: 5
 
   # Security-audit finding SEC-13: empty by default, matching server.forward-headers-strategy
   # trusting forwarded headers unconditionally -- correct for local development and for a
