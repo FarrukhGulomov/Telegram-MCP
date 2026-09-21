@@ -271,12 +271,25 @@ public class AuthorizationServerConfig {
      * client sent for {@code /oauth2/authorize} -- the raw query string on GET, the raw form
      * parameters on POST -- before anything in Spring's authorization/consent machinery gets a
      * chance to interpret them, so that hypothesis can be confirmed or ruled out directly.
+     *
+     * <p>Security-audit finding SEC-R06: a real authorize request's query string and form body
+     * can carry values -- an authorization code, a state or nonce originating from the client --
+     * that no diagnostic needs printed to a production log. Gated to run only where {@link
+     * io.tgmcp.config.ProductionSafetyValidator} would already refuse to start on real-account
+     * use, i.e. never against a real Telegram account, rather than deleting it outright: the hypothesis it exists
+     * to test can recur against ChatGPT or another connector in a demo/staging deployment.
      */
     private static final class RawOAuth2AuthorizeRequestLogger extends OncePerRequestFilter {
+        private final boolean enabled;
+
+        RawOAuth2AuthorizeRequestLogger(boolean enabled) {
+            this.enabled = enabled;
+        }
+
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
                 throws ServletException, IOException {
-            if ("/oauth2/authorize".equals(request.getRequestURI())) {
+            if (this.enabled && "/oauth2/authorize".equals(request.getRequestURI())) {
                 if ("GET".equalsIgnoreCase(request.getMethod())) {
                     log.info("Raw GET /oauth2/authorize query string: {}", request.getQueryString());
                 }
@@ -305,12 +318,23 @@ public class AuthorizationServerConfig {
      * body of the registration request -- not just whatever Spring's client metadata parsing
      * makes of it -- before anything downstream reads it, then replays those exact bytes so
      * registration proceeds completely unaffected by having been observed.
+     *
+     * <p>Security-audit finding SEC-R06: same gating as {@link RawOAuth2AuthorizeRequestLogger}
+     * -- a registration body is client-supplied metadata rather than a secret, but it still has
+     * no reason to reach a production log by default.
      */
     private static final class RawOAuth2RegisterRequestLogger extends OncePerRequestFilter {
+        private final boolean enabled;
+
+        RawOAuth2RegisterRequestLogger(boolean enabled) {
+            this.enabled = enabled;
+        }
+
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
                 throws ServletException, IOException {
-            if (!"/oauth2/register".equals(request.getRequestURI()) || !"POST".equalsIgnoreCase(request.getMethod())) {
+            if (!this.enabled || !"/oauth2/register".equals(request.getRequestURI())
+                    || !"POST".equalsIgnoreCase(request.getMethod())) {
                 chain.doFilter(request, response);
                 return;
             }
@@ -371,9 +395,12 @@ public class AuthorizationServerConfig {
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/oauth2/register", registrationLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
 
+        boolean rawOAuthDiagnosticsEnabled = !properties.telegram().realAccountAccessAuthorized();
         http.securityMatcher(endpoints)
-                .addFilterBefore(new RawOAuth2AuthorizeRequestLogger(), SecurityContextHolderFilter.class)
-                .addFilterBefore(new RawOAuth2RegisterRequestLogger(), SecurityContextHolderFilter.class)
+                .addFilterBefore(new RawOAuth2AuthorizeRequestLogger(rawOAuthDiagnosticsEnabled),
+                        SecurityContextHolderFilter.class)
+                .addFilterBefore(new RawOAuth2RegisterRequestLogger(rawOAuthDiagnosticsEnabled),
+                        SecurityContextHolderFilter.class)
                 .with(configurer, server -> server
                         // RFC 7591: remote MCP clients (Claude, ChatGPT) register themselves with
                         // no prior credential. Two defaults fight that:
