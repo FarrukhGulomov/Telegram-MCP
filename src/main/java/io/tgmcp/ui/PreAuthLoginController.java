@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import io.tgmcp.security.PreAuthLoginService;
 import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.gateway.LoginState;
+import io.tgmcp.telegram.gateway.TelegramGatewayException;
 
 import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Controller;
@@ -54,6 +55,9 @@ public class PreAuthLoginController {
         }
         model.addAttribute("state", state);
         model.addAttribute("stage", state == null ? "PHONE_ENTRY" : state.stage().name());
+        if (state != null && state.message() != null) {
+            model.addAttribute("stateHint", Messages.text(this.messages, state.message()));
+        }
         if (state != null && state.qrLoginLink() != null) {
             model.addAttribute("qrCodeImage", this.qrCodeRenderer.toDataUri(state.qrLoginLink()));
         }
@@ -74,6 +78,9 @@ public class PreAuthLoginController {
         catch (IllegalArgumentException | IllegalStateException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
         }
+        catch (TelegramGatewayException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "login.telegramUnavailable"));
+        }
         return "redirect:/login";
     }
 
@@ -89,9 +96,18 @@ public class PreAuthLoginController {
         catch (IllegalArgumentException | IllegalStateException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
         }
+        catch (TelegramGatewayException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "login.telegramUnavailable"));
+        }
         return "redirect:/login";
     }
 
+    /**
+     * Telegram itself refuses a resend requested too soon after the original code (or after a
+     * previous resend) -- {@code TelegramGatewayException} surfaces that refusal here rather
+     * than as an uncaught 500, which from the visitor's side looked identical to the code never
+     * having been sent at all.
+     */
     @PostMapping("/login/code/resend")
     public String resendCode(HttpServletRequest request, RedirectAttributes redirectAttributes) {
         try {
@@ -100,6 +116,9 @@ public class PreAuthLoginController {
         }
         catch (IllegalArgumentException | IllegalStateException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+        }
+        catch (TelegramGatewayException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "login.telegramUnavailable"));
         }
         return "redirect:/login";
     }
@@ -115,6 +134,9 @@ public class PreAuthLoginController {
         }
         catch (IllegalArgumentException | IllegalStateException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+        }
+        catch (TelegramGatewayException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "login.telegramUnavailable"));
         }
         return "redirect:/login";
     }
