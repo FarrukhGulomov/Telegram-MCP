@@ -2,6 +2,7 @@ package io.tgmcp.ui;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Map;
 
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.ratelimit.RateLimiter;
@@ -17,6 +18,7 @@ import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 /**
@@ -83,6 +85,25 @@ public class ConnectionController {
         model.addAttribute("adapter", this.properties.telegram().adapter().name());
         model.addAttribute("demoMode", this.properties.telegram().adapter() == TelegramAdapterKind.MOCK);
         return "connect";
+    }
+
+    /**
+     * Polled by {@code /js/connect.js} while the rendered stage is one TDLib can still move on
+     * from asynchronously (QR scan, or the code/password just submitted). Confirmed from live
+     * production logs: {@code submitCode}/{@code submitPassword} return the login state as it
+     * stood at the moment of that call -- for a correct password, that is still {@code
+     * WAIT_PASSWORD}, since TDLib reports the real {@code authorizationStateReady} transition a
+     * moment later, asynchronously, the same way it already does for QR confirmation (see {@link
+     * TelegramConnectionService#applyAsyncStateChange}). Without this poll, the connect page kept
+     * showing the very form the operator had just correctly completed, with no indication
+     * anything had happened, until they thought to reload it themselves.
+     */
+    @GetMapping("/connect/status")
+    @ResponseBody
+    public Map<String, String> status() {
+        AuthenticatedActor actor = this.currentActor.require();
+        LoginState state = this.connectionService.status(actor);
+        return Map.of("stage", state.stage().name());
     }
 
     @PostMapping("/connect/start")

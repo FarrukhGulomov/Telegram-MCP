@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.connection}, ~{::section})}">
 <body>
-<section th:with="stage=${state.stage.name()}">
+<section th:with="stage=${state.stage.name()}" th:attr="data-connect-stage=${stage}">
   <div class="page-head">
     <h1 th:text="#{nav.connection}">Telegram connection</h1>
     <p class="muted" th:text="#{connect.intro}">Connect the Telegram account you want to manage.</p>
@@ -81,6 +81,12 @@
       <input id="password" name="password" type="password" autocomplete="off" autofocus required>
       <button type="submit" th:text="#{connect.password.button}">Continue</button>
     </form>
+    <form th:action="@{/connect/disconnect}" method="post" data-guard-resubmit>
+      <button type="submit" class="link" th:text="#{connect.step3.cancel}">Cancel and start over</button>
+    </form>
+    <p class="hint" th:text="#{connect.step3.notEnabledHint}">
+      This step only appears because Two-Step Verification is turned on for this Telegram account.
+    </p>
   </div>
 
   <div class="card step-card ok" th:if="${stage == 'READY'}">
