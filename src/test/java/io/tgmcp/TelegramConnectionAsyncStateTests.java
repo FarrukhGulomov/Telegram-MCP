@@ -69,7 +69,7 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
 
         // TDLib reporting the QR scan completed, asynchronously, after beginLogin returned --
         // now carrying real account identity (TdlibTelegramGateway.withAccountIdentity).
-        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "+15550000000", "login.tdlib.ready"));
 
         TelegramConnection persisted = this.connectionService.find(team.actor()).orElseThrow();
         assertThat(persisted.ready())
@@ -86,7 +86,7 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         Consumer<LoginState> deliverToListener = captureRegisteredListener();
 
         this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
-        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "+15550000000", "login.tdlib.ready"));
         assertThat(this.connectionService.find(team.actor()).orElseThrow().ready()).isTrue();
 
         // TDLib reporting the session was logged out server-side, with no submit* call of
@@ -110,7 +110,7 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         Fixtures.Team team = team("already-ready");
         Consumer<LoginState> deliverToListener = captureRegisteredListener();
         this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
-        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "+15550000000", "login.tdlib.ready"));
 
         LoginState state = this.connectionService.beginLogin(team.actor(), LoginMethod.PHONE_NUMBER, "+1555");
 
@@ -133,7 +133,7 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         Fixtures.Team team = team("status-after-restart");
         Consumer<LoginState> deliverToListener = captureRegisteredListener();
         this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
-        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "+15550000000", "login.tdlib.ready"));
         stubCurrentStateToThrowNotCurrentOwner();
 
         LoginState state = this.connectionService.status(team.actor());
@@ -178,7 +178,7 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         Fixtures.Team team = team("disconnect-after-restart");
         Consumer<LoginState> deliverToListener = captureRegisteredListener();
         this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
-        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "+15550000000", "login.tdlib.ready"));
         Mockito.clearInvocations(this.gateway);
 
         this.connectionService.disconnect(team.actor());
@@ -226,7 +226,7 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         Fixtures.Team team = team("startup-reclaim");
         Consumer<LoginState> deliverToListener = captureRegisteredListener();
         this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
-        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "+15550000000", "login.tdlib.ready"));
         Mockito.clearInvocations(this.gateway);
         Consumer<LoginState> deliverAfterRestart = captureRegisteredListener();
 
@@ -254,7 +254,7 @@ class TelegramConnectionAsyncStateTests extends AbstractIntegrationTest {
         Fixtures.Team team = team("startup-reclaim-transient-init");
         Consumer<LoginState> deliverToListener = captureRegisteredListener();
         this.connectionService.beginLogin(team.actor(), LoginMethod.QR_CODE, null);
-        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "login.tdlib.ready"));
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 555L, "real_owner", "+15550000000", "login.tdlib.ready"));
         Mockito.clearInvocations(this.gateway);
         Consumer<LoginState> deliverAfterRestart = captureRegisteredListener();
 

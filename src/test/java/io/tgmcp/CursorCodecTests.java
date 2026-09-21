@@ -48,8 +48,7 @@ class CursorCodecTests {
                 new AppProperties.Consent("2026-09-v1", true, Duration.ofDays(365)),
                 syncDefaults(),
                 new AppProperties.Secrets(null, "test", base64Key, null, List.of()),
-                new AppProperties.Demo(false, "demo", "Demo", "a@b.invalid", List.of(), false),
-                null,
+                new AppProperties.Demo(false, "demo", "Demo", List.of(), false),
                 null,
                 null);
         return new CursorCodec(properties, this.clock);

@@ -45,9 +45,9 @@ class AuthorizationServerConfigTests {
                 null, null, "./tdlib", false, false);
         AppProperties.Secrets secrets = new AppProperties.Secrets(null, "test", null, oauthRsaPrivateKey,
                 retiringKeys);
-        AppProperties.Demo demo = new AppProperties.Demo(false, "demo", "Demo", "a@b.invalid", List.of(),
+        AppProperties.Demo demo = new AppProperties.Demo(false, "demo", "Demo", List.of(),
                 false);
-        return new AppProperties(telegram, null, null, null, secrets, demo, null, null, null);
+        return new AppProperties(telegram, null, null, null, secrets, demo, null, null);
     }
 
     private static KeyPair freshRsaKeyPair() throws Exception {

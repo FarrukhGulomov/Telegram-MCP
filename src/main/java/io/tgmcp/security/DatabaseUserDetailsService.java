@@ -10,9 +10,11 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
 /**
- * Resolves the authorities/roles a {@link ManualSessionEstablisher} attaches to a session once a
- * Telegram-delivered code has already proven identity -- there is no password to check here, so
- * the placeholder value handed to {@link User.UserBuilder#password} is never read by anything.
+ * Resolves the authorities/roles a {@link ManualSessionEstablisher} attaches to a session once
+ * a real Telegram login has already proven identity -- there is no password here, so the
+ * placeholder value handed to {@link User.UserBuilder#password} is never read by anything. The
+ * account's phone number is the "username" Spring Security's principal is keyed by, matching
+ * how it is looked up everywhere else ({@code CurrentActor}, {@code PreAuthLoginService}).
  */
 @Service
 public class DatabaseUserDetailsService implements UserDetailsService {
@@ -24,11 +26,10 @@ public class DatabaseUserDetailsService implements UserDetailsService {
     }
 
     @Override
-    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        AppUser user = this.users.findByEmail(username)
-                // Same message either way: the login form must not confirm which accounts exist.
-                .orElseThrow(() -> new UsernameNotFoundException("Bad credentials"));
-        return User.withUsername(user.email())
+    public UserDetails loadUserByUsername(String phoneNumber) throws UsernameNotFoundException {
+        AppUser user = this.users.findByPhoneNumber(phoneNumber)
+                .orElseThrow(() -> new UsernameNotFoundException("No such account"));
+        return User.withUsername(user.phoneNumber())
                 .password("")
                 .roles(user.role())
                 .disabled(!user.enabled())

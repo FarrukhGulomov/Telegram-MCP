@@ -10,7 +10,7 @@ import org.springframework.stereotype.Repository;
 public class AppUserRepository {
 
     private static final String COLUMNS =
-            "id, tenant_id, email, display_name, role, enabled, telegram_user_id, telegram_username";
+            "id, tenant_id, phone_number, display_name, role, enabled, telegram_user_id, telegram_username";
 
     private final JdbcClient jdbc;
 
@@ -18,9 +18,11 @@ public class AppUserRepository {
         this.jdbc = jdbc;
     }
 
-    public Optional<AppUser> findByEmail(String email) {
-        return jdbc.sql("SELECT " + COLUMNS + " FROM app_users WHERE lower(email) = lower(:email)")
-                .param("email", email)
+    /** The only way an account is ever looked up before it has proven anything: by the phone
+     * number it last completed a real Telegram login with. */
+    public Optional<AppUser> findByPhoneNumber(String phoneNumber) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM app_users WHERE phone_number = :phoneNumber")
+                .param("phoneNumber", phoneNumber)
                 .query(AppUser.class)
                 .optional();
     }
@@ -32,7 +34,7 @@ public class AppUserRepository {
                 .optional();
     }
 
-    /** Used by "Sign in with Telegram" to resolve a verified Telegram identity back to its account. */
+    /** Resolves a Telegram identity TDLib itself just confirmed back to its account. */
     public Optional<AppUser> findByTelegramUserId(long telegramUserId) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM app_users WHERE telegram_user_id = :telegramUserId")
                 .param("telegramUserId", telegramUserId)
@@ -40,29 +42,44 @@ public class AppUserRepository {
                 .optional();
     }
 
-    /** Used by the "sign in with a Telegram code" entry point when a username, not an email, is entered. */
-    public Optional<AppUser> findByTelegramUsername(String telegramUsername) {
-        return jdbc.sql("SELECT " + COLUMNS + " FROM app_users WHERE lower(telegram_username) = lower(:username)")
-                .param("username", telegramUsername)
-                .query(AppUser.class)
-                .optional();
-    }
-
     public void insert(AppUser user) {
         jdbc.sql("""
-                        INSERT INTO app_users (id, tenant_id, email, display_name, role, enabled,
+                        INSERT INTO app_users (id, tenant_id, phone_number, display_name, role, enabled,
                                                telegram_user_id, telegram_username)
-                        VALUES (:id, :tenantId, :email, :displayName, :role, :enabled,
+                        VALUES (:id, :tenantId, :phoneNumber, :displayName, :role, :enabled,
                                 :telegramUserId, :telegramUsername)
                         """)
                 .param("id", user.id())
                 .param("tenantId", user.tenantId())
-                .param("email", user.email())
+                .param("phoneNumber", user.phoneNumber())
                 .param("displayName", user.displayName())
                 .param("role", user.role())
                 .param("enabled", user.enabled())
                 .param("telegramUserId", user.telegramUserId())
                 .param("telegramUsername", user.telegramUsername())
+                .update();
+    }
+
+    /**
+     * Overwrites the account's identity with whatever Telegram's own login just confirmed --
+     * the phone number typed to look up the account is never trusted on its own; only what a
+     * completed TDLib login reports back is. Throws a unique-constraint violation if that real
+     * identity already belongs to a different account (see {@code PreAuthLoginService}, which
+     * treats that as "this Telegram account is already registered" and rolls back).
+     */
+    public void updateTelegramIdentity(UUID tenantId, UUID userId, String phoneNumber, Long telegramUserId,
+                                       String telegramUsername) {
+        jdbc.sql("""
+                        UPDATE app_users
+                        SET phone_number = :phoneNumber, telegram_user_id = :telegramUserId,
+                            telegram_username = :telegramUsername
+                        WHERE tenant_id = :tenantId AND id = :userId
+                        """)
+                .param("phoneNumber", phoneNumber)
+                .param("telegramUserId", telegramUserId)
+                .param("telegramUsername", telegramUsername)
+                .param("tenantId", tenantId)
+                .param("userId", userId)
                 .update();
     }
 }

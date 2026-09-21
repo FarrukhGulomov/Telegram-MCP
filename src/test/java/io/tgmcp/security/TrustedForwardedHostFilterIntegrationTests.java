@@ -2,6 +2,7 @@ package io.tgmcp.security;
 
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
+import io.tgmcp.telegram.gateway.LoginMethod;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,12 +33,13 @@ class TrustedForwardedHostFilterIntegrationTests extends AbstractIntegrationTest
 
     @Test
     void rejectsALoginAttemptWhoseForwardedHostIsNotOnTheDeclaredList() throws Exception {
-        this.fixtures.signInReadyTeam("trustedhost1", EMAIL);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("trustedhost1", EMAIL);
 
-        this.mockMvc.perform(post("/login").with(csrf())
+        this.mockMvc.perform(post("/login/start").with(csrf())
                         .header("X-Forwarded-Proto", "https")
                         .header("X-Forwarded-Host", "attacker-controlled.invalid")
-                        .param("identifier", EMAIL))
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
                 .andExpect(result -> assertThat(result.getResponse().getStatus())
                         .as("a forwarded host outside the declared allowlist must never reach "
                                 + "the login handler, let alone build a redirect against it")
@@ -48,25 +50,27 @@ class TrustedForwardedHostFilterIntegrationTests extends AbstractIntegrationTest
     void allowsALoginAttemptWhoseForwardedHostIsOnTheDeclaredList() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("trustedhost2", EMAIL);
 
-        this.mockMvc.perform(post("/login").with(csrf())
+        this.mockMvc.perform(post("/login/start").with(csrf())
                         .header("X-Forwarded-Proto", "https")
                         .header("X-Forwarded-Host", "mcp.example.com")
-                        .param("identifier", EMAIL))
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
                 .andExpect(result -> assertThat(result.getResponse().getHeader("Location"))
                         .as("a forwarded host that matches the declared allowlist must keep "
                                 + "working exactly as it did before this filter existed")
                         .startsWith("https://mcp.example.com"));
-        assertThat(this.telegramBotMessenger.latestCodeFor(team.user().telegramUserId())).isNotBlank();
     }
 
     @Test
     void rejectsARequestWithNoForwardedHeaderAtAllWhenTheDirectHostIsNotOnTheList() throws Exception {
+        Fixtures.Team team = this.fixtures.signInReadyTeam("trustedhost3", EMAIL);
         // No X-Forwarded-Host means the effective host is whatever this request's own Host
         // header says (MockMvc defaults to "localhost"), which is also not on the allowlist --
         // covering the case of the application port being reachable directly, bypassing
         // whatever proxy the operator intended to be the only path in.
-        this.mockMvc.perform(post("/login").with(csrf())
-                        .param("identifier", EMAIL))
+        this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
                 .andExpect(result -> assertThat(result.getResponse().getStatus()).isEqualTo(400));
     }
 }

@@ -80,7 +80,7 @@ public class TelegramConnectionService {
     public TelegramConnection getOrCreate(AuthenticatedActor actor) {
         return find(actor).orElseGet(() -> {
             TelegramConnection connection = new TelegramConnection(Ids.newId(), actor.tenantId(),
-                    actor.userId(), this.gateway.kind(), LoginStage.DISCONNECTED, null, null,
+                    actor.userId(), this.gateway.kind(), LoginStage.DISCONNECTED, null, null, null,
                     this.sessionCipher.keyId(), null, null, this.clock.instant());
             this.connectionRepository.insert(connection);
             return connection;
@@ -267,6 +267,30 @@ public class TelegramConnectionService {
     }
 
     /**
+     * Tears down whichever Telegram session an account currently holds, without pausing any of
+     * its already-activated chats. Unlike {@link #disconnect}, an explicit "stop using
+     * Telegram" action, this is step one of an ordinary sign-in: {@code PreAuthLoginService}
+     * calls it immediately before {@link #beginLogin} for a returning account, since signing in
+     * is now the same act as connecting Telegram, and Telegram itself has no way to re-verify a
+     * phone number that already owns an authorized session -- no fresh code is ever sent to
+     * one, so the old session must end before a new login can even begin. The chats this
+     * account already activated must keep working exactly as they did the moment before, once
+     * the fresh login reaches READY again -- signing back in is not a decision to stop reading
+     * them.
+     */
+    @Transactional
+    public void prepareForFreshLogin(AuthenticatedActor actor) {
+        find(actor).ifPresent(connection -> {
+            if (connection.status() == LoginStage.DISCONNECTED) {
+                return;
+            }
+            reclaimOwnershipIfPersistedAsOwner(connection);
+            this.gateway.disconnect(connection.ref());
+            this.connectionRepository.clearSession(actor.tenantId(), connection.id());
+        });
+    }
+
+    /**
      * Confirmed from live production logs: the same restart-resilience gap {@link #status}
      * already closes also broke disconnect() -- gateway.disconnect(ref) throws {@link
      * TelegramAuthException} ("not the current owner") for a ref no one has reclaimed since the
@@ -345,7 +369,7 @@ public class TelegramConnectionService {
 
     private void persist(AuthenticatedActor actor, TelegramConnection connection, LoginState state) {
         this.connectionRepository.updateStatus(actor.tenantId(), connection.id(), state.stage(),
-                state.tgUserId(), state.tgUsername(), null);
+                state.tgUserId(), state.tgUsername(), state.tgPhoneNumber(), null);
         if (state.ready()) {
             // Placeholder envelope for the mock adapter; the TDLib adapter keeps its own
             // encrypted database directory and stores its handle the same way.

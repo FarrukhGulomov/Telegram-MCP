@@ -102,10 +102,10 @@ class ProductionSafetyValidatorTests {
                 acknowledgeMissingEditDeletionPipeline);
         AppProperties.Secrets secrets = new AppProperties.Secrets(sessionEncryptionKey, "key-id", cursorSigningKey,
                 oauthRsaPrivateKey, List.of());
-        AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo", "owner@demo.invalid",
+        AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo",
                 List.of(), false);
         AppProperties.ForwardedHeaders forwardedHeaders = new AppProperties.ForwardedHeaders(trustedForwardedHosts);
-        return new AppProperties(telegram, null, null, null, secrets, demo, null, forwardedHeaders, null);
+        return new AppProperties(telegram, null, null, null, secrets, demo, null, forwardedHeaders);
     }
 
     @Test

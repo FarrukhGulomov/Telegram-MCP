@@ -90,7 +90,7 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
     void rejectsAnAuthorizeRequestNamingAResourceThisServerDoesNotServe() throws Exception {
         String clientId = registerClient();
         Fixtures.Team team = this.fixtures.signInReadyTeam("f18-resource-1", "resource1@f18.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "resource1@f18.invalid", team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         MvcResult result = this.mockMvc.perform(get(authorizeQuery(clientId, "https://not-this-server.example"))
@@ -130,7 +130,7 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
     void allowsAnAuthorizeRequestNamingThisServersOwnResource() throws Exception {
         String clientId = registerClient();
         Fixtures.Team team = this.fixtures.signInReadyTeam("f18-resource-2", "resource2@f18.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "resource2@f18.invalid", team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         // This server's own resource must not be rejected the way a mismatched one is: it
@@ -172,7 +172,7 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
     void defaultsToTheRegisteredClientScopeWhenTheAuthorizeRequestOmitsScope() throws Exception {
         String clientId = registerClient();
         Fixtures.Team team = this.fixtures.signInReadyTeam("f18-resource-3", "resource3@f18.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "resource3@f18.invalid", team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQueryWithoutScope(clientId))

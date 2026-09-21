@@ -34,10 +34,10 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
 /**
  * Two more filter chains: one for the MCP endpoint (bearer tokens, no session, no CSRF
  * because there is no cookie to forge), and one for the management UI (session cookie,
- * CSRF on, no Spring Security-driven authentication -- {@code LoginController}/{@code
- * LoginVerificationController} establish the session directly via {@link
- * ManualSessionEstablisher} once a Telegram-delivered code has been proven, there being no
- * password for any {@code AuthenticationManager} to check).
+ * CSRF on, no Spring Security-driven authentication -- {@code PreAuthLoginController}
+ * establishes the session directly via {@link ManualSessionEstablisher} once the same
+ * phone/QR + code (+ two-factor password) login TDLib itself performs has reached READY,
+ * there being no password for any {@code AuthenticationManager} to check).
  */
 @Configuration(proxyBeanMethods = false)
 public class WebSecurityConfig {
@@ -92,26 +92,6 @@ public class WebSecurityConfig {
         return http.build();
     }
 
-    /**
-     * The Telegram bot webhook ({@code TelegramBotWebhookController}): stateless, no CSRF (a
-     * webhook delivery carries no session cookie or CSRF token to present), authenticated only
-     * by {@link TelegramWebhookSecret} inside the controller itself -- same reasoning as {@link
-     * #mcpFilterChain} for why this needs its own chain rather than living inside {@link
-     * #managementUiFilterChain}'s session-and-CSRF-oriented one.
-     */
-    @Bean
-    @Order(3)
-    public SecurityFilterChain telegramWebhookFilterChain(HttpSecurity http) throws Exception {
-        http.securityMatcher("/telegram/bot-webhook")
-                .authorizeHttpRequests(requests -> requests.anyRequest().permitAll())
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .csrf(org.springframework.security.config.annotation.web.configurers.CsrfConfigurer::disable)
-                .headers(headers -> headers
-                        .referrerPolicy(referrer -> referrer
-                                .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)));
-        return http.build();
-    }
-
     /** Management UI: session cookie, CSRF protection, conservative headers, no password auth. */
     @Bean
     @Order(4)
@@ -119,35 +99,31 @@ public class WebSecurityConfig {
                                                         java.time.Clock clock,
                                                         SecurityContextRepository securityContextRepository)
             throws Exception {
-        // Security-audit finding SEC-10: a login attempt is unauthenticated by definition, so
-        // it shares no budget with anything else in this application; IP-keyed and placed
-        // before every other Spring Security filter so a caller who has spent it is turned
-        // away before the credential check itself runs.
-        io.tgmcp.ratelimit.RateLimiter loginLimiter = new io.tgmcp.ratelimit.RateLimiter(
-                properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
-        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login", loginLimiter),
-                org.springframework.security.web.context.SecurityContextHolderFilter.class);
-        // Self-service account creation (a workspace/email submission, then linking a Telegram
-        // identity) is reachable without any prior authentication and creates a durable
-        // tenant + user row per success -- its own, separately configured budget, same
-        // reasoning and placement as loginLimiter above.
-        io.tgmcp.ratelimit.RateLimiter registrationLimiter = new io.tgmcp.ratelimit.RateLimiter(
+        // Security-audit finding SEC-10: an unauthenticated login attempt shares no budget with
+        // anything else in this application; IP-keyed and placed before every other Spring
+        // Security filter so a caller who has spent it is turned away before it can trigger any
+        // real, costly native TDLib work. This is also, now, the endpoint self-service account
+        // creation happens through (a brand-new phone number just starts a fresh tenant), so it
+        // carries that budget too rather than a separate one.
+        io.tgmcp.ratelimit.RateLimiter loginStartLimiter = new io.tgmcp.ratelimit.RateLimiter(
                 properties.abuseControls().selfRegistrationsPerHourPerIp(), java.time.Duration.ofHours(1), clock);
-        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/register", registrationLimiter),
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/start", loginStartLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
-        // The second-factor code entry is exactly as guessable-by-brute-force as a password
-        // would be if nothing budgeted attempts against it independently of the per-code
-        // attempt cap LoginTwoFactorService already enforces -- IP-keyed, same budget and
-        // reasoning as loginLimiter above.
-        io.tgmcp.ratelimit.RateLimiter verifyLimiter = new io.tgmcp.ratelimit.RateLimiter(
+        // The code and two-factor-password steps are each exactly as guessable-by-brute-force
+        // as a password would be if nothing budgeted attempts against them independently of
+        // whatever cap Telegram's own backend enforces -- IP-keyed, same reasoning as above.
+        io.tgmcp.ratelimit.RateLimiter loginCodeLimiter = new io.tgmcp.ratelimit.RateLimiter(
                 properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
-        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/verify", verifyLimiter),
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/code", loginCodeLimiter),
+                org.springframework.security.web.context.SecurityContextHolderFilter.class);
+        io.tgmcp.ratelimit.RateLimiter loginPasswordLimiter = new io.tgmcp.ratelimit.RateLimiter(
+                properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
+        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/password", loginPasswordLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
         http.securityContext(context -> context.securityContextRepository(securityContextRepository));
         http.authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/login", "/login/verify", "/login/verify/resend",
-                                "/register", "/register/link-telegram",
-                                "/register/link-telegram/status",
+                        .requestMatchers("/login", "/login/start", "/login/code", "/login/code/resend",
+                                "/login/password", "/login/status", "/login/cancel", "/login/finish",
                                 "/css/**", "/js/**", "/actuator/health").permitAll()
                         // Security-audit finding F17: AppUser carries an OWNER/ADMIN/MEMBER
                         // role, and DatabaseUserDetailsService already turns it into a granted

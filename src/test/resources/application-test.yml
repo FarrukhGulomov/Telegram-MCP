@@ -28,12 +28,6 @@ logging:
 tgmcp:
   telegram:
     adapter: MOCK
-  telegram-login:
-    # There is no password sign-in any more, so every test that logs in at all needs this
-    # enabled by default; FakeTelegramBotMessenger (see TestTelegramBotMessengerConfiguration)
-    # stands in for the real Bot API, so no real bot credentials are needed here.
-    bot-token: "123456789:test-bot-token-not-a-real-secret"
-    bot-username: "TestConsentBot"
   demo:
     # Tests build their own fixtures; the demo seeder would only get in the way.
     seed-synthetic-data: false

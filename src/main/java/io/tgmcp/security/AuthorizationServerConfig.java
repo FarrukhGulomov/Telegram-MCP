@@ -506,7 +506,7 @@ public class AuthorizationServerConfig {
             claims.claim("client_id", context.getRegisteredClient().getClientId());
 
             String principalName = context.getPrincipal().getName();
-            users.findByEmail(principalName).ifPresent(user -> bindUser(claims, user));
+            users.findByPhoneNumber(principalName).ifPresent(user -> bindUser(claims, user));
         };
     }
 

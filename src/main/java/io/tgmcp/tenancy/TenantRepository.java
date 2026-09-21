@@ -53,4 +53,14 @@ public class TenantRepository {
                 .param("demoMode", tenant.demoMode())
                 .update();
     }
+
+    /**
+     * Rolls back a tenant this same request eagerly created (see {@code PreAuthLoginService}):
+     * cascades to its {@code app_users}/{@code telegram_connections} row via {@code ON DELETE
+     * CASCADE}. Only ever called for a tenant that was just created and never reached a real
+     * login, so there is nothing else of value to lose.
+     */
+    public void delete(UUID id) {
+        jdbc.sql("DELETE FROM tenants WHERE id = :id").param("id", id).update();
+    }
 }

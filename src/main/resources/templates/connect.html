@@ -1,17 +1,16 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.connection}, ~{::section})}">
 <body>
-<section th:with="stage=${state.stage.name()}" th:attr="data-connect-stage=${stage}">
+<section th:with="stage=${state.stage.name()}">
   <div class="page-head">
     <h1 th:text="#{nav.connection}">Telegram connection</h1>
-    <p class="muted" th:text="#{connect.intro}">Connect the Telegram account you want to manage.</p>
+    <p class="muted" th:text="#{connect.intro}">Status of the Telegram account signing in connects.</p>
   </div>
 
   <p class="banner demo" th:if="${demoMode}">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
     <span><strong th:text="#{connect.demoBanner.strong}">Demo mode</strong>
-    <span th:text="#{connect.demoBanner.text(${adapter})}">(adapter MOCK). Any code and any
-      password are accepted; nothing leaves this process.</span></span>
+    <span th:text="#{connect.demoBanner.text(${adapter})}">(adapter MOCK). Nothing leaves this process.</span></span>
   </p>
 
   <div class="status-line">
@@ -23,75 +22,6 @@
   </div>
   <p th:if="${statusMessage}" th:text="${statusMessage}" class="muted"></p>
 
-  <!-- Security-audit UX follow-up: only the one card relevant to the current login stage is
-       shown at a time, instead of always rendering all three step forms regardless of where
-       the operator actually is in the flow. Which card that is is decided server-side from
-       state.stage (set by ConnectionController/TelegramConnectionService), not by client-side
-       script, so a stale or manipulated client state can never show the wrong step. -->
-
-  <div class="card step-card" th:if="${stage == 'DISCONNECTED' or stage == 'ERROR'}">
-    <h2 th:text="#{connect.step1.title}">Connect Telegram</h2>
-    <form th:action="@{/connect/start}" method="post" data-guard-resubmit>
-      <label for="method" th:text="#{connect.method.label}">Method</label>
-      <select id="method" name="method" data-method-select>
-        <option value="QR_CODE" th:text="#{connect.method.qr}">QR code</option>
-        <option value="PHONE_NUMBER" th:text="#{connect.method.phone}">Phone number</option>
-      </select>
-      <div data-phone-group hidden>
-        <label for="phoneNumber" th:text="#{connect.phoneNumber.label}">Phone number</label>
-        <input id="phoneNumber" name="phoneNumber" type="tel" autocomplete="off" inputmode="tel"
-               placeholder="+1 555 000 0000">
-      </div>
-      <button type="submit" th:text="#{connect.start.button}">Continue</button>
-    </form>
-  </div>
-
-  <div class="card step-card" th:if="${stage == 'WAIT_QR_SCAN'}">
-    <h2 th:text="#{connect.qrStep.title}">Scan to connect</h2>
-    <div class="qr-frame" th:if="${qrCodeImage}">
-      <img th:src="${qrCodeImage}" width="280" height="280" alt="QR code">
-    </div>
-    <p class="muted" th:text="#{connect.qr.instructions}">Telegram → Settings → Devices → Scan QR code</p>
-    <p class="hint" th:text="#{connect.qrStep.waiting}">Waiting for scan…</p>
-    <details class="qr-fallback" th:if="${state.qrLoginLink}">
-      <summary th:text="#{connect.qr.fallback}">Can't scan? Use this link instead</summary>
-      <code th:text="${state.qrLoginLink}"></code>
-    </details>
-    <form th:action="@{/connect/disconnect}" method="post" data-guard-resubmit>
-      <button type="submit" class="link" th:text="#{connect.qrStep.startOver}">Try another way</button>
-    </form>
-  </div>
-
-  <div class="card step-card" th:if="${stage == 'WAIT_CODE'}">
-    <h2 th:text="#{connect.step2.title}">Enter the code</h2>
-    <p class="muted" th:text="#{connect.step2.hint}">Telegram just sent it to you.</p>
-    <form th:action="@{/connect/code}" method="post" data-guard-resubmit>
-      <label for="code" th:text="#{connect.code.label}">Code</label>
-      <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code"
-             autofocus required>
-      <button type="submit" th:text="#{connect.code.button}">Continue</button>
-    </form>
-    <form th:action="@{/connect/code/resend}" method="post" data-guard-resubmit>
-      <button type="submit" class="link" th:text="#{connect.code.resend}">Didn't get a code? Resend it</button>
-    </form>
-  </div>
-
-  <div class="card step-card" th:if="${stage == 'WAIT_PASSWORD'}">
-    <h2 th:text="#{connect.step3.title}">Two-factor password</h2>
-    <p class="muted" th:text="#{connect.step3.hint}">Only if you've set one on Telegram.</p>
-    <form th:action="@{/connect/password}" method="post" data-guard-resubmit>
-      <label for="password" th:text="#{connect.password.label}">Password</label>
-      <input id="password" name="password" type="password" autocomplete="off" autofocus required>
-      <button type="submit" th:text="#{connect.password.button}">Continue</button>
-    </form>
-    <form th:action="@{/connect/disconnect}" method="post" data-guard-resubmit>
-      <button type="submit" class="link" th:text="#{connect.step3.cancel}">Cancel and start over</button>
-    </form>
-    <p class="hint" th:text="#{connect.step3.notEnabledHint}">
-      This step only appears because Two-Step Verification is turned on for this Telegram account.
-    </p>
-  </div>
-
   <div class="card step-card ok" th:if="${stage == 'READY'}">
     <h2 th:text="#{connect.readyStep.title}">Connected</h2>
     <p class="muted" th:text="#{connect.readyStep.hint}">Discover chats to get started.</p>
@@ -99,6 +29,10 @@
       <button type="submit" th:text="#{connect.discover.button}">Discover chats</button>
     </form>
   </div>
+
+  <p class="muted" th:unless="${stage == 'READY'}" th:text="#{connect.notReady.hint}">
+    Not connected right now -- sign in again to reconnect.
+  </p>
 
   <details class="card danger disconnect-card" th:if="${stage != 'DISCONNECTED'}">
     <summary th:text="#{connect.disconnect.title}">Disconnect</summary>
@@ -109,8 +43,6 @@
       <button type="submit" class="danger" th:text="#{connect.disconnect.button}">Disconnect</button>
     </form>
   </details>
-
-  <script th:src="@{/js/connect.js}" defer></script>
 </section>
 </body>
 </html>

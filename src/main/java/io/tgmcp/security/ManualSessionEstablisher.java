@@ -41,7 +41,7 @@ public class ManualSessionEstablisher {
         if (existingSession != null) {
             request.changeSessionId();
         }
-        UserDetails principal = this.userDetailsService.loadUserByUsername(user.email());
+        UserDetails principal = this.userDetailsService.loadUserByUsername(user.phoneNumber());
         var authentication = UsernamePasswordAuthenticationToken.authenticated(principal, null,
                 principal.getAuthorities());
         SecurityContext context = SecurityContextHolder.createEmptyContext();

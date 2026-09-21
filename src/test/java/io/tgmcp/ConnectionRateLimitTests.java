@@ -17,10 +17,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Security-audit finding SEC-10: Telegram onboarding actions (which can trigger real, costly
- * native TDLib work) previously shared no budget distinct from ordinary authenticated page
- * views. A tiny per-test budget, set via {@link TestPropertySource} rather than the shared
- * test profile's generous default, makes the limit reachable without looping hundreds of
- * times.
+ * native TDLib work, such as a full chat discovery pass) previously shared no budget distinct
+ * from ordinary authenticated page views. A tiny per-test budget, set via {@link
+ * TestPropertySource} rather than the shared test profile's generous default, makes the limit
+ * reachable without looping hundreds of times. Signing in is now the same act as connecting
+ * ({@code PreAuthLoginController}), so the remaining per-user-budgeted action on the (now
+ * read-only) Connect page is {@code /connect/discover}.
  */
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "tgmcp.abuse-controls.connect-actions-per-minute-per-user=2")
@@ -31,44 +33,35 @@ class ConnectionRateLimitTests extends AbstractIntegrationTest {
 
     @Test
     void blocksOnboardingActionsOnceThePerUserBudgetIsSpent() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("sec10-connect", "sec10@connect.invalid");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "sec10@connect.invalid",
-                team.user().telegramUserId());
+        Fixtures.Team team = this.fixtures.team("sec10-connect");
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/discover").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attributeExists("message"));
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/discover").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attributeExists("message"));
 
         // Third call within the same minute: budget of 2 is spent.
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/discover").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", org.hamcrest.Matchers.notNullValue()));
     }
 
     @Test
     void aDifferentUserHasItsOwnIndependentBudget() throws Exception {
-        Fixtures.Team teamA = this.fixtures.signInReadyTeam("sec10-connect-a", "sec10a@connect.invalid");
-        Fixtures.Team teamB = this.fixtures.signInReadyTeam("sec10-connect-b", "sec10b@connect.invalid");
-        MockHttpSession sessionA = signInViaTelegramCode(this.mockMvc, "sec10a@connect.invalid",
-                teamA.user().telegramUserId());
-        MockHttpSession sessionB = signInViaTelegramCode(this.mockMvc, "sec10b@connect.invalid",
-                teamB.user().telegramUserId());
+        Fixtures.Team teamA = this.fixtures.team("sec10-connect-a");
+        Fixtures.Team teamB = this.fixtures.team("sec10-connect-b");
+        MockHttpSession sessionA = signInViaPhoneNumber(this.mockMvc, teamA.user().phoneNumber());
+        MockHttpSession sessionB = signInViaPhoneNumber(this.mockMvc, teamB.user().phoneNumber());
 
         // Spend A's budget entirely.
-        this.mockMvc.perform(post("/connect/start").session(sessionA).with(csrf())
-                .param("method", "QR_CODE"));
-        this.mockMvc.perform(post("/connect/start").session(sessionA).with(csrf())
-                .param("method", "QR_CODE"));
+        this.mockMvc.perform(post("/connect/discover").session(sessionA).with(csrf()));
+        this.mockMvc.perform(post("/connect/discover").session(sessionA).with(csrf()));
 
         // B is untouched.
-        this.mockMvc.perform(post("/connect/start").session(sessionB).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/discover").session(sessionB).with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attributeExists("message"));
     }

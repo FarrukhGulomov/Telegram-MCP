@@ -67,14 +67,25 @@ public class Fixtures {
     }
 
     /**
+     * Turns an arbitrary, human-readable test seed (an old-style "email" literal works fine) into
+     * a normalized-looking phone number: digits and a leading {@code +} only, so it round-trips
+     * unchanged through {@code PreAuthLoginService#normalizePhoneNumber} and can be looked up
+     * again by exactly the value stored here.
+     */
+    private static String phoneNumberFor(String seed) {
+        long digits = Math.floorMod((long) seed.hashCode(), 900_000_000L) + 100_000_000L;
+        return "+1" + digits;
+    }
+
+    /**
      * A tenant and a sign-in-able owner, with no Telegram connection yet — the state a real
      * operator starts from. Signing in requires proving control of a Telegram account (there is
-     * no password), so a linked identity is assigned deterministically from {@code slug}: tests
-     * drive an actual sign-in via {@link io.tgmcp.support.FakeTelegramBotMessenger#latestCodeFor}
-     * against {@link AppUser#telegramUserId()} on the returned {@link Team#user()}.
+     * no password): the returned {@link Team#user()}'s phone number is derived from {@code
+     * identitySeed}, and tests drive an actual sign-in against it via {@link
+     * io.tgmcp.support.AbstractIntegrationTest#signInViaPhoneNumber}.
      */
-    public Team signInReadyTeam(String slug, String email) {
-        return signInReadyTeam(slug, email, "OWNER");
+    public Team signInReadyTeam(String slug, String identitySeed) {
+        return signInReadyTeam(slug, identitySeed, "OWNER");
     }
 
     /**
@@ -82,16 +93,14 @@ public class Fixtures {
      * -- used for security-audit finding F17's role-based authorization tests, since nothing in
      * the app's own seeding or signup path currently creates anything but an OWNER.
      */
-    public Team signInReadyTeam(String slug, String email, String role) {
+    public Team signInReadyTeam(String slug, String identitySeed, String role) {
         UUID tenantId = Ids.newId();
         this.tenants.insert(new Tenant(tenantId, slug, slug + " team", true, null));
-        long telegramUserId = Ids.newId().getLeastSignificantBits() & Long.MAX_VALUE;
-        String telegramUsername = "login_" + slug.replaceAll("[^a-zA-Z0-9]", "");
-        AppUser user = new AppUser(Ids.newId(), tenantId, email,
-                slug + " " + role.toLowerCase(java.util.Locale.ROOT), role, true, telegramUserId,
-                telegramUsername);
+        String phoneNumber = phoneNumberFor(identitySeed);
+        AppUser user = new AppUser(Ids.newId(), tenantId, phoneNumber,
+                slug + " " + role.toLowerCase(java.util.Locale.ROOT), role, true, null, null);
         this.users.insert(user);
-        AuthenticatedActor actor = new AuthenticatedActor(tenantId, user.id(), user.email(),
+        AuthenticatedActor actor = new AuthenticatedActor(tenantId, user.id(), user.phoneNumber(),
                 ActorType.UI_USER, java.util.Set.of("ui:manage"), null);
         return new Team(new Tenant(tenantId, slug, slug, true, null), user, null, actor);
     }
@@ -99,20 +108,21 @@ public class Fixtures {
     public Team team(String slug) {
         UUID tenantId = Ids.newId();
         this.tenants.insert(new Tenant(tenantId, slug, slug + " team", true, null));
+        String phoneNumber = phoneNumberFor(slug);
         long telegramUserId = Ids.newId().getLeastSignificantBits() & Long.MAX_VALUE;
         String telegramUsername = "login_" + slug.replaceAll("[^a-zA-Z0-9]", "");
-        AppUser user = new AppUser(Ids.newId(), tenantId, "owner@" + slug + ".invalid",
+        AppUser user = new AppUser(Ids.newId(), tenantId, phoneNumber,
                 slug + " owner", "OWNER", true, telegramUserId, telegramUsername);
         this.users.insert(user);
 
         TelegramConnection connection = new TelegramConnection(Ids.newId(), tenantId, user.id(),
-                TelegramAdapterKind.MOCK, LoginStage.READY, 400001L, "synthetic_owner",
-                "test", null, null, null);
+                TelegramAdapterKind.MOCK, LoginStage.READY, telegramUserId, telegramUsername,
+                phoneNumber, "test", null, null, null);
         this.connections.insert(connection);
-        this.connections.updateStatus(tenantId, connection.id(), LoginStage.READY, 400001L,
-                "synthetic_owner", null);
+        this.connections.updateStatus(tenantId, connection.id(), LoginStage.READY, telegramUserId,
+                telegramUsername, phoneNumber, null);
 
-        AuthenticatedActor actor = new AuthenticatedActor(tenantId, user.id(), user.email(),
+        AuthenticatedActor actor = new AuthenticatedActor(tenantId, user.id(), user.phoneNumber(),
                 ActorType.MCP_CLIENT, java.util.Set.of(McpScopes.READ, McpScopes.SCOPE_ANTHROPIC_CLAUDE),
                 "test-client");
         return new Team(new Tenant(tenantId, slug, slug, true, null), user, connection, actor);

@@ -2,6 +2,7 @@ package io.tgmcp;
 
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
+import io.tgmcp.telegram.gateway.LoginMethod;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,22 +34,30 @@ class ForwardedHeaderRedirectTests extends AbstractIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    private MockHttpSession sendCode(String email) throws Exception {
-        MvcResult sent = this.mockMvc.perform(post("/login").with(csrf()).param("identifier", email))
+    /**
+     * Starts a phone-number login and drives it up to (but not through) the final {@code
+     * /login/password} step -- the mock adapter always asks for a 2FA password after the code,
+     * so that final step is where the post-login redirect this test cares about is built.
+     */
+    private MockHttpSession startLoginToPasswordStep(String phoneNumber) throws Exception {
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", phoneNumber))
                 .andReturn();
-        return (MockHttpSession) sent.getRequest().getSession(false);
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+        this.mockMvc.perform(post("/login/code").session(session).with(csrf()).param("code", "00000"));
+        return session;
     }
 
     @Test
     void buildsAnHttpsRedirectWhenTheProxySaysTheOriginalRequestWasHttps() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("forwarded", EMAIL);
-        MockHttpSession session = sendCode(EMAIL);
-        String code = this.telegramBotMessenger.latestCodeFor(team.user().telegramUserId());
+        MockHttpSession session = startLoginToPasswordStep(team.user().phoneNumber());
 
-        this.mockMvc.perform(post("/login/verify").session(session).with(csrf())
+        this.mockMvc.perform(post("/login/password").session(session).with(csrf())
                         .header("X-Forwarded-Proto", "https")
                         .header("X-Forwarded-Host", "app-production-7109.up.railway.app")
-                        .param("code", code))
+                        .param("password", "unused"))
                 .andExpect(result -> {
                     String location = result.getResponse().getHeader("Location");
                     assertThat(location)
@@ -63,10 +72,9 @@ class ForwardedHeaderRedirectTests extends AbstractIntegrationTest {
     void stillBuildsAPlainRedirectWithNoForwardedHeaders() throws Exception {
         // Local development (curl, no proxy in front) must keep working exactly as before.
         Fixtures.Team team = this.fixtures.signInReadyTeam("noproxy", "owner@noproxy.invalid");
-        MockHttpSession session = sendCode("owner@noproxy.invalid");
-        String code = this.telegramBotMessenger.latestCodeFor(team.user().telegramUserId());
+        MockHttpSession session = startLoginToPasswordStep(team.user().phoneNumber());
 
-        this.mockMvc.perform(post("/login/verify").session(session).with(csrf()).param("code", code))
+        this.mockMvc.perform(post("/login/password").session(session).with(csrf()).param("password", "unused"))
                 .andExpect(result -> {
                     String location = result.getResponse().getHeader("Location");
                     assertThat(location).doesNotContain("app-production-7109.up.railway.app");

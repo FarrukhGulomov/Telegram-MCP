@@ -16,7 +16,7 @@ import org.springframework.stereotype.Repository;
 public class TelegramConnectionRepository {
 
     private static final String COLUMNS = """
-            id, tenant_id, owner_user_id, adapter, status, tg_user_id, tg_username,
+            id, tenant_id, owner_user_id, adapter, status, tg_user_id, tg_username, tg_phone_number,
             session_key_id, last_error, connected_at, updated_at
             """;
 
@@ -65,12 +65,13 @@ public class TelegramConnectionRepository {
     }
 
     public void updateStatus(UUID tenantId, UUID connectionId, LoginStage status,
-                             Long tgUserId, String tgUsername, String lastError) {
+                             Long tgUserId, String tgUsername, String tgPhoneNumber, String lastError) {
         jdbc.sql("""
                         UPDATE telegram_connections
                            SET status = :status,
                                tg_user_id = COALESCE(:tgUserId, tg_user_id),
                                tg_username = COALESCE(:tgUsername, tg_username),
+                               tg_phone_number = COALESCE(:tgPhoneNumber, tg_phone_number),
                                last_error = :lastError,
                                connected_at = CASE WHEN :status = 'READY' AND connected_at IS NULL
                                                    THEN now() ELSE connected_at END,
@@ -82,6 +83,7 @@ public class TelegramConnectionRepository {
                 .param("status", status.name())
                 .param("tgUserId", tgUserId)
                 .param("tgUsername", tgUsername)
+                .param("tgPhoneNumber", tgPhoneNumber)
                 .param("lastError", lastError)
                 .update();
     }
@@ -129,6 +131,7 @@ public class TelegramConnectionRepository {
                 LoginStage.valueOf(rs.getString("status")),
                 rs.getObject("tg_user_id", Long.class),
                 rs.getString("tg_username"),
+                rs.getString("tg_phone_number"),
                 rs.getString("session_key_id"),
                 rs.getString("last_error"),
                 Jdbc.instant(rs, "connected_at"),

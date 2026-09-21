@@ -112,7 +112,7 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
         String redirectUri = "https://example.com/callback";
         String clientId = register("generic-mcp-client", redirectUri, null);
         Fixtures.Team team = this.fixtures.signInReadyTeam("connector-1", "connector1@test.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "connector1@test.invalid", team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQuery(clientId, redirectUri, "mcp:read"))
@@ -146,7 +146,7 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
         String redirectUri = "https://chatgpt.com/connector/oauth/yqQjVKRbdOiv";
         String clientId = register("ChatGPT", redirectUri, null);
         Fixtures.Team team = this.fixtures.signInReadyTeam("connector-2", "connector2@test.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "connector2@test.invalid", team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         // Exactly what the real connector requested: every scope this server's own discovery
@@ -185,7 +185,7 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
         String redirectUri = "https://not-a-real-provider.example/callback";
         String clientId = register("untrusted-client", redirectUri, null);
         Fixtures.Team team = this.fixtures.signInReadyTeam("connector-3", "connector3@test.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "connector3@test.invalid", team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         String requestedScope = "mcp:read provider:anthropic_claude provider:openai_chatgpt";
@@ -226,7 +226,7 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
         String redirectUri = "https://example.com/callback";
         String clientId = register("generic-mcp-client-refresh", redirectUri, null);
         Fixtures.Team team = this.fixtures.signInReadyTeam("connector-5", "connector5@test.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "connector5@test.invalid", team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQuery(clientId, redirectUri, "mcp:read"))

@@ -7,7 +7,7 @@
   <link rel="stylesheet" th:href="@{/css/app.css}">
 </head>
 <body class="centered">
-<div class="auth-shell">
+<div class="auth-shell" th:attr="data-login-stage=${stage}">
   <div class="lang-switch-row">
     <div class="lang-switch">
       <a href="#" data-lang="en" th:classappend="${#locale.language == 'en'} ? 'is-active'">EN</a>
@@ -22,53 +22,82 @@
   <h1 th:text="#{login.heading}">Telegram Consent MCP</h1>
 
   <main class="card">
-    <p class="banner demo" th:if="${demoMode}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-      <span><strong th:text="#{login.demoMode.strong}">Demo mode.</strong>
-      <span th:text="#{login.demoMode.text(${adapter})}">Adapter {0}: everything is synthetic, nothing real is contacted.</span></span>
-    </p>
-
-    <p class="muted" th:if="${telegramLoginEnabled}" th:text="#{login.telegramCode.hint}">Enter your email or Telegram username; a code will be sent to your Telegram.</p>
-
-    <div class="flash err" th:if="${param.telegramError}">
+    <div class="flash err" th:if="${error}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-      <span th:text="#{login.telegramError}">Telegram sign-in failed or was cancelled.</span>
-    </div>
-    <div class="flash err" th:if="${param.telegramCodeError}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-      <span th:text="#{login.telegramCodeError}">Couldn't send the verification code. Open a chat with the sign-in bot first, then try again.</span>
-    </div>
-    <div class="flash ok" th:if="${param.loggedOut}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
-      <span th:text="#{login.loggedOut}">Signed out.</span>
-    </div>
-    <div class="flash ok" th:if="${param.registered}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
-      <span th:text="#{login.registered}">Account created.</span>
+      <span th:text="${error}"></span>
     </div>
     <div class="flash ok" th:if="${message}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
       <span th:text="${message}"></span>
     </div>
-
-    <form th:if="${telegramLoginEnabled}" th:action="@{/login}" method="post" data-guard-resubmit>
-      <label for="identifier" th:text="#{login.telegramCode.identifierLabel}">Email or Telegram username</label>
-      <input id="identifier" name="identifier" type="text" required autofocus autocomplete="username"
-             th:value="${demoMode} ? ${demoEmail} : ''">
-      <button type="submit" th:text="#{login.telegramCode.button}">Send code</button>
-    </form>
-
-    <div class="flash err" th:unless="${telegramLoginEnabled}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-      <span th:text="#{login.unavailable}">Sign-in is not available right now.</span>
+    <div class="flash ok" th:if="${param.loggedOut}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
+      <span th:text="#{login.loggedOut}">Signed out.</span>
     </div>
 
-    <p class="muted auth-note">
-      <span th:text="#{login.createAccount}">Need an account?</span>
-      <a th:href="@{/register}" th:text="#{login.registerLink}">Create one</a>
-    </p>
+    <div class="card step-card" th:if="${stage == 'PHONE_ENTRY' or stage == 'DISCONNECTED' or stage == 'ERROR'}">
+      <p class="muted" th:text="#{login.hint}">Enter the Telegram phone number you want to sign in with.</p>
+      <form th:action="@{/login/start}" method="post" data-guard-resubmit>
+        <label for="method" th:text="#{connect.method.label}">Method</label>
+        <select id="method" name="method" data-method-select>
+          <option value="PHONE_NUMBER" th:text="#{connect.method.phone}">Phone number</option>
+          <option value="QR_CODE" th:text="#{connect.method.qr}">QR code</option>
+        </select>
+        <label for="phoneNumber" th:text="#{connect.phoneNumber.label}">Phone number</label>
+        <input id="phoneNumber" name="phoneNumber" type="tel" autocomplete="tel" inputmode="tel"
+               placeholder="+1 555 000 0000" autofocus required>
+        <p class="hint" th:text="#{login.qrHint}">Choosing QR code only ever starts a brand-new account.</p>
+        <button type="submit" th:text="#{login.signIn}">Sign in</button>
+      </form>
+    </div>
+
+    <div class="card step-card" th:if="${stage == 'WAIT_QR_SCAN'}">
+      <h2 th:text="#{connect.qrStep.title}">Scan to connect</h2>
+      <div class="qr-frame" th:if="${qrCodeImage}">
+        <img th:src="${qrCodeImage}" width="280" height="280" alt="QR code">
+      </div>
+      <p class="muted" th:text="#{connect.qr.instructions}">Telegram → Settings → Devices → Scan QR code</p>
+      <p class="hint" th:text="#{connect.qrStep.waiting}">Waiting for scan…</p>
+      <form th:action="@{/login/cancel}" method="post" data-guard-resubmit>
+        <button type="submit" class="link" th:text="#{connect.qrStep.startOver}">Try another way</button>
+      </form>
+    </div>
+
+    <div class="card step-card" th:if="${stage == 'WAIT_CODE'}">
+      <h2 th:text="#{connect.step2.title}">Enter the code</h2>
+      <p class="muted" th:text="#{connect.step2.hint}">Telegram just sent it to you.</p>
+      <form th:action="@{/login/code}" method="post" data-guard-resubmit>
+        <label for="code" th:text="#{connect.code.label}">Code</label>
+        <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code"
+               autofocus required>
+        <button type="submit" th:text="#{connect.code.button}">Continue</button>
+      </form>
+      <form th:action="@{/login/code/resend}" method="post" data-guard-resubmit>
+        <button type="submit" class="link" th:text="#{connect.code.resend}">Didn't get a code? Resend it</button>
+      </form>
+      <form th:action="@{/login/cancel}" method="post" data-guard-resubmit>
+        <button type="submit" class="link" th:text="#{connect.step3.cancel}">Cancel and start over</button>
+      </form>
+    </div>
+
+    <div class="card step-card" th:if="${stage == 'WAIT_PASSWORD'}">
+      <h2 th:text="#{connect.step3.title}">Two-factor password</h2>
+      <p class="muted" th:text="#{connect.step3.hint}">Only if you've set one on Telegram.</p>
+      <form th:action="@{/login/password}" method="post" data-guard-resubmit>
+        <label for="password" th:text="#{connect.password.label}">Password</label>
+        <input id="password" name="password" type="password" autocomplete="off" autofocus required>
+        <button type="submit" th:text="#{connect.password.button}">Continue</button>
+      </form>
+      <form th:action="@{/login/cancel}" method="post" data-guard-resubmit>
+        <button type="submit" class="link" th:text="#{connect.step3.cancel}">Cancel and start over</button>
+      </form>
+      <p class="hint" th:text="#{connect.step3.notEnabledHint}">
+        This step only appears because Two-Step Verification is turned on for this Telegram account.
+      </p>
+    </div>
   </main>
 </div>
+<script th:src="@{/js/login.js}" defer></script>
 <script src="/js/forms.js" defer></script>
 <script src="/js/lang.js" defer></script>
 </body>

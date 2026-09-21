@@ -53,14 +53,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
     private TelegramConnectionRepository connections;
 
     private MockHttpSession signInAndConnect(Fixtures.Team team) throws Exception {
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, team.user().email(),
-                team.user().telegramUserId());
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                .param("method", "QR_CODE")).andExpect(status().is3xxRedirection());
-        this.mockMvc.perform(post("/connect/code").session(session).with(csrf())
-                .param("code", "12345")).andExpect(status().is3xxRedirection());
-        this.mockMvc.perform(post("/connect/password").session(session).with(csrf())
-                .param("password", "any")).andExpect(status().is3xxRedirection());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         this.mockMvc.perform(post("/connect/discover").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
         return session;

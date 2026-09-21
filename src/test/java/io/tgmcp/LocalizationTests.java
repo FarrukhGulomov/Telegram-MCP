@@ -3,6 +3,7 @@ package io.tgmcp;
 import io.tgmcp.chat.Chat;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
+import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.mock.SyntheticDataset;
 import org.junit.jupiter.api.Test;
 
@@ -40,12 +41,12 @@ class LocalizationTests extends AbstractIntegrationTest {
 
         this.mockMvc.perform(get("/login").param("lang", "uz"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("Kod yuborish")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Kirish")))
                 .andExpect(cookie().value("TGMCP_LANG", "uz"));
 
         this.mockMvc.perform(get("/login").param("lang", "ru"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("Отправить код")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Войти")))
                 .andExpect(cookie().value("TGMCP_LANG", "ru"));
     }
 
@@ -53,15 +54,19 @@ class LocalizationTests extends AbstractIntegrationTest {
     void languageCookiePersistsAcrossAuthenticatedPagesAndTranslatesFlashMessages() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("locale-team", "owner@locale.invalid");
 
-        MvcResult sent = this.mockMvc.perform(post("/login").with(csrf())
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
                         .cookie(new jakarta.servlet.http.Cookie("TGMCP_LANG", "ru"))
-                        .param("identifier", team.user().email()))
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
                 .andReturn();
-        MockHttpSession session = (MockHttpSession) sent.getRequest().getSession(false);
-        String code = this.telegramBotMessenger.latestCodeFor(team.user().telegramUserId());
-        this.mockMvc.perform(post("/login/verify").session(session).with(csrf())
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+        this.mockMvc.perform(post("/login/code").session(session).with(csrf())
                         .cookie(new jakarta.servlet.http.Cookie("TGMCP_LANG", "ru"))
-                        .param("code", code))
+                        .param("code", "00000"))
+                .andExpect(status().is3xxRedirection());
+        this.mockMvc.perform(post("/login/password").session(session).with(csrf())
+                        .cookie(new jakarta.servlet.http.Cookie("TGMCP_LANG", "ru"))
+                        .param("password", "unused"))
                 .andExpect(status().is3xxRedirection());
         assertThat(session).isNotNull();
 
@@ -92,8 +97,7 @@ class LocalizationTests extends AbstractIntegrationTest {
         Fixtures.Team team = this.fixtures.team("enum-i18n");
         Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Enum i18n chat", "enum_i18n_chat");
 
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, team.user().email(),
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         this.mockMvc.perform(get("/chats/" + chat.id()).session(session).param("lang", "uz"))

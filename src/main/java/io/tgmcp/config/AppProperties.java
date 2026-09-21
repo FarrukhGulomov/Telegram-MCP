@@ -19,8 +19,7 @@ public record AppProperties(@DefaultValue Telegram telegram,
                             @DefaultValue Secrets secrets,
                             @DefaultValue Demo demo,
                             @DefaultValue AbuseControls abuseControls,
-                            @DefaultValue ForwardedHeaders forwardedHeaders,
-                            @DefaultValue TelegramLogin telegramLogin) {
+                            @DefaultValue ForwardedHeaders forwardedHeaders) {
 
     public record Telegram(@DefaultValue("MOCK") TelegramAdapterKind adapter,
                            /** TDLib api_id / api_hash. Required only for the TDLIB adapter. */
@@ -143,7 +142,6 @@ public record AppProperties(@DefaultValue Telegram telegram,
     public record Demo(@DefaultValue("true") boolean seedSyntheticData,
                        @DefaultValue("demo") String tenantSlug,
                        @DefaultValue("Synthetic Demo Team") String tenantName,
-                       @DefaultValue("owner@demo.invalid") String ownerEmail,
                        @DefaultValue List<String> extraUsers,
                        /**
                         * Security-audit finding SEC-11's remediation: a database promoted to
@@ -198,20 +196,5 @@ public record AppProperties(@DefaultValue Telegram telegram,
      * reachable at a hostname it was not actually configured for.
      */
     public record ForwardedHeaders(@DefaultValue List<String> trustedHosts) {
-    }
-
-    /**
-     * "Sign in with Telegram": a redirect-based login (no widget JavaScript is embedded, so
-     * {@code script-src 'self'} on the management UI is untouched) backed by a Telegram bot
-     * whose domain has been registered with BotFather ({@code /setdomain}). Disabled -- the
-     * link is hidden from the sign-in page -- until both fields are configured, matching how
-     * the TDLIB Telegram adapter itself stays off until its own credentials are present.
-     */
-    public record TelegramLogin(String botToken, String botUsername) {
-
-        public boolean enabled() {
-            return this.botToken != null && !this.botToken.isBlank()
-                    && this.botUsername != null && !this.botUsername.isBlank();
-        }
     }
 }

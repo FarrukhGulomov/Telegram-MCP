@@ -39,8 +39,7 @@ class ChatFormValidationTests extends AbstractIntegrationTest {
     private ChatActivationRepository activations;
 
     private MockHttpSession signIn(Fixtures.Team team) throws Exception {
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, team.user().email(),
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
         return session;
     }

@@ -1,0 +1,163 @@
+package io.tgmcp.ui;
+
+import java.util.Map;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+import io.tgmcp.security.PreAuthLoginService;
+import io.tgmcp.telegram.gateway.LoginMethod;
+import io.tgmcp.telegram.gateway.LoginState;
+
+import org.springframework.context.MessageSource;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+
+/**
+ * The only way into the application: signing in is the same act as connecting Telegram. A
+ * phone number (or, for a brand-new account, a QR scan) plus whatever Telegram itself demands
+ * next -- a code, and a two-factor password if one is set -- is the whole login. See {@link
+ * PreAuthLoginService} for why a returning account is disconnected and fully re-authenticated
+ * on every sign-in, and why QR-code login only ever creates a new account.
+ *
+ * <p>Handles its own errors locally, like {@code UiExceptionHandler}'s advice does for the
+ * authenticated controllers, but redirecting to {@code /login} rather than {@code /}: this
+ * page is reachable without any session, so there is no dashboard to fall back to.
+ */
+@Controller
+public class PreAuthLoginController {
+
+    private final PreAuthLoginService loginService;
+    private final MessageSource messages;
+    private final QrCodeRenderer qrCodeRenderer;
+
+    public PreAuthLoginController(PreAuthLoginService loginService, MessageSource messages,
+                                  QrCodeRenderer qrCodeRenderer) {
+        this.loginService = loginService;
+        this.messages = messages;
+        this.qrCodeRenderer = qrCodeRenderer;
+    }
+
+    @GetMapping("/login")
+    public String show(HttpServletRequest request, Model model) {
+        LoginState state;
+        try {
+            state = this.loginService.status(request);
+        }
+        catch (IllegalStateException ex) {
+            state = null;
+        }
+        model.addAttribute("state", state);
+        model.addAttribute("stage", state == null ? "PHONE_ENTRY" : state.stage().name());
+        if (state != null && state.qrLoginLink() != null) {
+            model.addAttribute("qrCodeImage", this.qrCodeRenderer.toDataUri(state.qrLoginLink()));
+        }
+        return "login";
+    }
+
+    @PostMapping("/login/start")
+    public String start(@RequestParam LoginMethod method,
+                        @RequestParam(name = "phoneNumber", required = false) String phoneNumber,
+                        HttpServletRequest request, HttpServletResponse response,
+                        RedirectAttributes redirectAttributes) {
+        try {
+            LoginState state = this.loginService.begin(request, method, phoneNumber);
+            if (state.ready() && this.loginService.finishIfReady(request, response)) {
+                return "redirect:/";
+            }
+        }
+        catch (IllegalArgumentException | IllegalStateException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+        }
+        return "redirect:/login";
+    }
+
+    @PostMapping("/login/code")
+    public String code(@RequestParam String code, HttpServletRequest request, HttpServletResponse response,
+                       RedirectAttributes redirectAttributes) {
+        try {
+            LoginState state = this.loginService.submitCode(request, code);
+            if (state.ready() && this.loginService.finishIfReady(request, response)) {
+                return "redirect:/";
+            }
+        }
+        catch (IllegalArgumentException | IllegalStateException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+        }
+        return "redirect:/login";
+    }
+
+    @PostMapping("/login/code/resend")
+    public String resendCode(HttpServletRequest request, RedirectAttributes redirectAttributes) {
+        try {
+            this.loginService.resendCode(request);
+            redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, "login.verify.resent"));
+        }
+        catch (IllegalArgumentException | IllegalStateException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+        }
+        return "redirect:/login";
+    }
+
+    @PostMapping("/login/password")
+    public String password(@RequestParam String password, HttpServletRequest request, HttpServletResponse response,
+                           RedirectAttributes redirectAttributes) {
+        try {
+            LoginState state = this.loginService.submitPassword(request, password);
+            if (state.ready() && this.loginService.finishIfReady(request, response)) {
+                return "redirect:/";
+            }
+        }
+        catch (IllegalArgumentException | IllegalStateException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+        }
+        return "redirect:/login";
+    }
+
+    @PostMapping("/login/cancel")
+    public String cancel(HttpServletRequest request) {
+        this.loginService.cancel(request);
+        return "redirect:/login";
+    }
+
+    /**
+     * Polled by {@code /js/login.js} while the rendered stage is one that can still move on
+     * asynchronously (a QR scan) -- see {@code ConnectionController#status} for the identical
+     * reasoning on the authenticated Connect page.
+     */
+    @GetMapping("/login/status")
+    @ResponseBody
+    public Map<String, String> status(HttpServletRequest request) {
+        try {
+            return Map.of("stage", this.loginService.status(request).stage().name());
+        }
+        catch (IllegalStateException ex) {
+            return Map.of("stage", "NONE");
+        }
+    }
+
+    /**
+     * Reached once client-side polling sees the stage move to READY (a QR scan confirmed out of
+     * band) -- {@code /login/code}/{@code /login/password} already call the same {@link
+     * PreAuthLoginService#finishIfReady} synchronously for the phone-number method, since that
+     * transition normally completes within the same request there.
+     */
+    @GetMapping("/login/finish")
+    public String finish(HttpServletRequest request, HttpServletResponse response,
+                         RedirectAttributes redirectAttributes) {
+        try {
+            if (this.loginService.finishIfReady(request, response)) {
+                return "redirect:/";
+            }
+        }
+        catch (IllegalStateException ex) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
+        }
+        return "redirect:/login";
+    }
+}

@@ -80,28 +80,17 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/login"));
 
-        // 2. An identifier matching no account gets the same generic response as a match (no
-        // account enumeration), and no session.
-        this.mockMvc.perform(post("/login").with(csrf()).param("identifier", "nobody@example.invalid"))
-                .andExpect(redirectedUrl("/login"));
-
-        // 3. The real account's identifier gets a code on Telegram; entering it establishes the session.
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, EMAIL, team.user().telegramUserId());
+        // 2. Signing in IS connecting Telegram: the phone number's own code (and 2FA password,
+        // which the mock adapter always asks for) is the whole login, and reaching READY
+        // establishes the session in the same request sequence.
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
-
-        // 4. Connect Telegram through the two-step login the mock adapter models.
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                .param("method", "QR_CODE")).andExpect(status().is3xxRedirection());
-        this.mockMvc.perform(post("/connect/code").session(session).with(csrf())
-                .param("code", "12345")).andExpect(status().is3xxRedirection());
-        this.mockMvc.perform(post("/connect/password").session(session).with(csrf())
-                .param("password", "any")).andExpect(status().is3xxRedirection());
 
         TelegramConnection connection = this.connections
                 .findByOwner(team.tenant().id(), team.user().id()).orElseThrow();
         assertThat(connection.status()).isEqualTo(LoginStage.READY);
 
-        // 5. Discovery is not authorization: chats become visible, nothing is stored.
+        // 3. Discovery is not authorization: chats become visible, nothing is stored.
         this.mockMvc.perform(post("/connect/discover").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
 
@@ -193,7 +182,7 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
     @Test
     void rejectsAStateChangingPostWithoutACsrfToken() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("demo", EMAIL);
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, EMAIL, team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
         this.mockMvc.perform(post("/chats/" + UUID.randomUUID() + "/revoke").session(session))
                 .andExpect(status().isForbidden());
@@ -202,13 +191,8 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
     @Test
     void escapesUntrustedChatTitlesRatherThanRenderingThemAsMarkup() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("demo", EMAIL);
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, EMAIL, team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                .param("method", "QR_CODE"));
-        this.mockMvc.perform(post("/connect/code").session(session).with(csrf()).param("code", "1"));
-        this.mockMvc.perform(post("/connect/password").session(session).with(csrf())
-                .param("password", "1"));
         this.mockMvc.perform(post("/connect/discover").session(session).with(csrf()));
 
         TelegramConnection connection = this.connections

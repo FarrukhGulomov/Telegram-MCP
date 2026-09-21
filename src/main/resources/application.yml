@@ -182,12 +182,3 @@ tgmcp:
   oauth:
     issuer: ${TGMCP_OAUTH_ISSUER:http://localhost:8080}
     public-base-url: ${TGMCP_PUBLIC_BASE_URL:http://localhost:8080}
-
-  # Sign-in and registration have no password fallback any more, so this must be configured
-  # for either to work at all: create a bot with @BotFather (no /setdomain needed -- see
-  # TelegramLinkingService, which replaces the oauth.telegram.org widget with a plain
-  # t.me/<bot>?start=<token> deep link and a webhook, self-registered by
-  # TelegramWebhookRegistrar against tgmcp.oauth.public-base-url on every startup).
-  telegram-login:
-    bot-token: ${TGMCP_TELEGRAM_LOGIN_BOT_TOKEN:}
-    bot-username: ${TGMCP_TELEGRAM_LOGIN_BOT_USERNAME:}

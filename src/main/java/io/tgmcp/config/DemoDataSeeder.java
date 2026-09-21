@@ -64,32 +64,24 @@ public class DemoDataSeeder implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         AppProperties.Demo demo = this.properties.demo();
-        UUID tenantId = this.tenants.findBySlug(demo.tenantSlug())
-                .map(Tenant::id)
-                .orElseGet(() -> {
-                    UUID id = Ids.newId();
-                    this.tenants.insert(new Tenant(id, demo.tenantSlug(), demo.tenantName(), true, null));
-                    log.info("Created demo tenant '{}'", demo.tenantSlug());
-                    return id;
-                });
-
-        if (this.users.findByEmail(demo.ownerEmail()).isEmpty()) {
-            // There is no password to sign in with -- like every other account, the demo owner
-            // can only sign in once a Telegram identity is linked to it, which this seeder does
-            // not do on its own.
-            this.users.insert(new AppUser(Ids.newId(), tenantId, demo.ownerEmail(),
-                    "Demo Owner", "OWNER", true, null, null));
-            log.info("Created demo user {}", demo.ownerEmail());
-        }
+        // There is no password, and no phone number this seeder can plausibly complete a real
+        // Telegram login with -- like every other account, the demo owner needs one linked
+        // before it can actually sign in, which this seeder deliberately does not do on its
+        // own (see the "hozircha alohida hal qilamiz" deferral). Its phone_number stays null,
+        // so it is created exactly once, alongside its tenant, never re-checked afterward.
+        this.tenants.findBySlug(demo.tenantSlug()).ifPresentOrElse(existing -> { }, () -> {
+            UUID tenantId = Ids.newId();
+            this.tenants.insert(new Tenant(tenantId, demo.tenantSlug(), demo.tenantName(), true, null));
+            this.users.insert(new AppUser(Ids.newId(), tenantId, null, "Demo Owner", "OWNER", true, null, null));
+            log.info("Created demo tenant '{}' with its owner", demo.tenantSlug());
+        });
 
         // A second tenant, so that cross-tenant isolation is observable in the running app and
         // not only in tests.
-        this.tenants.findBySlug("other").orElseGet(() -> {
+        this.tenants.findBySlug("other").ifPresentOrElse(existing -> { }, () -> {
             UUID otherId = Ids.newId();
             this.tenants.insert(new Tenant(otherId, "other", "Second Synthetic Tenant", true, null));
-            this.users.insert(new AppUser(Ids.newId(), otherId, "owner@other.invalid",
-                    "Other Owner", "OWNER", true, null, null));
-            return this.tenants.findBySlug("other").orElseThrow();
+            this.users.insert(new AppUser(Ids.newId(), otherId, null, "Other Owner", "OWNER", true, null, null));
         });
 
         registerMcpClient(CLAUDE_DEMO_CLIENT_ID, "Claude (demo registration)",

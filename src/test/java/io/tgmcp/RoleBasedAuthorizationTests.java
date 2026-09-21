@@ -35,20 +35,17 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
     @Test
     void aMemberGets403OnAManagementPost() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("f17-member", "member@f17.invalid", "MEMBER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "member@f17.invalid",
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).as("MEMBER must still be able to sign in").isNotNull();
 
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/disconnect").session(session).with(csrf()))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void aMemberCanStillViewPages() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("f17-member-view", "member2@f17.invalid", "MEMBER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "member2@f17.invalid",
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
         this.mockMvc.perform(get("/").session(session))
                 .andExpect(status().isOk());
@@ -59,22 +56,18 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
     @Test
     void anOwnerCanStillPerformManagementActions() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("f17-owner", "owner@f17.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "owner@f17.invalid",
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/disconnect").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
     }
 
     @Test
     void anAdminCanStillPerformManagementActions() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("f17-admin", "admin@f17.invalid", "ADMIN");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "admin@f17.invalid",
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/disconnect").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
     }
 
@@ -88,11 +81,9 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
     @Test
     void aDemotedOwnersExistingSessionCanNoLongerPerformManagementActions() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("sec09-demoted", "demoted@sec09.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "demoted@sec09.invalid",
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/disconnect").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/connect"));
 
@@ -100,8 +91,7 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
 
         // The session's own stale ROLE_OWNER authority still passes Spring Security's own
         // check, so only the fresh application-level check in requireAdmin() can reject this.
-        this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
-                        .param("method", "QR_CODE"))
+        this.mockMvc.perform(post("/connect/disconnect").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/"));
     }
@@ -113,8 +103,7 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
     @Test
     void aDisabledUsersExistingSessionCanNoLongerDoAnything() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("sec09-disabled", "disabled@sec09.invalid", "OWNER");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "disabled@sec09.invalid",
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
         this.mockMvc.perform(get("/connect").session(session)).andExpect(status().isOk());
 

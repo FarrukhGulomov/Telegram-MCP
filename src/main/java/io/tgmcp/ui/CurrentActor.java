@@ -51,7 +51,7 @@ public class CurrentActor {
         if (authentication == null || !authentication.isAuthenticated()) {
             throw new IllegalStateException("Not authenticated");
         }
-        AppUser user = this.users.findByEmail(authentication.getName())
+        AppUser user = this.users.findByPhoneNumber(authentication.getName())
                 .orElseThrow(() -> new IllegalStateException("Authenticated principal has no user record"));
         // Security-audit finding SEC-09: the session's Authentication reflects account status
         // only as of sign-in time. AppUser is already re-read from the database on every call
@@ -65,7 +65,7 @@ public class CurrentActor {
     }
 
     private static AuthenticatedActor actor(AppUser user) {
-        return new AuthenticatedActor(user.tenantId(), user.id(), user.email(), ActorType.UI_USER,
+        return new AuthenticatedActor(user.tenantId(), user.id(), user.phoneNumber(), ActorType.UI_USER,
                 java.util.Set.of("ui:manage"), null);
     }
 }

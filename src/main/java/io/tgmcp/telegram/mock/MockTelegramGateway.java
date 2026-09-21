@@ -42,6 +42,7 @@ public class MockTelegramGateway implements TelegramGateway {
     private final Clock clock;
     private final Map<Long, SyntheticChat> chats;
     private final Map<java.util.UUID, LoginState> sessions = new ConcurrentHashMap<>();
+    private final Map<java.util.UUID, String> pendingPhoneNumbers = new ConcurrentHashMap<>();
     private final Deque<TelegramGatewayException> injectedFailures = new ArrayDeque<>();
     private final Map<Long, Instant> revisionMarks = new ConcurrentHashMap<>();
     private final AtomicLong callCount = new AtomicLong();
@@ -126,8 +127,13 @@ public class MockTelegramGateway implements TelegramGateway {
 
     @Override
     public LoginState beginLogin(ConnectionRef ref, LoginMethod method, String phoneNumber) {
+        // Real getMe() always reports a phone number, QR-confirmed logins included (it belongs
+        // to whichever device scanned, never to anything a form typed) -- a fixed synthetic
+        // stand-in here keeps that property true for QR in the mock adapter too.
+        this.pendingPhoneNumbers.put(ref.connectionId(),
+                phoneNumber != null ? phoneNumber : "+10000000000");
         LoginState state = (method == LoginMethod.QR_CODE)
-                ? new LoginState(LoginStage.WAIT_QR_SCAN, "tg://login?token=SYNTHETIC-DEMO-TOKEN", null, null,
+                ? new LoginState(LoginStage.WAIT_QR_SCAN, "tg://login?token=SYNTHETIC-DEMO-TOKEN", null, null, null,
                         "login.mock.qrLogin")
                 : LoginState.of(LoginStage.WAIT_CODE, "login.mock.waitCode");
         this.sessions.put(ref.connectionId(), state);
@@ -155,7 +161,13 @@ public class MockTelegramGateway implements TelegramGateway {
 
     @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
-        LoginState state = new LoginState(LoginStage.READY, null, 400001L, "synthetic_demo_owner",
+        // Deterministic per connection (never a fixed constant): app_users.telegram_user_id and
+        // .telegram_username are both uniquely constrained, and every login now writes an
+        // account's identity from this, so two different tenants' mock logins must never collide.
+        long tgUserId = ref.connectionId().getLeastSignificantBits() & Long.MAX_VALUE;
+        String tgUsername = "synthetic_" + ref.connectionId().toString().replace("-", "").substring(0, 12);
+        String phoneNumber = this.pendingPhoneNumbers.getOrDefault(ref.connectionId(), "+10000000000");
+        LoginState state = new LoginState(LoginStage.READY, null, tgUserId, tgUsername, phoneNumber,
                 "login.mock.ready");
         this.sessions.put(ref.connectionId(), state);
         return state;

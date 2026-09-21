@@ -63,8 +63,7 @@ class ChatParticipantRefreshTests extends AbstractIntegrationTest {
         Fixtures.Team team = this.fixtures.team("participant-refresh");
         Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Refresh chat", "refresh_chat");
 
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, team.user().email(),
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         this.mockMvc.perform(post("/chats/" + chat.id() + "/select").session(session).with(csrf())
@@ -102,8 +101,7 @@ class ChatParticipantRefreshTests extends AbstractIntegrationTest {
         Fixtures.Team team = this.fixtures.team("participant-refresh-paused");
         Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Refresh chat", "refresh_chat_paused");
 
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, team.user().email(),
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
         assertThat(session).isNotNull();
 
         this.mockMvc.perform(post("/chats/" + chat.id() + "/select").session(session).with(csrf())

@@ -2,6 +2,7 @@ package io.tgmcp.support;
 
 import java.time.Clock;
 
+import io.tgmcp.telegram.gateway.LoginMethod;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.mock.MockTelegramGateway;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,7 +28,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({TestClockConfiguration.class, TestTelegramBotMessengerConfiguration.class})
+@Import(TestClockConfiguration.class)
 public abstract class AbstractIntegrationTest {
 
     @Autowired
@@ -42,21 +43,17 @@ public abstract class AbstractIntegrationTest {
     @Autowired
     protected TelegramGateway telegramGateway;
 
-    @Autowired
-    protected FakeTelegramBotMessenger telegramBotMessenger;
-
     @BeforeEach
     void resetDatabaseAndClock() {
         this.jdbcTemplate.execute("""
                 TRUNCATE audit_events, messages, sync_checkpoints, consent_records, chat_participants,
-                         chat_activations, chats, telegram_connections, login_verification_codes, app_users,
+                         chat_activations, chats, telegram_connections, app_users,
                          tenants, oauth2_authorization, oauth2_authorization_consent, oauth2_registered_client
                 RESTART IDENTITY CASCADE
                 """);
         // Clock first, then the adapter: the synthetic dataset is generated relative to "now".
         mutableClock().set(TestClockConfiguration.START);
         mockGateway().reset();
-        this.telegramBotMessenger.reset();
     }
 
     protected MutableClock mutableClock() {
@@ -68,20 +65,21 @@ public abstract class AbstractIntegrationTest {
     }
 
     /**
-     * Drives the whole "sign in with a Telegram code" flow -- there is no password to check any
-     * more -- and returns the resulting authenticated session: sends a code to {@code
-     * telegramUserId} via {@code identifier} (an email or {@code @username}), reads it back from
-     * {@link FakeTelegramBotMessenger#latestCodeFor}, and submits it.
+     * Drives the MOCK adapter's phone -> code -> password -> READY login through the unified
+     * auth endpoints and returns the resulting authenticated session. The mock always asks for
+     * a 2FA password after the code (see {@code MockTelegramGateway#submitCode}), so every
+     * successful login goes through both steps regardless of whether the account has 2FA set.
      */
-    protected MockHttpSession signInViaTelegramCode(MockMvc mockMvc, String identifier, long telegramUserId)
-            throws Exception {
-        MvcResult sent = mockMvc.perform(post("/login").with(csrf()).param("identifier", identifier))
+    protected MockHttpSession signInViaPhoneNumber(MockMvc mockMvc, String phoneNumber) throws Exception {
+        MvcResult started = mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", phoneNumber))
                 .andReturn();
-        MockHttpSession session = (MockHttpSession) sent.getRequest().getSession(false);
-        String code = this.telegramBotMessenger.latestCodeFor(telegramUserId);
-        MvcResult verified = mockMvc.perform(post("/login/verify").session(session).with(csrf())
-                        .param("code", code))
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+        mockMvc.perform(post("/login/code").session(session).with(csrf()).param("code", "00000")).andReturn();
+        MvcResult finished = mockMvc.perform(post("/login/password").session(session).with(csrf())
+                        .param("password", "unused"))
                 .andReturn();
-        return (MockHttpSession) verified.getRequest().getSession(false);
+        return (MockHttpSession) finished.getRequest().getSession(false);
     }
 }

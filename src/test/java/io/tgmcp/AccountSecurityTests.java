@@ -35,8 +35,7 @@ class AccountSecurityTests extends AbstractIntegrationTest {
     @Test
     void connectedAppsListsAndRevokesAnAuthorization() throws Exception {
         Fixtures.Team team = this.fixtures.signInReadyTeam("acct-d", "acct-d@example.invalid");
-        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "acct-d@example.invalid",
-                team.user().telegramUserId());
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
 
         String clientRowId = UUID.randomUUID().toString();
         this.jdbcTemplate.update("""
@@ -52,13 +51,13 @@ class AccountSecurityTests extends AbstractIntegrationTest {
                              authorized_scopes, access_token_value, access_token_issued_at)
                         VALUES (?, ?, ?, 'authorization_code', 'mcp:read', 'token-value', ?)
                         """,
-                UUID.randomUUID().toString(), clientRowId, team.user().email(),
+                UUID.randomUUID().toString(), clientRowId, team.user().phoneNumber(),
                 java.sql.Timestamp.from(Instant.now()));
         this.jdbcTemplate.update("""
                         INSERT INTO oauth2_authorization_consent (registered_client_id, principal_name, authorities)
                         VALUES (?, ?, 'SCOPE_mcp:read')
                         """,
-                clientRowId, team.user().email());
+                clientRowId, team.user().phoneNumber());
 
         this.mockMvc.perform(get("/account").session(session))
                 .andExpect(status().isOk())
@@ -71,11 +70,11 @@ class AccountSecurityTests extends AbstractIntegrationTest {
 
         Integer remainingAuthorizations = this.jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM oauth2_authorization WHERE registered_client_id = ? AND principal_name = ?",
-                Integer.class, clientRowId, team.user().email());
+                Integer.class, clientRowId, team.user().phoneNumber());
         Integer remainingConsents = this.jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM oauth2_authorization_consent WHERE registered_client_id = ? "
                         + "AND principal_name = ?",
-                Integer.class, clientRowId, team.user().email());
+                Integer.class, clientRowId, team.user().phoneNumber());
         assertThat(remainingAuthorizations).isZero();
         assertThat(remainingConsents)
                 .as("the consent decision must be removed too, or the client could silently "

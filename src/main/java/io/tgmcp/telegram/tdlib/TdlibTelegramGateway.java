@@ -303,7 +303,9 @@ public class TdlibTelegramGateway implements TelegramGateway {
             JsonNode me = this.client.request("getMe", Map.of());
             long tgUserId = me.path("id").asLong();
             String username = me.path("usernames").path("editable_username").asString(null);
-            return new LoginState(state.stage(), state.qrLoginLink(), tgUserId, username, state.message());
+            String phoneNumber = me.path("phone_number").asString(null);
+            return new LoginState(state.stage(), state.qrLoginLink(), tgUserId, username, phoneNumber,
+                    state.message());
         }
         catch (RuntimeException ex) {
             log.warn("Reached authorizationStateReady but could not fetch account identity via getMe: {}",
@@ -319,7 +321,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
             case "authorizationStateWaitCode" ->
                     LoginState.of(LoginStage.WAIT_CODE, "login.tdlib.waitCode");
             case "authorizationStateWaitOtherDeviceConfirmation" ->
-                    new LoginState(LoginStage.WAIT_QR_SCAN, state.path("link").asString(null), null, null,
+                    new LoginState(LoginStage.WAIT_QR_SCAN, state.path("link").asString(null), null, null, null,
                             "login.tdlib.waitQrScan");
             case "authorizationStateWaitPassword" ->
                     LoginState.of(LoginStage.WAIT_PASSWORD, "login.tdlib.waitPassword");

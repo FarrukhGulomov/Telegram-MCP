@@ -452,6 +452,4 @@ code {
   .actions-row form.inline { width: auto; }
 }
 
-/* connect.html's method-select toggle (see static/js/connect.js) hides the phone-number
-   field until "Phone number" is chosen as the login method. */
 [hidden] { display: none !important; }
