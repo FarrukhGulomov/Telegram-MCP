@@ -63,6 +63,19 @@
       </form>
     </div>
 
+    <!--
+      Security-audit finding SEC-R07: /login/finish is a state-changing POST, so it needs the
+      same CSRF token every other form on this page already gets from Spring Security's
+      Thymeleaf integration -- rendered server-side here rather than built up in JS, exactly
+      like every other form above, so there is no separate CSRF-token-in-JS code path to get
+      wrong. login.js fills in the nonce field (handed out by /login/status only once the
+      login this page is polling for actually reaches READY) and submits this form itself;
+      nothing about it is ever shown to or clicked by the visitor.
+    -->
+    <form id="finishLoginForm" th:action="@{/login/finish}" method="post" hidden>
+      <input type="hidden" name="nonce" value="">
+    </form>
+
     <div class="card step-card" th:if="${stage == 'WAIT_CODE'}">
       <h2 th:text="#{connect.step2.title}">Enter the code</h2>
       <p class="muted" th:text="${stateHint} ?: #{connect.step2.hint}">Telegram just sent it to you.</p>

@@ -32,6 +32,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import tools.jackson.databind.json.JsonMapper;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -62,6 +64,17 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
     private ChatActivationRepository activations;
     @MockitoSpyBean
     private TelegramGateway gateway;
+
+    /**
+     * Mirrors what login.js itself does: read the single-use nonce {@code /login/status} hands
+     * back once the stage it reports is READY (security-audit finding SEC-R07), so a test can
+     * complete the same asynchronous finish path a real QR-scan completion takes.
+     */
+    private String finishNonceFor(MockHttpSession session) throws Exception {
+        String body = this.mockMvc.perform(get("/login/status").session(session))
+                .andReturn().getResponse().getContentAsString();
+        return (String) JsonMapper.builder().build().readValue(body, java.util.Map.class).get("nonce");
+    }
 
     @Test
     void newPhoneNumberSignsUpAFreshAccountAndReachesReady() throws Exception {
@@ -164,7 +177,8 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
         // listener above just wrote, instead of the stale live one.
         stubCurrentStateToThrowNotCurrentOwner();
 
-        this.mockMvc.perform(get("/login/finish").session(session))
+        this.mockMvc.perform(post("/login/finish").with(csrf()).session(session)
+                        .param("nonce", finishNonceFor(session)))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/"));
 
@@ -192,7 +206,8 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                 newPhoneNumber, "login.tdlib.ready"));
         stubCurrentStateToThrowNotCurrentOwner();
 
-        this.mockMvc.perform(get("/login/finish").session(session))
+        this.mockMvc.perform(post("/login/finish").with(csrf()).session(session)
+                        .param("nonce", finishNonceFor(session)))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/login"))
                 .andExpect(flash().attribute("error", org.hamcrest.Matchers.notNullValue()));
@@ -200,6 +215,70 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
         assertThat(this.tenants.findById(newTenantId))
                 .as("the abandoned duplicate tenant must be rolled back, not left half-registered")
                 .isEmpty();
+    }
+
+    /**
+     * Security-audit finding SEC-R07: {@code /login/finish} is a state-changing POST now, not
+     * the plain GET a browser prefetcher, a link-preview crawler, or a same-site navigation
+     * could trigger with no user action at all.
+     */
+    @Test
+    void loginFinishNoLongerAcceptsAPlainGet() throws Exception {
+        this.mockMvc.perform(get("/login/finish"))
+                .andExpect(status().isMethodNotAllowed());
+    }
+
+    @Test
+    void loginFinishRefusesAMissingOrIncorrectNonce() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+
+        String phoneNumber = "+19995550111";
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.QR_CODE.name())
+                        .param("phoneNumber", phoneNumber))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 778L, "real_scanner", phoneNumber,
+                "login.tdlib.ready"));
+        stubCurrentStateToThrowNotCurrentOwner();
+
+        this.mockMvc.perform(post("/login/finish").with(csrf()).session(session)
+                        .param("nonce", "not-the-real-nonce"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login"));
+
+        assertThat(this.users.findByPhoneNumber(phoneNumber).orElseThrow().telegramUserId())
+                .as("a wrong nonce must not sign anyone in").isNull();
+    }
+
+    @Test
+    void loginFinishNonceIsSingleUse() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+
+        String phoneNumber = "+19995550112";
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.QR_CODE.name())
+                        .param("phoneNumber", phoneNumber))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 779L, "real_scanner", phoneNumber,
+                "login.tdlib.ready"));
+        stubCurrentStateToThrowNotCurrentOwner();
+        String nonce = finishNonceFor(session);
+
+        this.mockMvc.perform(post("/login/finish").with(csrf()).session(session).param("nonce", nonce))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/"));
+
+        // Replaying the exact same nonce a second time must not work again -- the pending login
+        // it belonged to was already cleared by the successful finish above.
+        this.mockMvc.perform(post("/login/finish").with(csrf()).session(session).param("nonce", nonce))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login"));
     }
 
     @Test

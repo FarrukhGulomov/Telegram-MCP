@@ -59,9 +59,23 @@ public class PreAuthLoginService {
         this.sessionEstablisher = sessionEstablisher;
     }
 
-    /** What this request's session is one completed login away from becoming. */
-    private record Pending(UUID tenantId, UUID userId, String phoneNumber, boolean newAccount)
-            implements Serializable {
+    /**
+     * What this request's session is one completed login away from becoming.
+     *
+     * @param finishNonce security-audit finding SEC-R07: a single-use token minted for this
+     *                    one login attempt, required by {@link #finishIfReady(HttpServletRequest,
+     *                    HttpServletResponse, String)} before it will actually sign anyone in.
+     *                    {@code /login/finish} is reached asynchronously (client-side polling
+     *                    notices a QR scan confirmed READY out of band, on another device), so
+     *                    unlike every other state-changing step here it is never the direct
+     *                    result of a form the visitor just submitted -- a bare POST with a valid
+     *                    CSRF token would otherwise be everything a same-site script or a
+     *                    stray automated request needed to complete a sign-in it was never shown
+     *                    happening. Handed back only through {@code /login/status}'s own JSON
+     *                    response, and only once the stage it reports actually is READY.
+     */
+    private record Pending(UUID tenantId, UUID userId, String phoneNumber, boolean newAccount,
+                           String finishNonce) implements Serializable {
     }
 
     /**
@@ -113,7 +127,8 @@ public class PreAuthLoginService {
             newAccount = true;
         }
         request.getSession(true).setAttribute(SESSION_KEY,
-                new Pending(actor.tenantId(), actor.userId(), phoneNumber, newAccount));
+                new Pending(actor.tenantId(), actor.userId(), phoneNumber, newAccount,
+                        UUID.randomUUID().toString()));
         return this.connectionService.beginLogin(actor, method,
                 method == LoginMethod.PHONE_NUMBER ? phoneNumber : null);
     }
@@ -156,17 +171,45 @@ public class PreAuthLoginService {
     }
 
     /**
+     * The current login attempt's single-use finish nonce, so {@code /login/status} can hand it
+     * back to the client -- see {@link Pending#finishNonce} for why {@code /login/finish} needs
+     * one at all. Absent whenever there is no pending login (nothing to finish) exactly like
+     * every other {@code pending(request)}-backed accessor.
+     */
+    public Optional<String> pendingFinishNonce(HttpServletRequest request) {
+        return pending(request).map(Pending::finishNonce);
+    }
+
+    /**
+     * As {@link #finishIfReady(HttpServletRequest, HttpServletResponse, String)}, for the
+     * synchronous completions right after {@code /login/code}/{@code /login/password}/{@code
+     * /login/start} report READY within the very same request: no nonce to check, since
+     * completing there is already gated by that request's own CSRF-protected form submission.
+     */
+    public boolean finishIfReady(HttpServletRequest request, HttpServletResponse response) {
+        return finishIfReady(request, response, null);
+    }
+
+    /**
      * Called once the poll in {@code /login/status} (or a synchronous {@code /login/code} or
      * {@code /login/password} response) reports {@code READY}: reconciles the account's
      * identity with whatever Telegram's own login just confirmed, then establishes the
      * session. Never trusts the phone number originally typed on its own -- {@link
      * TelegramConnection#tgPhoneNumber()} (from TDLib's {@code getMe}) always wins when present.
      *
+     * @param requiredNonce security-audit finding SEC-R07: when non-null, must exactly match
+     *                      this login's own {@link Pending#finishNonce} or nothing happens (same
+     *                      as no pending login at all) -- the asynchronous {@code /login/finish}
+     *                      endpoint always passes one; the synchronous overload above never does.
      * @return {@code true} once signed in; {@code false} if the login has not reached READY yet
+     *         or the supplied nonce does not match
      */
-    public boolean finishIfReady(HttpServletRequest request, HttpServletResponse response) {
+    public boolean finishIfReady(HttpServletRequest request, HttpServletResponse response, String requiredNonce) {
         Pending pending = pending(request).orElse(null);
         if (pending == null) {
+            return false;
+        }
+        if (requiredNonce != null && !requiredNonce.equals(pending.finishNonce())) {
             return false;
         }
         AuthenticatedActor actor = new AuthenticatedActor(pending.tenantId(), pending.userId(),

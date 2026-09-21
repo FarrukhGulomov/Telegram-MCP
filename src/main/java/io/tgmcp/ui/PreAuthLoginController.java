@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import io.tgmcp.security.PreAuthLoginService;
 import io.tgmcp.telegram.gateway.LoginMethod;
+import io.tgmcp.telegram.gateway.LoginStage;
 import io.tgmcp.telegram.gateway.LoginState;
 import io.tgmcp.telegram.gateway.TelegramGatewayException;
 
@@ -164,7 +165,16 @@ public class PreAuthLoginController {
     @ResponseBody
     public Map<String, String> status(HttpServletRequest request) {
         try {
-            return Map.of("stage", this.loginService.status(request).stage().name());
+            LoginState state = this.loginService.status(request);
+            if (state.stage() == LoginStage.READY) {
+                // Security-audit finding SEC-R07: the nonce /login/finish will require is
+                // handed out here, and only once the stage really is READY -- never any
+                // earlier, so nothing observing this response before then could ever learn it.
+                String nonce = this.loginService.pendingFinishNonce(request).orElse(null);
+                return nonce == null ? Map.of("stage", state.stage().name())
+                        : Map.of("stage", state.stage().name(), "nonce", nonce);
+            }
+            return Map.of("stage", state.stage().name());
         }
         catch (IllegalStateException ex) {
             return Map.of("stage", "NONE");
@@ -176,12 +186,20 @@ public class PreAuthLoginController {
      * band) -- {@code /login/code}/{@code /login/password} already call the same {@link
      * PreAuthLoginService#finishIfReady} synchronously for the phone-number method, since that
      * transition normally completes within the same request there.
+     *
+     * <p>Security-audit finding SEC-R07: a POST behind the same CSRF protection every other
+     * state-changing step here already has, rather than the plain, side-effecting GET this used
+     * to be -- a GET can be triggered by a browser prefetcher, a link-preview crawler, or a
+     * same-site {@code <img>}/navigation with no user action at all, none of which should be
+     * able to complete a sign-in. The nonce {@code /login/status} handed out is required on top
+     * of CSRF: it ties this specific submission back to the specific READY observation that
+     * justified it, and is consumed (the whole pending login is cleared) the instant it works.
      */
-    @GetMapping("/login/finish")
-    public String finish(HttpServletRequest request, HttpServletResponse response,
+    @PostMapping("/login/finish")
+    public String finish(@RequestParam String nonce, HttpServletRequest request, HttpServletResponse response,
                          RedirectAttributes redirectAttributes) {
         try {
-            if (this.loginService.finishIfReady(request, response)) {
+            if (this.loginService.finishIfReady(request, response, nonce)) {
                 return "redirect:/";
             }
         }
