@@ -3,22 +3,25 @@ title = "gitleaks config for telegram-consent-mcp"
 [extend]
 useDefault = true
 
-# Security-audit finding SEC-R12: each entry below is a hardcoded, non-secret test fixture --
-# never a real credential, never used against anything but a local/CI test database or a
-# deterministic-derivation unit test -- that gitleaks' generic high-entropy-string rule
-# otherwise flags. Confirmed by reading the flagged commit's actual content before adding it
-# here (see the CI run this was first found in); do not add an entry without doing the same.
+# Security-audit finding SEC-R12: each pattern below matches one exact, hardcoded, non-secret
+# test fixture value -- never a real credential, never used against anything but a local/CI
+# test database or a deterministic-derivation unit test -- that gitleaks' generic
+# high-entropy-string rule otherwise flags. Confirmed by reading each flagged commit's actual
+# content before adding it here (see the CI run these were first found in); do not add an
+# entry without doing the same. A `regexes` match (the exact value, wherever it appears, past
+# or future) rather than a `paths` exclusion (the whole file, forever) so a genuinely different
+# secret later added to either of these same test files would still be caught.
 [allowlist]
 description = "Known false positives: hardcoded test-only fixture values, not real secrets"
-fingerprints = [
+regexes = [
   # TdlibTelegramGatewayTests#derivingTheDatabaseEncryptionKeyIsDeterministicButDistinctPerConfiguredSecret:
   # base64 of the literal strings "test-session-encryption-key-32bytes" and
   # "other-session-encryption-key-32bytes", used only to prove the key-derivation function is
   # deterministic and distinct per input -- never a real session-encryption key.
-  "436ee200e7fa4f448bfc6b28b0f4aa340161f445:src/test/java/io/tgmcp/telegram/tdlib/TdlibTelegramGatewayTests.java:generic-api-key:160",
-  "436ee200e7fa4f448bfc6b28b0f4aa340161f445:src/test/java/io/tgmcp/telegram/tdlib/TdlibTelegramGatewayTests.java:generic-api-key:161",
+  '''dGVzdC1zZXNzaW9uLWVuY3J5cHRpb24ta2V5LTMyYnl0ZXM=''',
+  '''b3RoZXItc2Vzc2lvbi1lbmNyeXB0aW9uLWtleS0zMmJ5dGVz''',
   # application-test.yml's fixed cursor-signing-key: a deliberately constant test key (see the
   # comment above it in that file) so a cursor minted in one assertion verifies in the next,
   # never used outside a local/CI test database.
-  "3943849558863e9c44fe59ee1f5e458871df103d:src/test/resources/application-test.yml:generic-api-key:36",
+  '''8vEG46MjjWduNxNzDzMGNfR8s8cPE0RbWFGeLliwERA=''',
 ]
