@@ -1,5 +1,9 @@
 package io.tgmcp.security;
 
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -7,6 +11,8 @@ import jakarta.servlet.http.HttpSession;
 import io.tgmcp.tenancy.AppUser;
 
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.FactorGrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -42,8 +48,17 @@ public class ManualSessionEstablisher {
             request.changeSessionId();
         }
         UserDetails principal = this.userDetailsService.loadUserByUsername(user.phoneNumber());
-        var authentication = UsernamePasswordAuthenticationToken.authenticated(principal, null,
-                principal.getAuthorities());
+        // The authorization server's own JwtGenerator derives the OIDC "auth_time" claim (an
+        // ID token is minted whenever a client, e.g. ChatGPT's connector, requests the "openid"
+        // scope) exclusively from a FactorGrantedAuthority's issuedAt among the authenticated
+        // principal's authorities -- with none here (this sign-in is a one-time Telegram-
+        // delivered code, never a password), that lookup came back null and the whole token
+        // exchange failed with "authenticationTime cannot be null" for every such client.
+        List<GrantedAuthority> authorities = new ArrayList<>(principal.getAuthorities());
+        authorities.add(FactorGrantedAuthority.withAuthority(FactorGrantedAuthority.OTT_AUTHORITY)
+                .issuedAt(Instant.now())
+                .build());
+        var authentication = UsernamePasswordAuthenticationToken.authenticated(principal, null, authorities);
         SecurityContext context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
         SecurityContextHolder.setContext(context);

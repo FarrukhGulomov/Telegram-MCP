@@ -204,6 +204,56 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
     }
 
     /**
+     * Regression coverage for a third real connection failure, found immediately after the
+     * previous two fixes let a connector reach this far for the first time: ChatGPT's connector
+     * requests (and is granted) the {@code openid} scope, so completing the exchange mints an
+     * OIDC ID token alongside the access token. Spring Authorization Server's own {@code
+     * JwtGenerator} derives the mandatory {@code auth_time} claim exclusively from a {@code
+     * FactorGrantedAuthority} on the signed-in principal's authorities; {@link
+     * ManualSessionEstablisher} (there being no password for any such factor to attach to a
+     * Telegram-code sign-in) previously granted none, so every {@code openid}-scoped token
+     * exchange -- exactly what a real ChatGPT reconnect attempt is -- failed with {@code
+     * IllegalArgumentException: authenticationTime cannot be null}, confirmed from a real Railway
+     * deployment's logs as a bare 500 with no JSON body at all.
+     */
+    @Test
+    void anOpenIdScopedTokenExchangeCompletesInsteadOfFailingOnAMissingAuthenticationTime() throws Exception {
+        String redirectUri = "https://chatgpt.com/connector/oauth/anotherConnection";
+        String clientId = register("ChatGPT", redirectUri, null);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("connector-6", "connector6@test.invalid", "OWNER");
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
+        assertThat(session).isNotNull();
+
+        String requestedScope = "openid mcp:read provider:openai_chatgpt";
+        MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQuery(clientId, redirectUri, requestedScope))
+                        .session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        String state = extractHiddenInputValue(authorizeResult.getResponse().getContentAsString(), "state");
+        MvcResult consentResult = this.mockMvc.perform(post("/oauth2/authorize").session(session)
+                        .param("client_id", clientId)
+                        .param("state", state)
+                        .param("scope", "mcp:read")
+                        .param("scope", "openid")
+                        .param("scope", "provider:openai_chatgpt"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        String code = extractAuthorizationCode(consentResult.getResponse().getHeader("Location"));
+
+        this.mockMvc.perform(post("/oauth2/token")
+                        .param("grant_type", "authorization_code")
+                        .param("code", code)
+                        .param("redirect_uri", redirectUri)
+                        .param("client_id", clientId)
+                        .param("code_verifier", "a-fixed-test-code-verifier-value-1234567890"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.access_token").exists())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.id_token").exists());
+    }
+
+    /**
      * Regression coverage for a second real connection failure, found immediately after the
      * scope fix above let a connector reach this far for the first time: no test anywhere in
      * this suite had ever driven a real {@code /oauth2/token} exchange end to end, so nothing
