@@ -10,7 +10,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
  * Base for tests that need the full application against a real PostgreSQL.
@@ -59,5 +65,23 @@ public abstract class AbstractIntegrationTest {
 
     protected MockTelegramGateway mockGateway() {
         return (MockTelegramGateway) this.telegramGateway;
+    }
+
+    /**
+     * Drives the whole "sign in with a Telegram code" flow -- there is no password to check any
+     * more -- and returns the resulting authenticated session: sends a code to {@code
+     * telegramUserId} via {@code identifier} (an email or {@code @username}), reads it back from
+     * {@link FakeTelegramBotMessenger#latestCodeFor}, and submits it.
+     */
+    protected MockHttpSession signInViaTelegramCode(MockMvc mockMvc, String identifier, long telegramUserId)
+            throws Exception {
+        MvcResult sent = mockMvc.perform(post("/login").with(csrf()).param("identifier", identifier))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) sent.getRequest().getSession(false);
+        String code = this.telegramBotMessenger.latestCodeFor(telegramUserId);
+        MvcResult verified = mockMvc.perform(post("/login/verify").session(session).with(csrf())
+                        .param("code", code))
+                .andReturn();
+        return (MockHttpSession) verified.getRequest().getSession(false);
     }
 }

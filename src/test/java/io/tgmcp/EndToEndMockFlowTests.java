@@ -26,9 +26,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 
 import static io.tgmcp.McpProtocolTests.errorCode;
 import static io.tgmcp.McpProtocolTests.items;
@@ -52,15 +50,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class EndToEndMockFlowTests extends AbstractIntegrationTest {
 
     private static final String EMAIL = "owner@demo.invalid";
-    private static final String PASSWORD = "demo-password";
     private static final String ISSUER = "http://localhost:8080";
     private static final String RESOURCE = "http://localhost:8080/mcp";
 
     @Autowired
     private MockMvc mockMvc;
-
-    @Autowired
-    private PasswordEncoder passwordEncoder;
 
     @Autowired
     private TestTokens tokens;
@@ -79,27 +73,23 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
 
     @Test
     void walksTheWholeConsentGatedJourney() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("demo", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("demo", EMAIL);
 
         // 1. Anonymous users get nothing.
         this.mockMvc.perform(get("/"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/login"));
 
-        // 2. Wrong password fails; the right one establishes a session.
-        this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", EMAIL).param("password", "wrong"))
-                .andExpect(redirectedUrl("/login?error"));
+        // 2. An identifier matching no account gets the same generic response as a match (no
+        // account enumeration), and no session.
+        this.mockMvc.perform(post("/login").with(csrf()).param("identifier", "nobody@example.invalid"))
+                .andExpect(redirectedUrl("/login"));
 
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", EMAIL).param("password", PASSWORD))
-                .andExpect(redirectedUrl("/"))
-                .andReturn();
-        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        // 3. The real account's identifier gets a code on Telegram; entering it establishes the session.
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, EMAIL, team.user().telegramUserId());
         assertThat(session).isNotNull();
 
-        // 3. Connect Telegram through the two-step login the mock adapter models.
+        // 4. Connect Telegram through the two-step login the mock adapter models.
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
                 .param("method", "QR_CODE")).andExpect(status().is3xxRedirection());
         this.mockMvc.perform(post("/connect/code").session(session).with(csrf())
@@ -111,7 +101,7 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
                 .findByOwner(team.tenant().id(), team.user().id()).orElseThrow();
         assertThat(connection.status()).isEqualTo(LoginStage.READY);
 
-        // 4. Discovery is not authorization: chats become visible, nothing is stored.
+        // 5. Discovery is not authorization: chats become visible, nothing is stored.
         this.mockMvc.perform(post("/connect/discover").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
 
@@ -125,7 +115,7 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
                 .filter(c -> c.tgChatId() == SyntheticDataset.ENGINEERING_CHAT)
                 .findFirst().orElseThrow();
 
-        // 5. Selecting a chat records the processing context and imports participants.
+        // 6. Selecting a chat records the processing context and imports participants.
         this.mockMvc.perform(post("/chats/" + engineering.id() + "/select").session(session).with(csrf())
                         .param("purpose", "Answer questions about team decisions")
                         .param("providers", McpScopes.ANTHROPIC_CLAUDE)
@@ -137,20 +127,20 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
         assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
                 .isEqualTo(ActivationState.AWAITING_CONSENT);
 
-        // 6. Activating requires no per-participant consent any more -- it succeeds immediately.
+        // 7. Activating requires no per-participant consent any more -- it succeeds immediately.
         this.mockMvc.perform(post("/chats/" + engineering.id() + "/activate").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
         assertThat(this.activations.find(team.tenant().id(), engineering.id()).orElseThrow().state())
                 .isEqualTo(ActivationState.ACTIVE);
 
-        // 7. Sync.
+        // 8. Sync.
         this.mockMvc.perform(post("/chats/" + engineering.id() + "/sync").session(session).with(csrf()))
                 .andExpect(status().is3xxRedirection());
         assertThat(this.jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM messages WHERE chat_id = ?", Long.class, engineering.id()))
                 .isEqualTo(30L);
 
-        // 8. Search over real MCP.
+        // 9. Search over real MCP.
         String token = this.tokens.token(ISSUER, RESOURCE, team.tenant().id(), team.user().id(),
                 List.of(McpScopes.READ, McpScopes.SCOPE_ANTHROPIC_CLAUDE));
         try (McpTestClient mcp = new McpTestClient(this.port, token)) {
@@ -166,11 +156,11 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
             assertThat(found.isError()).isFalse();
             assertThat(items(found)).isNotEmpty();
 
-            // 9. Revoke through the UI.
+            // 10. Revoke through the UI.
             this.mockMvc.perform(post("/chats/" + engineering.id() + "/revoke")
                     .session(session).with(csrf())).andExpect(status().is3xxRedirection());
 
-            // 10. The very next MCP call is denied, and the stored copy is gone.
+            // 11. The very next MCP call is denied, and the stored copy is gone.
             McpSchema.CallToolResult denied = mcp.call(McpToolNames.SEARCH_MESSAGES, Map.of(
                     "chat_ids", List.of(engineering.id().toString()),
                     "query", "backpressure",
@@ -185,7 +175,7 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
                 "SELECT count(*) FROM messages WHERE chat_id = ?", Long.class, engineering.id()))
                 .isZero();
 
-        // 11. The journey is on the audit trail, without any message text.
+        // 12. The journey is on the audit trail, without any message text.
         List<String> actions = this.jdbcTemplate.queryForList(
                 "SELECT action FROM audit_events WHERE tenant_id = ? ORDER BY occurred_at",
                 String.class, team.tenant().id());
@@ -202,11 +192,8 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
 
     @Test
     void rejectsAStateChangingPostWithoutACsrfToken() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("demo", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                .param("username", EMAIL).param("password", PASSWORD)).andReturn();
-        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("demo", EMAIL);
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, EMAIL, team.user().telegramUserId());
 
         this.mockMvc.perform(post("/chats/" + UUID.randomUUID() + "/revoke").session(session))
                 .andExpect(status().isForbidden());
@@ -214,11 +201,8 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
 
     @Test
     void escapesUntrustedChatTitlesRatherThanRenderingThemAsMarkup() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("demo", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                .param("username", EMAIL).param("password", PASSWORD)).andReturn();
-        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("demo", EMAIL);
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, EMAIL, team.user().telegramUserId());
 
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
                 .param("method", "QR_CODE"));

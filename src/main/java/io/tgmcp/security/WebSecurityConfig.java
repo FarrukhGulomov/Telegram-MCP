@@ -5,8 +5,6 @@ import java.util.List;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
 import io.tgmcp.config.AppProperties;
-import io.tgmcp.tenancy.AppUser;
-import io.tgmcp.tenancy.AppUserRepository;
 
 import org.springframework.boot.web.server.servlet.CookieSameSiteSupplier;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -18,8 +16,6 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
@@ -30,11 +26,7 @@ import org.springframework.security.oauth2.jwt.JwtValidationException;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
-import org.springframework.security.authentication.LockedException;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.AuthenticationFailureHandler;
-import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
-import org.springframework.security.web.authentication.SimpleUrlAuthenticationFailureHandler;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
@@ -42,12 +34,13 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
 /**
  * Two more filter chains: one for the MCP endpoint (bearer tokens, no session, no CSRF
  * because there is no cookie to forge), and one for the management UI (session cookie,
- * CSRF on, form login).
+ * CSRF on, no Spring Security-driven authentication -- {@code LoginController}/{@code
+ * LoginVerificationController} establish the session directly via {@link
+ * ManualSessionEstablisher} once a Telegram-delivered code has been proven, there being no
+ * password for any {@code AuthenticationManager} to check).
  */
 @Configuration(proxyBeanMethods = false)
 public class WebSecurityConfig {
-
-    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WebSecurityConfig.class);
 
     /**
      * MCP endpoint and its discovery documents.
@@ -119,14 +112,12 @@ public class WebSecurityConfig {
         return http.build();
     }
 
-    /** Management UI: form login, session cookie, CSRF protection, conservative headers. */
+    /** Management UI: session cookie, CSRF protection, conservative headers, no password auth. */
     @Bean
     @Order(4)
     public SecurityFilterChain managementUiFilterChain(HttpSecurity http, AppProperties properties,
                                                         java.time.Clock clock,
-                                                        SecurityContextRepository securityContextRepository,
-                                                        AuthenticationSuccessHandler twoFactorGatingSuccessHandler,
-                                                        AuthenticationFailureHandler loginFailureHandler)
+                                                        SecurityContextRepository securityContextRepository)
             throws Exception {
         // Security-audit finding SEC-10: a login attempt is unauthenticated by definition, so
         // it shares no budget with anything else in this application; IP-keyed and placed
@@ -136,10 +127,10 @@ public class WebSecurityConfig {
                 properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login", loginLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
-        // Self-service account creation (email/password registration, and a first-time
-        // Telegram identity provisioning its own account) is reachable without any prior
-        // authentication and creates a durable tenant + user row per success -- its own,
-        // separately configured budget, same reasoning and placement as loginLimiter above.
+        // Self-service account creation (a workspace/email submission, then linking a Telegram
+        // identity) is reachable without any prior authentication and creates a durable
+        // tenant + user row per success -- its own, separately configured budget, same
+        // reasoning and placement as loginLimiter above.
         io.tgmcp.ratelimit.RateLimiter registrationLimiter = new io.tgmcp.ratelimit.RateLimiter(
                 properties.abuseControls().selfRegistrationsPerHourPerIp(), java.time.Duration.ofHours(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/register", registrationLimiter),
@@ -152,16 +143,10 @@ public class WebSecurityConfig {
                 properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/verify", verifyLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
-        // "Sign in with a Telegram code" is, like /login, unauthenticated by definition -- same
-        // budget and reasoning as loginLimiter above.
-        io.tgmcp.ratelimit.RateLimiter telegramCodeLoginLimiter = new io.tgmcp.ratelimit.RateLimiter(
-                properties.abuseControls().loginAttemptsPerMinutePerIp(), java.time.Duration.ofMinutes(1), clock);
-        http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/telegram-code", telegramCodeLoginLimiter),
-                org.springframework.security.web.context.SecurityContextHolderFilter.class);
         http.securityContext(context -> context.securityContextRepository(securityContextRepository));
         http.authorizeHttpRequests(requests -> requests
                         .requestMatchers("/login", "/login/verify", "/login/verify/resend",
-                                "/login/telegram-code", "/register", "/register/link-telegram",
+                                "/register", "/register/link-telegram",
                                 "/register/link-telegram/status",
                                 "/css/**", "/js/**", "/actuator/health").permitAll()
                         // Security-audit finding F17: AppUser carries an OWNER/ADMIN/MEMBER
@@ -176,9 +161,12 @@ public class WebSecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/chats/**", "/connect/**")
                         .hasAnyRole("OWNER", "ADMIN")
                         .anyRequest().authenticated())
-                .formLogin(form -> form.loginPage("/login").successHandler(twoFactorGatingSuccessHandler)
-                        .failureHandler(loginFailureHandler)
-                        .permitAll())
+                // No formLogin/httpBasic exists to install a default entry point any more (there
+                // is no password for either to check), so an unauthenticated visitor to a
+                // protected page must be sent to /login explicitly here instead.
+                .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(
+                        new org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint(
+                                "/login")))
                 .logout(logout -> logout.logoutSuccessUrl("/login?loggedOut").permitAll())
                 .csrf(Customizer.withDefaults())
                 .headers(headers -> headers
@@ -218,70 +206,6 @@ public class WebSecurityConfig {
                         result.getErrors());
             }
             return jwt;
-        };
-    }
-
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        return PasswordEncoderFactories.createDelegatingPasswordEncoder();
-    }
-
-    /**
-     * A correct password is no longer sufficient by itself once an account has a Telegram
-     * identity linked: {@code UsernamePasswordAuthenticationFilter} has already established a
-     * fully authenticated session by the time this runs (it always does, for any successful
-     * {@code AuthenticationManager} check), so an account requiring the second factor has that
-     * session immediately undone ({@link ManualSessionEstablisher#clearAuthentication}) and the
-     * visitor is sent to enter a Telegram-delivered code instead ({@code
-     * LoginVerificationController} is what actually re-establishes it). An account with no
-     * linked Telegram identity -- every account created before this feature existed, and any
-     * account on a deployment that has never configured "Sign in with Telegram" -- is
-     * unaffected: the password check alone remains sufficient for it.
-     */
-    @Bean
-    public AuthenticationSuccessHandler twoFactorGatingSuccessHandler(AppUserRepository users,
-            LoginTwoFactorService twoFactorService, ManualSessionEstablisher sessionEstablisher,
-            LoginLockoutService lockoutService) {
-        return (request, response, authentication) -> {
-            // Reached only once AuthenticationManager has already accepted the password, so any
-            // earlier failed attempts against this account no longer mean anything.
-            lockoutService.recordSuccess(authentication.getName());
-            AppUser user = users.findByEmail(authentication.getName()).orElse(null);
-            if (user == null || user.telegramUserId() == null) {
-                response.sendRedirect(request.getContextPath() + "/");
-                return;
-            }
-            sessionEstablisher.clearAuthentication(request, response);
-            try {
-                twoFactorService.beginVerification(user, request);
-                response.sendRedirect(request.getContextPath() + "/login/verify");
-            }
-            catch (TelegramBotMessageException ex) {
-                log.warn("Could not deliver a second-factor code to Telegram user {}: {}",
-                        user.telegramUserId(), ex.getMessage());
-                response.sendRedirect(request.getContextPath() + "/login?telegramCodeError");
-            }
-        };
-    }
-
-    /**
-     * Records a bad-credentials attempt against {@link LoginLockoutService} before falling back
-     * to the same generic {@code /login?error} redirect as before -- the failure message shown
-     * to the visitor stays identical whether the account was locked, the password was wrong, or
-     * no such account exists, so a lockout can never itself become a way to test which emails
-     * are registered. Skips recording while the account is already locked ({@link
-     * LockedException}): a legitimate holder retrying during the lock window must not keep
-     * pushing it further out every time they try again.
-     */
-    @Bean
-    public AuthenticationFailureHandler loginFailureHandler(LoginLockoutService lockoutService) {
-        SimpleUrlAuthenticationFailureHandler delegate = new SimpleUrlAuthenticationFailureHandler("/login?error");
-        return (request, response, exception) -> {
-            String email = request.getParameter("username");
-            if (email != null && !(exception instanceof LockedException)) {
-                lockoutService.recordFailure(email);
-            }
-            delegate.onAuthenticationFailure(request, response, exception);
         };
     }
 

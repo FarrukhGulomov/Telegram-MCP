@@ -12,8 +12,8 @@ import tools.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import io.tgmcp.support.Fixtures;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -51,9 +51,6 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
     private String register(String clientName, String redirectUri, String scopeOrNull) throws Exception {
         String scopeField = scopeOrNull == null ? "" : ",\n  \"scope\": \"" + scopeOrNull + "\"";
         String requestBody = """
@@ -74,13 +71,6 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
                 .andReturn();
 
         return MAPPER.readTree(result.getResponse().getContentAsByteArray()).get("client_id").asText();
-    }
-
-    private MockHttpSession signIn(String email, String password) throws Exception {
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", email).param("password", password))
-                .andReturn();
-        return (MockHttpSession) signedIn.getRequest().getSession(false);
     }
 
     private static String pkceCodeChallenge(String codeVerifier) throws Exception {
@@ -121,10 +111,8 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
     void selfRegisteredClientWithNoDeclaredScopeCanStillCompleteAuthorization() throws Exception {
         String redirectUri = "https://example.com/callback";
         String clientId = register("generic-mcp-client", redirectUri, null);
-        String password = "connector-test-pw-1";
-        this.fixtures.signInReadyTeam("connector-1", "connector1@test.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("connector1@test.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("connector-1", "connector1@test.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "connector1@test.invalid", team.user().telegramUserId());
         assertThat(session).isNotNull();
 
         MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQuery(clientId, redirectUri, "mcp:read"))
@@ -157,10 +145,8 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
         // redirect path under chatgpt.com rather than a single fixed callback URL.
         String redirectUri = "https://chatgpt.com/connector/oauth/yqQjVKRbdOiv";
         String clientId = register("ChatGPT", redirectUri, null);
-        String password = "connector-test-pw-2";
-        this.fixtures.signInReadyTeam("connector-2", "connector2@test.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("connector2@test.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("connector-2", "connector2@test.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "connector2@test.invalid", team.user().telegramUserId());
         assertThat(session).isNotNull();
 
         // Exactly what the real connector requested: every scope this server's own discovery
@@ -198,10 +184,8 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
     void aSelfRegisteredClientOnAnUntrustedDomainNeverEarnsAProviderScope() throws Exception {
         String redirectUri = "https://not-a-real-provider.example/callback";
         String clientId = register("untrusted-client", redirectUri, null);
-        String password = "connector-test-pw-3";
-        this.fixtures.signInReadyTeam("connector-3", "connector3@test.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("connector3@test.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("connector-3", "connector3@test.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "connector3@test.invalid", team.user().telegramUserId());
         assertThat(session).isNotNull();
 
         String requestedScope = "mcp:read provider:anthropic_claude provider:openai_chatgpt";
@@ -241,10 +225,8 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
     void anIssuedTokenSurvivesTheAuthorizationBeingReReadFromStorageAfterwards() throws Exception {
         String redirectUri = "https://example.com/callback";
         String clientId = register("generic-mcp-client-refresh", redirectUri, null);
-        String password = "connector-test-pw-5";
-        this.fixtures.signInReadyTeam("connector-5", "connector5@test.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("connector5@test.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("connector-5", "connector5@test.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "connector5@test.invalid", team.user().telegramUserId());
         assertThat(session).isNotNull();
 
         MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQuery(clientId, redirectUri, "mcp:read"))

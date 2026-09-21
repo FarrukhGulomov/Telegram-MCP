@@ -103,7 +103,7 @@ class ProductionSafetyValidatorTests {
         AppProperties.Secrets secrets = new AppProperties.Secrets(sessionEncryptionKey, "key-id", cursorSigningKey,
                 oauthRsaPrivateKey, List.of());
         AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo", "owner@demo.invalid",
-                "pw", List.of(), false);
+                List.of(), false);
         AppProperties.ForwardedHeaders forwardedHeaders = new AppProperties.ForwardedHeaders(trustedForwardedHosts);
         return new AppProperties(telegram, null, null, null, secrets, demo, null, forwardedHeaders, null);
     }

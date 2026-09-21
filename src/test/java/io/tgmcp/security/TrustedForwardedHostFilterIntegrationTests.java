@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -27,42 +26,37 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 class TrustedForwardedHostFilterIntegrationTests extends AbstractIntegrationTest {
 
     private static final String EMAIL = "owner@trustedhost.invalid";
-    private static final String PASSWORD = "correct-password";
 
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
     @Test
     void rejectsALoginAttemptWhoseForwardedHostIsNotOnTheDeclaredList() throws Exception {
-        this.fixtures.signInReadyTeam("trustedhost1", EMAIL, this.passwordEncoder.encode(PASSWORD));
+        this.fixtures.signInReadyTeam("trustedhost1", EMAIL);
 
         this.mockMvc.perform(post("/login").with(csrf())
                         .header("X-Forwarded-Proto", "https")
                         .header("X-Forwarded-Host", "attacker-controlled.invalid")
-                        .param("username", EMAIL)
-                        .param("password", PASSWORD))
+                        .param("identifier", EMAIL))
                 .andExpect(result -> assertThat(result.getResponse().getStatus())
                         .as("a forwarded host outside the declared allowlist must never reach "
-                                + "the credential check, let alone build a redirect against it")
+                                + "the login handler, let alone build a redirect against it")
                         .isEqualTo(400));
     }
 
     @Test
     void allowsALoginAttemptWhoseForwardedHostIsOnTheDeclaredList() throws Exception {
-        this.fixtures.signInReadyTeam("trustedhost2", EMAIL, this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("trustedhost2", EMAIL);
 
         this.mockMvc.perform(post("/login").with(csrf())
                         .header("X-Forwarded-Proto", "https")
                         .header("X-Forwarded-Host", "mcp.example.com")
-                        .param("username", EMAIL)
-                        .param("password", PASSWORD))
+                        .param("identifier", EMAIL))
                 .andExpect(result -> assertThat(result.getResponse().getHeader("Location"))
                         .as("a forwarded host that matches the declared allowlist must keep "
                                 + "working exactly as it did before this filter existed")
                         .startsWith("https://mcp.example.com"));
+        assertThat(this.telegramBotMessenger.latestCodeFor(team.user().telegramUserId())).isNotBlank();
     }
 
     @Test
@@ -72,8 +66,7 @@ class TrustedForwardedHostFilterIntegrationTests extends AbstractIntegrationTest
         // covering the case of the application port being reachable directly, bypassing
         // whatever proxy the operator intended to be the only path in.
         this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", EMAIL)
-                        .param("password", PASSWORD))
+                        .param("identifier", EMAIL))
                 .andExpect(result -> assertThat(result.getResponse().getStatus()).isEqualTo(400));
     }
 }

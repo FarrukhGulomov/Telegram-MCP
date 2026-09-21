@@ -7,29 +7,6 @@
   </div>
 
   <div class="card">
-    <h2 th:text="#{account.password.title}">Change password</h2>
-    <p class="muted" th:text="#{account.password.hint}">
-      Rotate your password if you think it may have been seen by anyone else.
-    </p>
-    <form th:action="@{/account/password}" method="post" data-guard-resubmit>
-      <label for="currentPassword" th:text="#{account.password.current}">Current password</label>
-      <input id="currentPassword" name="currentPassword" type="password" required
-             autocomplete="current-password">
-
-      <label for="newPassword" th:text="#{account.password.new}">New password</label>
-      <input id="newPassword" name="newPassword" type="password" required minlength="10"
-             autocomplete="new-password">
-      <p class="hint" th:text="#{register.passwordHint}">At least 10 characters.</p>
-
-      <label for="newPasswordConfirm" th:text="#{account.password.newConfirm}">Confirm new password</label>
-      <input id="newPasswordConfirm" name="newPasswordConfirm" type="password" required minlength="10"
-             autocomplete="new-password">
-
-      <button type="submit" th:text="#{account.password.button}">Change password</button>
-    </form>
-  </div>
-
-  <div class="card">
     <h2 th:text="#{account.connections.title}">Connected apps</h2>
     <p class="muted" th:text="#{account.connections.hint}">
       Every MCP client (Claude, ChatGPT, or any other app) currently authorized to read data

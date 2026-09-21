@@ -31,15 +31,14 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
  * {@code /}) so a failed attempt lands the visitor back on this same, still-unauthenticated
  * form with the reason shown.
  *
- * <p>When "Sign in with Telegram" is configured, the account is not actually created by this
- * form alone: {@link #register} validates the fields and holds them as a {@link
- * PendingRegistration} in the session ({@link #SESSION_KEY}), then sends the visitor to link a
- * Telegram identity -- by opening the bot and sending {@code /start <token>} ({@link
- * TelegramLinkingService}, {@code TelegramBotWebhookController}), not a widget click -- before
- * {@link #linkStatus} completes the registration and starts the mandatory second-factor code.
- * This keeps a password alone from ever being enough to create a usable account once Telegram
- * sign-in exists as a deployment option, and it means an abandoned attempt (the visitor never
- * finishes the Telegram step) leaves no half-created account behind -- nothing was ever inserted.
+ * <p>The account is not actually created by this form alone: {@link #register} validates the
+ * fields and holds them as a {@link PendingRegistration} in the session ({@link #SESSION_KEY}),
+ * then sends the visitor to link a Telegram identity -- by opening the bot and sending
+ * {@code /start <token>} ({@link TelegramLinkingService}, {@code TelegramBotWebhookController}),
+ * not a widget click -- before {@link #linkStatus} completes the registration and sends the
+ * first sign-in code. There is no other way to reach an account (no password exists), so this
+ * means an abandoned attempt (the visitor never finishes the Telegram step) leaves no
+ * half-created account behind -- nothing was ever inserted.
  */
 @Controller
 public class RegistrationController {
@@ -73,24 +72,20 @@ public class RegistrationController {
 
     @PostMapping("/register")
     public String register(@RequestParam String workspaceName, @RequestParam String email,
-                           @RequestParam String password, @RequestParam String passwordConfirm,
                            HttpServletRequest request, RedirectAttributes redirectAttributes) {
+        if (!this.properties.telegramLogin().enabled()) {
+            redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, "register.unavailable"));
+            return "redirect:/register";
+        }
         PendingRegistration pending;
         try {
-            if (!password.equals(passwordConfirm)) {
-                throw new IllegalArgumentException("register.passwordMismatch");
-            }
-            pending = this.registrationService.validate(workspaceName, email, password);
+            pending = this.registrationService.validate(workspaceName, email);
         }
         catch (IllegalArgumentException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
             redirectAttributes.addFlashAttribute("workspaceName", workspaceName);
             redirectAttributes.addFlashAttribute("email", email);
             return "redirect:/register";
-        }
-        if (!this.properties.telegramLogin().enabled()) {
-            this.registrationService.completeRegistration(pending, null, null);
-            return "redirect:/login?registered";
         }
         HttpSession session = request.getSession(true);
         session.setAttribute(SESSION_KEY, pending);

@@ -10,10 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -21,93 +18,25 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.flash;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Self-service account security: changing a password, listing and revoking connected MCP
- * (OAuth) clients, and locking an account out after repeated bad passwords -- the three gaps
- * a security review of the account-takeover path found (a leaked password previously had no
- * self-service recovery, no visibility into what it had been used to authorize, and no
- * per-account brute-force slowdown beyond the shared per-IP budget).
- *
- * <p>{@code accountLockThreshold} is lowered to 3 so the lockout test is reachable without
- * looping hundreds of times; the other tests here never submit a bad password, so this is safe
- * to share.
+ * Self-service account security: listing and revoking connected MCP (OAuth) clients -- so a
+ * user has visibility into, and can undo, what has been authorized against their account. There
+ * is no password to change or lock out any more (see {@code LoginTwoFactorService}): every
+ * sign-in already requires proving control of the linked Telegram account.
  */
 @AutoConfigureMockMvc
-@TestPropertySource(properties = "tgmcp.abuse-controls.account-lock-threshold=3")
 class AccountSecurityTests extends AbstractIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
-    private MockHttpSession signIn(String email, String password) throws Exception {
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", email).param("password", password))
-                .andReturn();
-        return (MockHttpSession) signedIn.getRequest().getSession(false);
-    }
-
-    @Test
-    void changingToAWrongCurrentPasswordIsRejected() throws Exception {
-        String password = "account-pw-1";
-        this.fixtures.signInReadyTeam("acct-a", "acct-a@example.invalid", this.passwordEncoder.encode(password));
-        MockHttpSession session = signIn("acct-a@example.invalid", password);
-
-        this.mockMvc.perform(post("/account/password").session(session).with(csrf())
-                        .param("currentPassword", "not-the-real-password")
-                        .param("newPassword", "brand-new-password")
-                        .param("newPasswordConfirm", "brand-new-password"))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(flash().attribute("error", org.hamcrest.Matchers.notNullValue()));
-
-        // The old password must still work.
-        assertThat(signIn("acct-a@example.invalid", password)).isNotNull();
-    }
-
-    @Test
-    void mismatchedNewPasswordsAreRejected() throws Exception {
-        String password = "account-pw-2";
-        this.fixtures.signInReadyTeam("acct-b", "acct-b@example.invalid", this.passwordEncoder.encode(password));
-        MockHttpSession session = signIn("acct-b@example.invalid", password);
-
-        this.mockMvc.perform(post("/account/password").session(session).with(csrf())
-                        .param("currentPassword", password)
-                        .param("newPassword", "brand-new-password")
-                        .param("newPasswordConfirm", "does-not-match"))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(flash().attribute("error", org.hamcrest.Matchers.notNullValue()));
-    }
-
-    @Test
-    void aCorrectCurrentPasswordActuallyChangesIt() throws Exception {
-        String oldPassword = "account-pw-3";
-        String newPassword = "brand-new-password-3";
-        this.fixtures.signInReadyTeam("acct-c", "acct-c@example.invalid", this.passwordEncoder.encode(oldPassword));
-        MockHttpSession session = signIn("acct-c@example.invalid", oldPassword);
-
-        this.mockMvc.perform(post("/account/password").session(session).with(csrf())
-                        .param("currentPassword", oldPassword)
-                        .param("newPassword", newPassword)
-                        .param("newPasswordConfirm", newPassword))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(flash().attributeExists("message"));
-
-        assertThat(signIn("acct-c@example.invalid", newPassword))
-                .as("the new password must now sign the account in")
-                .isNotNull();
-    }
-
     @Test
     void connectedAppsListsAndRevokesAnAuthorization() throws Exception {
-        String password = "account-pw-4";
-        Fixtures.Team team = this.fixtures.signInReadyTeam("acct-d", "acct-d@example.invalid",
-                this.passwordEncoder.encode(password));
-        MockHttpSession session = signIn("acct-d@example.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("acct-d", "acct-d@example.invalid");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "acct-d@example.invalid",
+                team.user().telegramUserId());
 
         String clientRowId = UUID.randomUUID().toString();
         this.jdbcTemplate.update("""
@@ -152,38 +81,5 @@ class AccountSecurityTests extends AbstractIntegrationTest {
                 .as("the consent decision must be removed too, or the client could silently "
                         + "re-obtain a code with no consent screen shown again")
                 .isZero();
-    }
-
-    @Test
-    void repeatedWrongPasswordsLockTheAccountEvenAgainstTheCorrectOne() throws Exception {
-        String password = "account-pw-5";
-        this.fixtures.signInReadyTeam("acct-e", "acct-e@example.invalid", this.passwordEncoder.encode(password));
-
-        for (int i = 0; i < 3; i++) {
-            this.mockMvc.perform(post("/login").with(csrf())
-                            .param("username", "acct-e@example.invalid").param("password", "wrong-password-" + i))
-                    .andExpect(redirectedUrl("/login?error"));
-        }
-
-        this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", "acct-e@example.invalid").param("password", password))
-                .andExpect(redirectedUrl("/login?error"));
-    }
-
-    @Test
-    void aDifferentAccountIsNotAffectedByAnothersLockout() throws Exception {
-        String passwordA = "account-pw-6a";
-        String passwordB = "account-pw-6b";
-        this.fixtures.signInReadyTeam("acct-f", "acct-f@example.invalid", this.passwordEncoder.encode(passwordA));
-        this.fixtures.signInReadyTeam("acct-g", "acct-g@example.invalid", this.passwordEncoder.encode(passwordB));
-
-        for (int i = 0; i < 3; i++) {
-            this.mockMvc.perform(post("/login").with(csrf())
-                    .param("username", "acct-f@example.invalid").param("password", "wrong-password-" + i));
-        }
-
-        this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", "acct-g@example.invalid").param("password", passwordB))
-                .andExpect(redirectedUrl("/"));
     }
 }

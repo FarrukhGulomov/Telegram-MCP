@@ -7,12 +7,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.flash;
@@ -32,22 +29,11 @@ class ConnectionRateLimitTests extends AbstractIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
-    private MockHttpSession signIn(String email, String password) throws Exception {
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", email).param("password", password))
-                .andReturn();
-        return (MockHttpSession) signedIn.getRequest().getSession(false);
-    }
-
     @Test
     void blocksOnboardingActionsOnceThePerUserBudgetIsSpent() throws Exception {
-        String password = "sec10-pw";
-        this.fixtures.signInReadyTeam("sec10-connect", "sec10@connect.invalid",
-                this.passwordEncoder.encode(password));
-        MockHttpSession session = signIn("sec10@connect.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("sec10-connect", "sec10@connect.invalid");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "sec10@connect.invalid",
+                team.user().telegramUserId());
 
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
                         .param("method", "QR_CODE"))
@@ -67,14 +53,12 @@ class ConnectionRateLimitTests extends AbstractIntegrationTest {
 
     @Test
     void aDifferentUserHasItsOwnIndependentBudget() throws Exception {
-        String passwordA = "sec10-pw-a";
-        String passwordB = "sec10-pw-b";
-        this.fixtures.signInReadyTeam("sec10-connect-a", "sec10a@connect.invalid",
-                this.passwordEncoder.encode(passwordA));
-        this.fixtures.signInReadyTeam("sec10-connect-b", "sec10b@connect.invalid",
-                this.passwordEncoder.encode(passwordB));
-        MockHttpSession sessionA = signIn("sec10a@connect.invalid", passwordA);
-        MockHttpSession sessionB = signIn("sec10b@connect.invalid", passwordB);
+        Fixtures.Team teamA = this.fixtures.signInReadyTeam("sec10-connect-a", "sec10a@connect.invalid");
+        Fixtures.Team teamB = this.fixtures.signInReadyTeam("sec10-connect-b", "sec10b@connect.invalid");
+        MockHttpSession sessionA = signInViaTelegramCode(this.mockMvc, "sec10a@connect.invalid",
+                teamA.user().telegramUserId());
+        MockHttpSession sessionB = signInViaTelegramCode(this.mockMvc, "sec10b@connect.invalid",
+                teamB.user().telegramUserId());
 
         // Spend A's budget entirely.
         this.mockMvc.perform(post("/connect/start").session(sessionA).with(csrf())

@@ -16,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
@@ -52,16 +51,13 @@ public class DemoDataSeeder implements ApplicationRunner {
     private final TenantRepository tenants;
     private final AppUserRepository users;
     private final RegisteredClientRepository clients;
-    private final PasswordEncoder passwordEncoder;
     private final AppProperties properties;
 
     public DemoDataSeeder(TenantRepository tenants, AppUserRepository users,
-                          RegisteredClientRepository clients, PasswordEncoder passwordEncoder,
-                          AppProperties properties) {
+                          RegisteredClientRepository clients, AppProperties properties) {
         this.tenants = tenants;
         this.users = users;
         this.clients = clients;
-        this.passwordEncoder = passwordEncoder;
         this.properties = properties;
     }
 
@@ -78,13 +74,12 @@ public class DemoDataSeeder implements ApplicationRunner {
                 });
 
         if (this.users.findByEmail(demo.ownerEmail()).isEmpty()) {
+            // There is no password to sign in with -- like every other account, the demo owner
+            // can only sign in once a Telegram identity is linked to it, which this seeder does
+            // not do on its own.
             this.users.insert(new AppUser(Ids.newId(), tenantId, demo.ownerEmail(),
-                    this.passwordEncoder.encode(demo.ownerPassword()), "Demo Owner", "OWNER", true, null, null));
-            // Security-audit finding SEC-11: the password itself must never reach the log,
-            // even a synthetic demo one -- log readers should not be handed a reusable
-            // credential. The value is whatever tgmcp.demo.owner-password is configured to.
-            log.info("Created demo user {}; its password is whatever tgmcp.demo.owner-password "
-                    + "is configured to (never logged).", demo.ownerEmail());
+                    "Demo Owner", "OWNER", true, null, null));
+            log.info("Created demo user {}", demo.ownerEmail());
         }
 
         // A second tenant, so that cross-tenant isolation is observable in the running app and
@@ -93,7 +88,7 @@ public class DemoDataSeeder implements ApplicationRunner {
             UUID otherId = Ids.newId();
             this.tenants.insert(new Tenant(otherId, "other", "Second Synthetic Tenant", true, null));
             this.users.insert(new AppUser(Ids.newId(), otherId, "owner@other.invalid",
-                    this.passwordEncoder.encode(demo.ownerPassword()), "Other Owner", "OWNER", true, null, null));
+                    "Other Owner", "OWNER", true, null, null));
             return this.tenants.findBySlug("other").orElseThrow();
         });
 

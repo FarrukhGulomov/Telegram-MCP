@@ -11,7 +11,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -40,12 +39,8 @@ class ChatFormValidationTests extends AbstractIntegrationTest {
     private ChatActivationRepository activations;
 
     private MockHttpSession signIn(Fixtures.Team team) throws Exception {
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", team.user().email())
-                        .param("password", "pw"))
-                .andExpect(status().is3xxRedirection())
-                .andReturn();
-        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, team.user().email(),
+                team.user().telegramUserId());
         assertThat(session).isNotNull();
         return session;
     }

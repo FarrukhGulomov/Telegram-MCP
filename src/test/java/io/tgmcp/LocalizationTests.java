@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -33,9 +32,6 @@ class LocalizationTests extends AbstractIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
     @Test
     void loginPageDefaultsToEnglishAndSwitchesOnLangParam() throws Exception {
         this.mockMvc.perform(get("/login"))
@@ -44,26 +40,29 @@ class LocalizationTests extends AbstractIntegrationTest {
 
         this.mockMvc.perform(get("/login").param("lang", "uz"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("Kirish")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Kod yuborish")))
                 .andExpect(cookie().value("TGMCP_LANG", "uz"));
 
         this.mockMvc.perform(get("/login").param("lang", "ru"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("Войти")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Отправить код")))
                 .andExpect(cookie().value("TGMCP_LANG", "ru"));
     }
 
     @Test
     void languageCookiePersistsAcrossAuthenticatedPagesAndTranslatesFlashMessages() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("locale-team", "owner@locale.invalid",
-                this.passwordEncoder.encode("pw"));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("locale-team", "owner@locale.invalid");
 
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
+        MvcResult sent = this.mockMvc.perform(post("/login").with(csrf())
                         .cookie(new jakarta.servlet.http.Cookie("TGMCP_LANG", "ru"))
-                        .param("username", team.user().email()).param("password", "pw"))
-                .andExpect(status().is3xxRedirection())
+                        .param("identifier", team.user().email()))
                 .andReturn();
-        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        MockHttpSession session = (MockHttpSession) sent.getRequest().getSession(false);
+        String code = this.telegramBotMessenger.latestCodeFor(team.user().telegramUserId());
+        this.mockMvc.perform(post("/login/verify").session(session).with(csrf())
+                        .cookie(new jakarta.servlet.http.Cookie("TGMCP_LANG", "ru"))
+                        .param("code", code))
+                .andExpect(status().is3xxRedirection());
         assertThat(session).isNotNull();
 
         this.mockMvc.perform(get("/").session(session)
@@ -93,11 +92,8 @@ class LocalizationTests extends AbstractIntegrationTest {
         Fixtures.Team team = this.fixtures.team("enum-i18n");
         Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Enum i18n chat", "enum_i18n_chat");
 
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", team.user().email()).param("password", "pw"))
-                .andExpect(status().is3xxRedirection())
-                .andReturn();
-        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, team.user().email(),
+                team.user().telegramUserId());
         assertThat(session).isNotNull();
 
         this.mockMvc.perform(get("/chats/" + chat.id()).session(session).param("lang", "uz"))

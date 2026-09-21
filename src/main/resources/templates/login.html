@@ -28,10 +28,8 @@
       <span th:text="#{login.demoMode.text(${adapter})}">Adapter {0}: everything is synthetic, nothing real is contacted.</span></span>
     </p>
 
-    <div class="flash err" th:if="${param.error}">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
-      <span th:text="#{login.error}">Sign-in failed. Check your email and password.</span>
-    </div>
+    <p class="muted" th:if="${telegramLoginEnabled}" th:text="#{login.telegramCode.hint}">Enter your email or Telegram username; a code will be sent to your Telegram.</p>
+
     <div class="flash err" th:if="${param.telegramError}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
       <span th:text="#{login.telegramError}">Telegram sign-in failed or was cancelled.</span>
@@ -48,28 +46,22 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
       <span th:text="#{login.registered}">Account created.</span>
     </div>
-
-    <form th:action="@{/login}" method="post" data-guard-resubmit>
-      <label for="username" th:text="#{login.email}">Email</label>
-      <input id="username" name="username" type="email" required autocomplete="username"
-             th:value="${demoMode} ? ${demoEmail} : ''">
-
-      <label for="password" th:text="#{login.password}">Password</label>
-      <input id="password" name="password" type="password" required autocomplete="current-password">
-
-      <button type="submit" th:text="#{login.signIn}">Sign in</button>
-    </form>
-
-    <div th:if="${telegramLoginEnabled}" class="auth-alt">
-      <p class="auth-divider" th:text="#{register.orDivider}">Or</p>
-      <a th:href="@{/login/telegram-code}" th:text="#{login.telegramCodeLink}">Sign in with a Telegram code</a>
-      <p class="hint" th:text="#{login.telegramHint}">No password needed — a code arrives on Telegram.</p>
+    <div class="flash ok" th:if="${message}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
+      <span th:text="${message}"></span>
     </div>
 
-    <p class="muted auth-note" th:if="${demoMode}">
-      <span th:text="#{login.demoPasswordHint}">Demo password (see server log):</span>
-      <code>demo-password</code>
-    </p>
+    <form th:if="${telegramLoginEnabled}" th:action="@{/login}" method="post" data-guard-resubmit>
+      <label for="identifier" th:text="#{login.telegramCode.identifierLabel}">Email or Telegram username</label>
+      <input id="identifier" name="identifier" type="text" required autofocus autocomplete="username"
+             th:value="${demoMode} ? ${demoEmail} : ''">
+      <button type="submit" th:text="#{login.telegramCode.button}">Send code</button>
+    </form>
+
+    <div class="flash err" th:unless="${telegramLoginEnabled}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+      <span th:text="#{login.unavailable}">Sign-in is not available right now.</span>
+    </div>
 
     <p class="muted auth-note">
       <span th:text="#{login.createAccount}">Need an account?</span>

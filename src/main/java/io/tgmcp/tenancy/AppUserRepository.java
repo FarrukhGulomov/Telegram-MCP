@@ -10,8 +10,7 @@ import org.springframework.stereotype.Repository;
 public class AppUserRepository {
 
     private static final String COLUMNS =
-            "id, tenant_id, email, password_hash, display_name, role, enabled, telegram_user_id, "
-                    + "telegram_username";
+            "id, tenant_id, email, display_name, role, enabled, telegram_user_id, telegram_username";
 
     private final JdbcClient jdbc;
 
@@ -49,25 +48,16 @@ public class AppUserRepository {
                 .optional();
     }
 
-    public void updatePasswordHash(UUID tenantId, UUID userId, String newPasswordHash) {
-        jdbc.sql("UPDATE app_users SET password_hash = :hash WHERE tenant_id = :tenantId AND id = :id")
-                .param("hash", newPasswordHash)
-                .param("tenantId", tenantId)
-                .param("id", userId)
-                .update();
-    }
-
     public void insert(AppUser user) {
         jdbc.sql("""
-                        INSERT INTO app_users (id, tenant_id, email, password_hash, display_name, role, enabled,
+                        INSERT INTO app_users (id, tenant_id, email, display_name, role, enabled,
                                                telegram_user_id, telegram_username)
-                        VALUES (:id, :tenantId, :email, :passwordHash, :displayName, :role, :enabled,
+                        VALUES (:id, :tenantId, :email, :displayName, :role, :enabled,
                                 :telegramUserId, :telegramUsername)
                         """)
                 .param("id", user.id())
                 .param("tenantId", user.tenantId())
                 .param("email", user.email())
-                .param("passwordHash", user.passwordHash())
                 .param("displayName", user.displayName())
                 .param("role", user.role())
                 .param("enabled", user.enabled())

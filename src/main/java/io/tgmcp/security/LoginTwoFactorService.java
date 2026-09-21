@@ -21,11 +21,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Sends and verifies the short numeric code delivered to an account's linked Telegram chat --
- * three different call sites reach it for three different reasons: a password check ({@code
- * WebSecurityConfig}'s form-login success handler) that alone never proves the visitor currently
- * has access to that Telegram account, a just-completed registration ({@code
- * RegistrationController}), and "sign in with a Telegram code" ({@code
- * TelegramCodeLoginController}), where the code is the entire login rather than a second factor.
+ * the whole login, reached from two call sites: a just-completed registration ({@code
+ * RegistrationController}) and signing in ({@code LoginController}).
  *
  * <p>"Pending" state (which {@link AppUser} is one code entry away from a session) lives in the
  * {@link HttpSession} attribute {@link #SESSION_KEY}, deliberately never in

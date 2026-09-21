@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,8 +41,7 @@ class TelegramConnectionIsolationTests extends AbstractIntegrationTest {
     private TelegramGateway gateway;
 
     private Fixtures.Team team(String slug) {
-        return this.fixtures.signInReadyTeam(slug, "owner@" + slug + ".invalid",
-                PasswordEncoderFactories.createDelegatingPasswordEncoder().encode("pw"));
+        return this.fixtures.signInReadyTeam(slug, "owner@" + slug + ".invalid");
     }
 
     @Test

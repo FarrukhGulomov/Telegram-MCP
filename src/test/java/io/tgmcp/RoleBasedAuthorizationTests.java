@@ -7,9 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -31,25 +29,14 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
     @LocalServerPort
     private int port;
 
-    private MockHttpSession signIn(String email, String password) throws Exception {
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", email).param("password", password))
-                .andReturn();
-        return (MockHttpSession) signedIn.getRequest().getSession(false);
-    }
-
     @Test
     void aMemberGets403OnAManagementPost() throws Exception {
-        String password = "member-pw";
-        Fixtures.Team team = this.fixtures.signInReadyTeam("f17-member", "member@f17.invalid",
-                this.passwordEncoder.encode(password), "MEMBER");
-        MockHttpSession session = signIn("member@f17.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("f17-member", "member@f17.invalid", "MEMBER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "member@f17.invalid",
+                team.user().telegramUserId());
         assertThat(session).as("MEMBER must still be able to sign in").isNotNull();
 
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
@@ -59,10 +46,9 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
 
     @Test
     void aMemberCanStillViewPages() throws Exception {
-        String password = "member-pw-2";
-        this.fixtures.signInReadyTeam("f17-member-view", "member2@f17.invalid",
-                this.passwordEncoder.encode(password), "MEMBER");
-        MockHttpSession session = signIn("member2@f17.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("f17-member-view", "member2@f17.invalid", "MEMBER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "member2@f17.invalid",
+                team.user().telegramUserId());
 
         this.mockMvc.perform(get("/").session(session))
                 .andExpect(status().isOk());
@@ -72,10 +58,9 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
 
     @Test
     void anOwnerCanStillPerformManagementActions() throws Exception {
-        String password = "owner-pw";
-        this.fixtures.signInReadyTeam("f17-owner", "owner@f17.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("owner@f17.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("f17-owner", "owner@f17.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "owner@f17.invalid",
+                team.user().telegramUserId());
 
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
                         .param("method", "QR_CODE"))
@@ -84,10 +69,9 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
 
     @Test
     void anAdminCanStillPerformManagementActions() throws Exception {
-        String password = "admin-pw";
-        this.fixtures.signInReadyTeam("f17-admin", "admin@f17.invalid",
-                this.passwordEncoder.encode(password), "ADMIN");
-        MockHttpSession session = signIn("admin@f17.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("f17-admin", "admin@f17.invalid", "ADMIN");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "admin@f17.invalid",
+                team.user().telegramUserId());
 
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
                         .param("method", "QR_CODE"))
@@ -103,10 +87,9 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
      */
     @Test
     void aDemotedOwnersExistingSessionCanNoLongerPerformManagementActions() throws Exception {
-        String password = "owner-pw-demoted";
-        Fixtures.Team team = this.fixtures.signInReadyTeam("sec09-demoted", "demoted@sec09.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("demoted@sec09.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("sec09-demoted", "demoted@sec09.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "demoted@sec09.invalid",
+                team.user().telegramUserId());
 
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
                         .param("method", "QR_CODE"))
@@ -129,10 +112,9 @@ class RoleBasedAuthorizationTests extends AbstractIntegrationTest {
      */
     @Test
     void aDisabledUsersExistingSessionCanNoLongerDoAnything() throws Exception {
-        String password = "owner-pw-disabled";
-        Fixtures.Team team = this.fixtures.signInReadyTeam("sec09-disabled", "disabled@sec09.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("disabled@sec09.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("sec09-disabled", "disabled@sec09.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "disabled@sec09.invalid",
+                team.user().telegramUserId());
 
         this.mockMvc.perform(get("/connect").session(session)).andExpect(status().isOk());
 

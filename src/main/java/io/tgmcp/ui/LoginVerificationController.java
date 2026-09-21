@@ -22,15 +22,14 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 /**
- * The mandatory second factor: whoever {@link LoginTwoFactorService#beginVerification} sent a
+ * The one and only login step: whoever {@link LoginTwoFactorService#beginVerification} sent a
  * code to must enter it here before a session actually exists. Reachable without any
  * authentication (like {@link RegistrationController}), so it handles its own errors locally
  * rather than through {@link UiExceptionHandler}.
  *
- * <p>The same entry point closes out three different starting points -- a password check that
- * required a second factor, a "sign in with a Telegram code" attempt ({@link
- * TelegramCodeLoginController}), and a just-completed registration -- all of which end the same
- * way once the code checks out: an ordinary signed-in session, landing on the dashboard.
+ * <p>The same entry point closes out both starting points -- a "sign in with a Telegram code"
+ * attempt ({@link LoginController}) and a just-completed registration -- which end the same way
+ * once the code checks out: an ordinary signed-in session, landing on the dashboard.
  */
 @Controller
 public class LoginVerificationController {

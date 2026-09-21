@@ -144,7 +144,6 @@ public record AppProperties(@DefaultValue Telegram telegram,
                        @DefaultValue("demo") String tenantSlug,
                        @DefaultValue("Synthetic Demo Team") String tenantName,
                        @DefaultValue("owner@demo.invalid") String ownerEmail,
-                       @DefaultValue("demo-password") String ownerPassword,
                        @DefaultValue List<String> extraUsers,
                        /**
                         * Security-audit finding SEC-11's remediation: a database promoted to
@@ -171,31 +170,18 @@ public record AppProperties(@DefaultValue Telegram telegram,
                                 @DefaultValue("5") int oauthRegistrationsPerHourPerIp,
                                 @DefaultValue("30") int connectActionsPerMinutePerUser,
                                 /**
-                                 * Self-service account creation (email/password, and a new
-                                 * Telegram identity provisioning an account on first sign-in)
-                                 * is reachable without any prior authentication and creates a
-                                 * durable tenant + user row per success -- its own budget, IP
-                                 * keyed, distinct from the plain login-attempt budget above.
+                                 * Self-service account creation (a workspace/email submission
+                                 * followed by linking a Telegram identity) is reachable without
+                                 * any prior authentication and creates a durable tenant + user
+                                 * row per success -- its own budget, IP keyed, distinct from the
+                                 * plain login-attempt budget above.
                                  */
                                 @DefaultValue("5") int selfRegistrationsPerHourPerIp,
                                 /**
-                                 * Distinct from {@link #loginAttemptsPerMinutePerIp}: that budget
-                                 * is per source IP and resets every minute, so an attacker who
-                                 * rotates IPs faces no additional slowdown against one specific
-                                 * account's password. This one is keyed by the submitted account
-                                 * email itself, has no time window of its own (only a threshold),
-                                 * and locks the account out -- regardless of which password is
-                                 * tried next, correct or not -- for {@link #accountLockMinutes}
-                                 * once reached. Cleared the moment a correct password is entered.
-                                 */
-                                @DefaultValue("10") int accountLockThreshold,
-                                @DefaultValue("15") int accountLockMinutes,
-                                /**
-                                 * A password change is reachable by anyone already holding a
-                                 * valid session, correct current password required or not -- a
-                                 * hijacked session cookie could otherwise be used to brute-force
-                                 * the current-password check itself. Per-user, not per-IP, since
-                                 * the caller is already authenticated by the time this applies.
+                                 * Self-service account actions reachable by anyone already
+                                 * holding a valid session (currently: revoking a connected app's
+                                 * OAuth authorization). Per-user, not per-IP, since the caller is
+                                 * already authenticated by the time this applies.
                                  */
                                 @DefaultValue("10") int accountActionsPerMinutePerUser) {
     }

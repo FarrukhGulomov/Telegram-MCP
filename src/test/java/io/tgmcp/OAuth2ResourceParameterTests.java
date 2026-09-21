@@ -12,8 +12,8 @@ import tools.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import io.tgmcp.support.Fixtures;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -42,9 +42,6 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @Autowired
-    private PasswordEncoder passwordEncoder;
-
     private String registerClient() throws Exception {
         String requestBody = """
                 {
@@ -66,13 +63,6 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
 
         var response = MAPPER.readTree(result.getResponse().getContentAsByteArray());
         return response.get("client_id").asText();
-    }
-
-    private MockHttpSession signIn(String email, String password) throws Exception {
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", email).param("password", password))
-                .andReturn();
-        return (MockHttpSession) signedIn.getRequest().getSession(false);
     }
 
     private static String pkceCodeChallenge(String codeVerifier) throws Exception {
@@ -99,10 +89,8 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
     @Test
     void rejectsAnAuthorizeRequestNamingAResourceThisServerDoesNotServe() throws Exception {
         String clientId = registerClient();
-        String password = "resource-test-pw-1";
-        this.fixtures.signInReadyTeam("f18-resource-1", "resource1@f18.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("resource1@f18.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("f18-resource-1", "resource1@f18.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "resource1@f18.invalid", team.user().telegramUserId());
         assertThat(session).isNotNull();
 
         MvcResult result = this.mockMvc.perform(get(authorizeQuery(clientId, "https://not-this-server.example"))
@@ -141,10 +129,8 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
     @Test
     void allowsAnAuthorizeRequestNamingThisServersOwnResource() throws Exception {
         String clientId = registerClient();
-        String password = "resource-test-pw-2";
-        this.fixtures.signInReadyTeam("f18-resource-2", "resource2@f18.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("resource2@f18.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("f18-resource-2", "resource2@f18.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "resource2@f18.invalid", team.user().telegramUserId());
         assertThat(session).isNotNull();
 
         // This server's own resource must not be rejected the way a mismatched one is: it
@@ -185,10 +171,8 @@ class OAuth2ResourceParameterTests extends AbstractIntegrationTest {
     @Test
     void defaultsToTheRegisteredClientScopeWhenTheAuthorizeRequestOmitsScope() throws Exception {
         String clientId = registerClient();
-        String password = "resource-test-pw-3";
-        this.fixtures.signInReadyTeam("f18-resource-3", "resource3@f18.invalid",
-                this.passwordEncoder.encode(password), "OWNER");
-        MockHttpSession session = signIn("resource3@f18.invalid", password);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("f18-resource-3", "resource3@f18.invalid", "OWNER");
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, "resource3@f18.invalid", team.user().telegramUserId());
         assertThat(session).isNotNull();
 
         MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQueryWithoutScope(clientId))

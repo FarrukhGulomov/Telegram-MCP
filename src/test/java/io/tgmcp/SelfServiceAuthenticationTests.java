@@ -15,7 +15,6 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
-import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -28,20 +27,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Users change frequently, so an operator should not have to create every account by hand: an
- * email/password sign-up form that also links a Telegram identity, and a passwordless "sign in
- * with a Telegram code" for any account that identity is linked to. Neither a correct password
- * nor a correct code is ever sufficient by itself in the same way: a password check always ends
- * with a mandatory Telegram-delivered code ({@code LoginTwoFactorService}), while "sign in with
- * a Telegram code" needs nothing further -- proving control of that Telegram account already is
- * the whole login. See {@link io.tgmcp.tenancy.SelfRegistrationService}, {@link
- * io.tgmcp.security.TelegramLinkingService} and {@link io.tgmcp.ui.TelegramBotWebhookController}.
+ * Users change frequently, so an operator should not have to create every account by hand: a
+ * workspace/email sign-up form that links a Telegram identity, and signing in with a one-time
+ * code delivered to that same Telegram chat -- there is no password anywhere. Proving control of
+ * the linked Telegram account is the whole login. See {@link
+ * io.tgmcp.tenancy.SelfRegistrationService}, {@link io.tgmcp.security.TelegramLinkingService} and
+ * {@link io.tgmcp.ui.TelegramBotWebhookController}.
  */
 @AutoConfigureMockMvc
-@TestPropertySource(properties = {
-        "tgmcp.telegram-login.bot-token=123456789:test-bot-token-not-a-real-secret",
-        "tgmcp.telegram-login.bot-username=TestConsentBot"
-})
 class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
 
     private static final Pattern TOKEN_PATTERN = Pattern.compile("data-link-token=\"([^\"]+)\"");
@@ -59,9 +52,7 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
     void selfRegistrationLinksTelegramViaTheBotThenVerifiesACodeAndSignsIn() throws Exception {
         MvcResult registered = this.mockMvc.perform(post("/register").with(csrf())
                         .param("workspaceName", "Orbital Widgets")
-                        .param("email", "new-owner@example.invalid")
-                        .param("password", "a-strong-password")
-                        .param("passwordConfirm", "a-strong-password"))
+                        .param("email", "new-owner@example.invalid"))
                 .andExpect(redirectedUrl("/register/link-telegram"))
                 .andReturn();
         MockHttpSession session = (MockHttpSession) registered.getRequest().getSession(false);
@@ -107,9 +98,7 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
 
         MvcResult registered = this.mockMvc.perform(post("/register").with(csrf())
                         .param("workspaceName", "Second Team")
-                        .param("email", "second-owner@example.invalid")
-                        .param("password", "a-strong-password")
-                        .param("passwordConfirm", "a-strong-password"))
+                        .param("email", "second-owner@example.invalid"))
                 .andReturn();
         MockHttpSession session = (MockHttpSession) registered.getRequest().getSession(false);
         String token = fetchLinkToken(session);
@@ -123,14 +112,11 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
 
     @Test
     void duplicateEmailIsRejectedWithoutCreatingASecondAccount() throws Exception {
-        this.fixtures.signInReadyTeam("existing", "taken@example.invalid",
-                "{noop}whatever-hash");
+        this.fixtures.signInReadyTeam("existing", "taken@example.invalid");
 
         this.mockMvc.perform(post("/register").with(csrf())
                         .param("workspaceName", "Another Team")
-                        .param("email", "taken@example.invalid")
-                        .param("password", "a-strong-password")
-                        .param("passwordConfirm", "a-strong-password"))
+                        .param("email", "taken@example.invalid"))
                 .andExpect(redirectedUrl("/register"))
                 .andExpect(flash().attributeExists("error"));
 
@@ -140,38 +126,12 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
     }
 
     @Test
-    void tooShortAPasswordIsRejected() throws Exception {
-        this.mockMvc.perform(post("/register").with(csrf())
-                        .param("workspaceName", "Team")
-                        .param("email", "short-pw@example.invalid")
-                        .param("password", "short")
-                        .param("passwordConfirm", "short"))
-                .andExpect(redirectedUrl("/register"))
-                .andExpect(flash().attributeExists("error"));
-
-        assertThat(this.users.findByEmail("short-pw@example.invalid")).isEmpty();
-    }
-
-    @Test
-    void mismatchedConfirmationIsRejected() throws Exception {
-        this.mockMvc.perform(post("/register").with(csrf())
-                        .param("workspaceName", "Team")
-                        .param("email", "mismatch@example.invalid")
-                        .param("password", "a-strong-password")
-                        .param("passwordConfirm", "a-different-password"))
-                .andExpect(redirectedUrl("/register"))
-                .andExpect(flash().attributeExists("error"));
-
-        assertThat(this.users.findByEmail("mismatch@example.invalid")).isEmpty();
-    }
-
-    @Test
     void signingInWithATelegramCodeByEmailNeedsNoFurtherConfirmation() throws Exception {
         long telegramUserId = 777_003L;
         registerAndLink("code-login@example.invalid", telegramUserId, "codeuser");
         this.telegramBotMessenger.reset();
 
-        MvcResult sent = this.mockMvc.perform(post("/login/telegram-code").with(csrf())
+        MvcResult sent = this.mockMvc.perform(post("/login").with(csrf())
                         .param("identifier", "code-login@example.invalid"))
                 .andExpect(redirectedUrl("/login/verify"))
                 .andReturn();
@@ -193,7 +153,7 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
         registerAndLink("username-login@example.invalid", telegramUserId, "UsernameLogin");
         this.telegramBotMessenger.reset();
 
-        this.mockMvc.perform(post("/login/telegram-code").with(csrf())
+        this.mockMvc.perform(post("/login").with(csrf())
                         .param("identifier", "@usernamelogin"))
                 .andExpect(redirectedUrl("/login/verify"));
 
@@ -202,9 +162,9 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
 
     @Test
     void signingInWithATelegramCodeForAnUnknownIdentifierGivesNoIndicationEitherWay() throws Exception {
-        this.mockMvc.perform(post("/login/telegram-code").with(csrf())
+        this.mockMvc.perform(post("/login").with(csrf())
                         .param("identifier", "nobody@example.invalid"))
-                .andExpect(redirectedUrl("/login/telegram-code"))
+                .andExpect(redirectedUrl("/login"))
                 .andExpect(flash().attribute("message", org.hamcrest.Matchers.notNullValue()));
     }
 
@@ -227,9 +187,7 @@ class SelfServiceAuthenticationTests extends AbstractIntegrationTest {
     private MockHttpSession registerAndLink(String email, long telegramUserId, String username) throws Exception {
         MvcResult registered = this.mockMvc.perform(post("/register").with(csrf())
                         .param("workspaceName", "Team for " + email)
-                        .param("email", email)
-                        .param("password", "a-strong-password")
-                        .param("passwordConfirm", "a-strong-password"))
+                        .param("email", email))
                 .andReturn();
         MockHttpSession session = (MockHttpSession) registered.getRequest().getSession(false);
         String token = fetchLinkToken(session);

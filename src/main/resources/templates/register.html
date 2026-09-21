@@ -26,7 +26,7 @@
 
     <div class="flash err" th:if="${error}" th:text="${error}"></div>
 
-    <form th:action="@{/register}" method="post" data-guard-resubmit>
+    <form th:if="${telegramLoginEnabled}" th:action="@{/register}" method="post" data-guard-resubmit>
       <label for="workspaceName" th:text="#{register.workspaceName}">Workspace name</label>
       <input id="workspaceName" name="workspaceName" type="text" maxlength="200" required
              th:value="${workspaceName}">
@@ -34,17 +34,13 @@
       <label for="email" th:text="#{register.email}">Email</label>
       <input id="email" name="email" type="email" required autocomplete="username" th:value="${email}">
 
-      <label for="password" th:text="#{register.password}">Password</label>
-      <input id="password" name="password" type="password" required minlength="10" autocomplete="new-password">
-      <p class="hint" th:text="#{register.passwordHint}">At least 10 characters.</p>
-
-      <label for="passwordConfirm" th:text="#{register.passwordConfirm}">Confirm password</label>
-      <input id="passwordConfirm" name="passwordConfirm" type="password" required minlength="10"
-             autocomplete="new-password">
-
       <button type="submit" th:text="#{register.createAccount}">Create account</button>
     </form>
     <p class="hint" th:if="${telegramLoginEnabled}" th:text="#{register.telegramLinkNotice}">You'll link a Telegram account as the next step.</p>
+
+    <div class="flash err" th:if="${!telegramLoginEnabled and error == null}">
+      <span th:text="#{register.unavailable}">Registration is not available right now.</span>
+    </div>
 
     <p class="muted auth-note">
       <span th:text="#{register.alreadyHaveAccount}">Already have an account?</span>

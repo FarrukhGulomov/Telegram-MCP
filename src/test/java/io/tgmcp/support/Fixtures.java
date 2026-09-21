@@ -68,23 +68,28 @@ public class Fixtures {
 
     /**
      * A tenant and a sign-in-able owner, with no Telegram connection yet — the state a real
-     * operator starts from.
+     * operator starts from. Signing in requires proving control of a Telegram account (there is
+     * no password), so a linked identity is assigned deterministically from {@code slug}: tests
+     * drive an actual sign-in via {@link io.tgmcp.support.FakeTelegramBotMessenger#latestCodeFor}
+     * against {@link AppUser#telegramUserId()} on the returned {@link Team#user()}.
      */
-    public Team signInReadyTeam(String slug, String email, String encodedPassword) {
-        return signInReadyTeam(slug, email, encodedPassword, "OWNER");
+    public Team signInReadyTeam(String slug, String email) {
+        return signInReadyTeam(slug, email, "OWNER");
     }
 
     /**
-     * As {@link #signInReadyTeam(String, String, String)}, but with an explicit
-     * OWNER/ADMIN/MEMBER role -- used for security-audit finding F17's role-based
-     * authorization tests, since nothing in the app's own seeding or signup path currently
-     * creates anything but an OWNER.
+     * As {@link #signInReadyTeam(String, String)}, but with an explicit OWNER/ADMIN/MEMBER role
+     * -- used for security-audit finding F17's role-based authorization tests, since nothing in
+     * the app's own seeding or signup path currently creates anything but an OWNER.
      */
-    public Team signInReadyTeam(String slug, String email, String encodedPassword, String role) {
+    public Team signInReadyTeam(String slug, String email, String role) {
         UUID tenantId = Ids.newId();
         this.tenants.insert(new Tenant(tenantId, slug, slug + " team", true, null));
-        AppUser user = new AppUser(Ids.newId(), tenantId, email, encodedPassword,
-                slug + " " + role.toLowerCase(java.util.Locale.ROOT), role, true, null, null);
+        long telegramUserId = Ids.newId().getLeastSignificantBits() & Long.MAX_VALUE;
+        String telegramUsername = "login_" + slug.replaceAll("[^a-zA-Z0-9]", "");
+        AppUser user = new AppUser(Ids.newId(), tenantId, email,
+                slug + " " + role.toLowerCase(java.util.Locale.ROOT), role, true, telegramUserId,
+                telegramUsername);
         this.users.insert(user);
         AuthenticatedActor actor = new AuthenticatedActor(tenantId, user.id(), user.email(),
                 ActorType.UI_USER, java.util.Set.of("ui:manage"), null);
@@ -94,8 +99,10 @@ public class Fixtures {
     public Team team(String slug) {
         UUID tenantId = Ids.newId();
         this.tenants.insert(new Tenant(tenantId, slug, slug + " team", true, null));
+        long telegramUserId = Ids.newId().getLeastSignificantBits() & Long.MAX_VALUE;
+        String telegramUsername = "login_" + slug.replaceAll("[^a-zA-Z0-9]", "");
         AppUser user = new AppUser(Ids.newId(), tenantId, "owner@" + slug + ".invalid",
-                "{noop}pw", slug + " owner", "OWNER", true, null, null);
+                slug + " owner", "OWNER", true, telegramUserId, telegramUsername);
         this.users.insert(user);
 
         TelegramConnection connection = new TelegramConnection(Ids.newId(), tenantId, user.id(),

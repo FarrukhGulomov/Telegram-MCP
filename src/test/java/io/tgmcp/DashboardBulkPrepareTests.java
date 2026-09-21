@@ -17,9 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockHttpSession;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -41,13 +39,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class DashboardBulkPrepareTests extends AbstractIntegrationTest {
 
     private static final String EMAIL = "owner@demo.invalid";
-    private static final String PASSWORD = "demo-password";
 
     @Autowired
     private MockMvc mockMvc;
-
-    @Autowired
-    private PasswordEncoder passwordEncoder;
 
     @Autowired
     private ChatRepository chats;
@@ -59,10 +53,8 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
     private TelegramConnectionRepository connections;
 
     private MockHttpSession signInAndConnect(Fixtures.Team team) throws Exception {
-        MvcResult signedIn = this.mockMvc.perform(post("/login").with(csrf())
-                        .param("username", team.user().email()).param("password", PASSWORD))
-                .andReturn();
-        MockHttpSession session = (MockHttpSession) signedIn.getRequest().getSession(false);
+        MockHttpSession session = signInViaTelegramCode(this.mockMvc, team.user().email(),
+                team.user().telegramUserId());
         this.mockMvc.perform(post("/connect/start").session(session).with(csrf())
                 .param("method", "QR_CODE")).andExpect(status().is3xxRedirection());
         this.mockMvc.perform(post("/connect/code").session(session).with(csrf())
@@ -76,8 +68,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
 
     @Test
     void activatesEveryCheckedChatWithDefaultsAndLeavesUncheckedOnesAlone() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-a", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-a", EMAIL);
         MockHttpSession session = signInAndConnect(team);
         TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
                 .orElseThrow();
@@ -104,8 +95,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
 
     @Test
     void activatesAnAlreadySelectedChatWithoutResettingItsSettings() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-c", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-c", EMAIL);
         MockHttpSession session = signInAndConnect(team);
         TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
                 .orElseThrow();
@@ -140,8 +130,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
      */
     @Test
     void reactivatesAPausedChatWithoutResettingItsSettings() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-e", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-e", EMAIL);
         MockHttpSession session = signInAndConnect(team);
         TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
                 .orElseThrow();
@@ -177,8 +166,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
      */
     @Test
     void reactivatesARevokedChatUsingDefaultsSinceItsSettingsWerePurged() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-f", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-f", EMAIL);
         MockHttpSession session = signInAndConnect(team);
         TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
                 .orElseThrow();
@@ -208,8 +196,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
 
     @Test
     void doesNothingWhenNoChatIsChecked() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-d", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-d", EMAIL);
         MockHttpSession session = signInAndConnect(team);
 
         this.mockMvc.perform(post("/chats/bulk-prepare").session(session).with(csrf()))
@@ -218,8 +205,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
 
     @Test
     void bulkPausePausesEveryCheckedActiveChatAndLeavesUncheckedOnesAlone() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-g", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-g", EMAIL);
         MockHttpSession session = signInAndConnect(team);
         TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
                 .orElseThrow();
@@ -245,8 +231,7 @@ class DashboardBulkPrepareTests extends AbstractIntegrationTest {
 
     @Test
     void bulkPauseLeavesANeverActivatedChatAlone() throws Exception {
-        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-h", EMAIL,
-                this.passwordEncoder.encode(PASSWORD));
+        Fixtures.Team team = this.fixtures.signInReadyTeam("bulk-h", EMAIL);
         MockHttpSession session = signInAndConnect(team);
         TelegramConnection connection = this.connections.findByOwner(team.tenant().id(), team.user().id())
                 .orElseThrow();

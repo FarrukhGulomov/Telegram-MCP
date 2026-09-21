@@ -38,7 +38,7 @@ class DemoDataCleanupRunnerTests extends AbstractIntegrationTest {
     private AppProperties properties(boolean cleanupEnabled) {
         AppProperties.Telegram telegram = new AppProperties.Telegram(TelegramAdapterKind.MOCK, null, null,
                 "./tdlib-data", false, true);
-        AppProperties.Demo demo = new AppProperties.Demo(false, "demo", "Demo", "owner@demo.invalid", "pw",
+        AppProperties.Demo demo = new AppProperties.Demo(false, "demo", "Demo", "owner@demo.invalid",
                 List.of(), cleanupEnabled);
         return new AppProperties(telegram, null, null, null, null, demo, null, null, null);
     }

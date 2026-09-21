@@ -9,15 +9,18 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
+/**
+ * Resolves the authorities/roles a {@link ManualSessionEstablisher} attaches to a session once a
+ * Telegram-delivered code has already proven identity -- there is no password to check here, so
+ * the placeholder value handed to {@link User.UserBuilder#password} is never read by anything.
+ */
 @Service
 public class DatabaseUserDetailsService implements UserDetailsService {
 
     private final AppUserRepository users;
-    private final LoginLockoutService lockoutService;
 
-    public DatabaseUserDetailsService(AppUserRepository users, LoginLockoutService lockoutService) {
+    public DatabaseUserDetailsService(AppUserRepository users) {
         this.users = users;
-        this.lockoutService = lockoutService;
     }
 
     @Override
@@ -26,13 +29,9 @@ public class DatabaseUserDetailsService implements UserDetailsService {
                 // Same message either way: the login form must not confirm which accounts exist.
                 .orElseThrow(() -> new UsernameNotFoundException("Bad credentials"));
         return User.withUsername(user.email())
-                .password(user.passwordHash())
+                .password("")
                 .roles(user.role())
                 .disabled(!user.enabled())
-                // See LoginLockoutService's own javadoc: Spring Security's own
-                // AbstractUserDetailsAuthenticationProvider rejects a locked account with
-                // LockedException before it even compares the submitted password.
-                .accountLocked(this.lockoutService.isLocked(user.email()))
                 .build();
     }
 }

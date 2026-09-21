@@ -15,11 +15,10 @@ import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.stereotype.Component;
 
 /**
- * Establishes or clears a signed-in {@link SecurityContext} outside the normal username/password
- * form-login path -- used once a visitor has actually proven who they are through some other
- * means ({@code LoginVerificationController}, once a Telegram-delivered code checks out), and,
- * in the other direction, to immediately undo the session a password check alone established
- * while a second factor is still outstanding.
+ * Establishes a signed-in {@link SecurityContext} directly -- there is no password for any
+ * {@code AuthenticationManager}/{@code UsernamePasswordAuthenticationFilter} to check, so this
+ * is the only way a session is ever created, once {@code LoginVerificationController} confirms a
+ * Telegram-delivered code checks out.
  */
 @Component
 public class ManualSessionEstablisher {
@@ -49,16 +48,5 @@ public class ManualSessionEstablisher {
         context.setAuthentication(authentication);
         SecurityContextHolder.setContext(context);
         this.securityContextRepository.saveContext(context, request, response);
-    }
-
-    /**
-     * Undoes whatever {@code UsernamePasswordAuthenticationFilter} just established for a
-     * password check: a password alone is not sufficient once a second factor is pending, so
-     * nothing about that check may leave a usable, authenticated session behind.
-     */
-    public void clearAuthentication(HttpServletRequest request, HttpServletResponse response) {
-        SecurityContext empty = SecurityContextHolder.createEmptyContext();
-        SecurityContextHolder.setContext(empty);
-        this.securityContextRepository.saveContext(empty, request, response);
     }
 }
