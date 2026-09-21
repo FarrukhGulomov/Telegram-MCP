@@ -170,7 +170,14 @@ public class WebSecurityConfig {
                                         + "form-action 'self'"))
                         .referrerPolicy(referrer -> referrer
                                 .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.SAME_ORIGIN))
-                        .frameOptions(frame -> frame.deny()));
+                        .frameOptions(frame -> frame.deny())
+                        // Security-audit finding SEC-R16: this UI never uses the camera,
+                        // microphone, geolocation, or any other powerful browser feature, so a
+                        // page injected via any future markup-escaping bug gets none of them
+                        // either -- denied to every origin, including this one.
+                        .permissionsPolicy(permissions -> permissions.policy(
+                                "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+                                        + "interest-cohort=()")));
         return http.build();
     }
 

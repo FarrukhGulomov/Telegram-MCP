@@ -218,4 +218,17 @@ class EndToEndMockFlowTests extends AbstractIntegrationTest {
                         .header().string("Content-Security-Policy",
                                 org.hamcrest.Matchers.containsString("frame-ancestors 'none'")));
     }
+
+    /** Security-audit finding SEC-R16: the management UI never needs any powerful browser feature. */
+    @Test
+    void sendsAPermissionsPolicyDenyingPowerfulBrowserFeatures() throws Exception {
+        this.mockMvc.perform(get("/login"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .header().string("Permissions-Policy",
+                                org.hamcrest.Matchers.allOf(
+                                        org.hamcrest.Matchers.containsString("camera=()"),
+                                        org.hamcrest.Matchers.containsString("microphone=()"),
+                                        org.hamcrest.Matchers.containsString("geolocation=()"))));
+    }
 }
