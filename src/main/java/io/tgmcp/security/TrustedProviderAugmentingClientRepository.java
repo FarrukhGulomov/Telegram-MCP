@@ -2,6 +2,7 @@ package io.tgmcp.security;
 
 import java.net.URI;
 import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -89,20 +90,42 @@ final class TrustedProviderAugmentingClientRepository implements RegisteredClien
         return withScopes(registeredClient, augmented);
     }
 
+    /**
+     * Security-audit finding SEC-R01: granting a provider scope as soon as <em>any one</em> of a
+     * client's redirect URIs matched a trusted domain let a single registration mix a trusted URI
+     * (to earn the scope) with an attacker-controlled one (to actually receive the authorization
+     * code) -- the scope attached to the client as a whole, not to the specific redirect URI that
+     * earned it, and {@code /oauth2/authorize} only checks that the requested {@code redirect_uri}
+     * is among the client's registered set, not which one justified which scope.
+     *
+     * <p>Every redirect URI the client registered must resolve to the exact same trusted domain
+     * before any provider scope is granted at all; a single non-matching (or differently-provider)
+     * URI disqualifies the whole registration from ever earning one, rather than narrowing which
+     * URI may use it -- {@code RegisteredClient} has no per-redirect-URI scope concept to narrow
+     * to, and a legitimate single-provider connector (the real ChatGPT/Claude connectors this
+     * exists for both register exactly one redirect URI under their own domain) never needs more
+     * than one URI in the first place.
+     */
     private static Set<String> trustedProviderScopesFor(RegisteredClient registeredClient) {
-        Set<String> matched = new LinkedHashSet<>();
-        for (String redirectUri : registeredClient.getRedirectUris()) {
-            String scope = TRUSTED_PROVIDER_DOMAINS.get(hostOf(redirectUri));
-            if (scope != null) {
-                matched.add(scope);
-            }
+        Set<String> redirectUris = registeredClient.getRedirectUris();
+        if (redirectUris.isEmpty()) {
+            return Set.of();
         }
-        return matched;
+        Set<String> matched = new LinkedHashSet<>();
+        for (String redirectUri : redirectUris) {
+            String scope = TRUSTED_PROVIDER_DOMAINS.get(hostOf(redirectUri));
+            if (scope == null) {
+                return Set.of();
+            }
+            matched.add(scope);
+        }
+        return matched.size() == 1 ? matched : Set.of();
     }
 
     private static String hostOf(String redirectUri) {
         try {
-            return URI.create(redirectUri).getHost();
+            String host = URI.create(redirectUri).getHost();
+            return host == null ? null : host.toLowerCase(Locale.ROOT);
         }
         catch (RuntimeException ex) {
             return null;

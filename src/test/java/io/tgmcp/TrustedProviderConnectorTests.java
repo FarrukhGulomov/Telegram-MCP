@@ -52,16 +52,24 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
     private MockMvc mockMvc;
 
     private String register(String clientName, String redirectUri, String scopeOrNull) throws Exception {
+        return register(clientName, java.util.List.of(redirectUri), scopeOrNull);
+    }
+
+    private String register(String clientName, java.util.List<String> redirectUris, String scopeOrNull)
+            throws Exception {
         String scopeField = scopeOrNull == null ? "" : ",\n  \"scope\": \"" + scopeOrNull + "\"";
+        String redirectUrisJson = redirectUris.stream()
+                .map(uri -> "\"" + uri + "\"")
+                .collect(java.util.stream.Collectors.joining(", "));
         String requestBody = """
                 {
                   "client_name": "%s",
-                  "redirect_uris": ["%s"],
+                  "redirect_uris": [%s],
                   "grant_types": ["authorization_code", "refresh_token"],
                   "response_types": ["code"],
                   "token_endpoint_auth_method": "none"%s
                 }
-                """.formatted(clientName, redirectUri, scopeField);
+                """.formatted(clientName, redirectUrisJson, scopeField);
 
         MvcResult result = this.mockMvc.perform(post("/oauth2/register")
                         .with(anonymous())
@@ -201,6 +209,65 @@ class TrustedProviderConnectorTests extends AbstractIntegrationTest {
                 .contains("mcp:read")
                 .doesNotContain("provider:anthropic_claude")
                 .doesNotContain("provider:openai_chatgpt");
+    }
+
+    /**
+     * Security-audit finding SEC-R01 (P0): a single client that registers both a trusted-domain
+     * redirect URI and an attacker-controlled one used to earn a {@code provider:*} scope for the
+     * whole client, then complete the actual authorization against the attacker's own URI --
+     * {@code /oauth2/authorize} only checks that the requested {@code redirect_uri} belongs to the
+     * client's registered set, never which URI justified which scope. {@link
+     * TrustedProviderAugmentingClientRepository} now requires every one of a client's redirect
+     * URIs to resolve to the same trusted domain before granting any provider scope at all.
+     */
+    @Test
+    void mixingATrustedAndAnAttackerRedirectUriInOneRegistrationNeverEarnsAProviderScope() throws Exception {
+        String trustedUri = "https://chatgpt.com/fake";
+        String attackerUri = "https://evil.example/callback";
+        String clientId = register("mixed-redirect-client", java.util.List.of(trustedUri, attackerUri), null);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("connector-7", "connector7@test.invalid", "OWNER");
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
+        assertThat(session).isNotNull();
+
+        // The attacker completes the flow against their own URI -- the one that actually earned
+        // no scope at all, since the registration mixed it with a trusted one.
+        String requestedScope = "mcp:read openid provider:openai_chatgpt";
+        MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQuery(clientId, attackerUri, requestedScope))
+                        .session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        String consentPage = authorizeResult.getResponse().getContentAsString();
+        assertThat(consentPage)
+                .as("a client mixing a trusted redirect URI with an attacker-controlled one must "
+                        + "never be trusted with the provider scope on either URI")
+                .contains("mcp:read")
+                .doesNotContain("provider:openai_chatgpt");
+    }
+
+    /**
+     * Companion to the above for the other trusted provider, and confirming a client that mixes
+     * two DIFFERENT trusted providers' redirect URIs (never a legitimate single-provider
+     * connector) also earns neither provider scope.
+     */
+    @Test
+    void mixingTwoDifferentTrustedProviderDomainsInOneRegistrationEarnsNeitherProviderScope() throws Exception {
+        String chatgptUri = "https://chatgpt.com/one";
+        String claudeUri = "https://claude.ai/two";
+        String clientId = register("cross-provider-client", java.util.List.of(chatgptUri, claudeUri), null);
+        Fixtures.Team team = this.fixtures.signInReadyTeam("connector-8", "connector8@test.invalid", "OWNER");
+        MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
+        assertThat(session).isNotNull();
+
+        String requestedScope = "mcp:read provider:openai_chatgpt provider:anthropic_claude";
+        MvcResult authorizeResult = this.mockMvc.perform(get(authorizeQuery(clientId, chatgptUri, requestedScope))
+                        .session(session))
+                .andExpect(status().isOk())
+                .andReturn();
+        String consentPage = authorizeResult.getResponse().getContentAsString();
+        assertThat(consentPage)
+                .contains("mcp:read")
+                .doesNotContain("provider:openai_chatgpt")
+                .doesNotContain("provider:anthropic_claude");
     }
 
     /**
