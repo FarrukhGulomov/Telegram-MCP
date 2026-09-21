@@ -169,6 +169,7 @@ tgmcp:
     connect-actions-per-minute-per-user: 30
     self-registrations-per-hour-per-ip: 5
     login-attempts-per-hour-per-phone: 5
+    abandoned-signup-max-age: PT1H
 
   # Security-audit finding SEC-13: empty by default, matching server.forward-headers-strategy
   # trusting forwarded headers unconditionally -- correct for local development and for a

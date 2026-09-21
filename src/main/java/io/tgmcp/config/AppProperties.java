@@ -198,7 +198,23 @@ public record AppProperties(@DefaultValue Telegram telegram,
                                  * a minute or two is common, but sustained repeated teardown of
                                  * the same number many times an hour is not.
                                  */
-                                @DefaultValue("5") int loginAttemptsPerHourPerPhone) {
+                                @DefaultValue("5") int loginAttemptsPerHourPerPhone,
+                                /**
+                                 * Security-audit finding SEC-R08: {@code
+                                 * PreAuthLoginService#createAccount} creates a permanent
+                                 * tenant/user row for a new phone number the moment a login
+                                 * attempt starts, before Telegram's own code (and password, if
+                                 * set) ever proves the visitor holds it -- TDLib needs a stable
+                                 * per-tenant identity to run its login state machine against
+                                 * from the very first request, so that row cannot simply be
+                                 * deferred. A visitor who mistypes a number, closes the tab, or
+                                 * otherwise never finishes leaves it behind permanently unless
+                                 * they explicitly cancel. {@link
+                                 * io.tgmcp.tenancy.AbandonedSignupReaper} deletes any such
+                                 * tenant whose connection has still never reached {@code READY}
+                                 * once it is older than this.
+                                 */
+                                @DefaultValue("PT1H") Duration abandonedSignupMaxAge) {
     }
 
     /**

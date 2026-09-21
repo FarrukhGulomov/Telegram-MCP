@@ -1,5 +1,6 @@
 package io.tgmcp.tenancy;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,6 +41,30 @@ public class TenantRepository {
                 .param("slug", slug)
                 .query(Tenant.class)
                 .optional();
+    }
+
+    /**
+     * Security-audit finding SEC-R08: candidates for {@link AbandonedSignupReaper} -- real
+     * (non-demo) tenants old enough that any legitimate login attempt should have long since
+     * either finished or been abandoned, and whose Telegram connection has still never once
+     * reached {@code READY} (a connection that reached READY at any point, however long ago,
+     * proved real identity and everything downstream of it is real data, never reaped, even if
+     * the connection has since been disconnected or lost authorization).
+     */
+    public List<Tenant> findAbandonedSignups(Instant olderThan) {
+        return jdbc.sql("""
+                        SELECT t.id, t.slug, t.name, t.demo_mode, t.created_at
+                          FROM tenants t
+                         WHERE t.demo_mode = false
+                           AND t.created_at < :olderThan
+                           AND NOT EXISTS (
+                               SELECT 1 FROM telegram_connections c
+                                WHERE c.tenant_id = t.id AND c.connected_at IS NOT NULL
+                           )
+                        """)
+                .param("olderThan", java.sql.Timestamp.from(olderThan))
+                .query(Tenant.class)
+                .list();
     }
 
     public void insert(Tenant tenant) {
