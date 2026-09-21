@@ -7,6 +7,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
+import com.sun.jna.Native;
 import io.tgmcp.config.AppProperties;
 import io.tgmcp.telegram.gateway.ConnectionRef;
 import io.tgmcp.telegram.gateway.LoginMethod;
@@ -35,10 +36,19 @@ import tools.jackson.databind.ObjectMapper;
  * AppProperties.Telegram#databaseDirectory()}, so tenants can never observe or disturb one
  * another's Telegram session.
  *
+ * <p>Confirmed from live production logs: {@code td_receive} is a process-global call, not a
+ * per-client one (see {@link TdlibReceiveLoop}'s javadoc) -- so the native library is loaded and
+ * its one receive thread started exactly once here, in this gateway's constructor, and every
+ * tenant's {@link NativeTdlibClient} shares that same {@link TdlibReceiveLoop} rather than each
+ * starting its own. A second tenant's client used to start a second thread calling {@code
+ * td_receive} against the same loaded library, which TDLib's own internal check answered with a
+ * native {@code abort()}, crashing the whole process.
+ *
  * <p>Clients are created lazily and never evicted -- a tenant's native client lives for the
  * life of the JVM once created, mirroring the previous single-instance lifecycle. Each connected
- * tenant therefore costs its own native TDLib session (threads, memory, on-disk database), which
- * is a real per-tenant resource cost operators should size the deployment for.
+ * tenant therefore costs its own native TDLib session (memory, on-disk database, and its own
+ * {@code td_create_client_id} actor, though not its own receive thread), which is a real
+ * per-tenant resource cost operators should size the deployment for.
  */
 public class RoutedTdlibTelegramGateway implements TelegramGateway {
 
@@ -48,8 +58,8 @@ public class RoutedTdlibTelegramGateway implements TelegramGateway {
     private final AppProperties.Telegram baseConfig;
     private final String sessionEncryptionKey;
     private final ObjectMapper objectMapper;
-    private final String tdlibLibraryName;
     private final long requestTimeoutSeconds;
+    private final TdlibReceiveLoop receiveLoop;
 
     public RoutedTdlibTelegramGateway(AppProperties.Telegram baseConfig, String sessionEncryptionKey,
                                       ObjectMapper objectMapper, String tdlibLibraryName,
@@ -57,8 +67,10 @@ public class RoutedTdlibTelegramGateway implements TelegramGateway {
         this.baseConfig = baseConfig;
         this.sessionEncryptionKey = sessionEncryptionKey;
         this.objectMapper = objectMapper;
-        this.tdlibLibraryName = tdlibLibraryName;
         this.requestTimeoutSeconds = requestTimeoutSeconds;
+        TdJsonLibrary library = Native.load(tdlibLibraryName, TdJsonLibrary.class);
+        this.receiveLoop = new TdlibReceiveLoop(library, objectMapper);
+        this.receiveLoop.start();
     }
 
     private TdlibTelegramGateway forTenant(UUID tenantId) {
@@ -66,7 +78,7 @@ public class RoutedTdlibTelegramGateway implements TelegramGateway {
             log.info("Starting a new TDLib client for tenant {}", id);
             AppProperties.Telegram tenantConfig = this.baseConfig
                     .withDatabaseDirectory(this.baseConfig.databaseDirectory() + "/" + id);
-            TdlibClient client = new NativeTdlibClient(this.tdlibLibraryName, this.objectMapper,
+            TdlibClient client = new NativeTdlibClient(this.receiveLoop, this.objectMapper,
                     this.requestTimeoutSeconds);
             return new TdlibTelegramGateway(client, tenantConfig, this.sessionEncryptionKey);
         });
