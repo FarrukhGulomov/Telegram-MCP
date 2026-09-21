@@ -54,12 +54,23 @@ EXPOSE 8080
 ENV JAVA_OPTS=""
 HEALTHCHECK --interval=15s --timeout=3s --start-period=40s --retries=5 \
   CMD ["sh", "-c", "wget -qO- http://127.0.0.1:8080/actuator/health | grep -q UP"]
-# Deliberately no `USER tgmcp` above: TGMCP_TDLIB_DIR is a runtime volume mount (Railway
-# mounts it root-owned), which `chown` at build time cannot touch since it doesn't exist
-# until the container starts. The container starts as root, fixes ownership of whatever is
-# actually mounted there on every start (idempotent, and cheap even once it holds TDLib's
-# database), then drops to the unprivileged `tgmcp` user for the JVM itself. Real-account
-# testing on this branch caught this the first time the TDLIB adapter ever ran against a
+# Security-audit finding SEC-R10 asks for a non-root container. Deliberately still no `USER
+# tgmcp` directive above, and this is not an oversight: TGMCP_TDLIB_DIR is a runtime volume
+# mount (Railway mounts it root-owned), which `chown` at build time cannot touch since it
+# doesn't exist until the container starts. `USER tgmcp` would make the container start as
+# that user with no path back to root, so it could never fix a root-owned mount's ownership
+# at all -- there is no way to satisfy "the image's declared user is non-root" and "a
+# root-owned volume gets its permissions fixed on start" at the same time without extra
+# infrastructure this codebase does not control (an init container, or a hosting platform
+# that lets the operator pre-chown or CAP_CHOWN a mount, neither of which Railway's volume
+# mounts currently offer). The substantive security property SEC-R10 cares about -- the
+# actual running JVM never executing as root -- already holds: the container starts as root,
+# fixes ownership of whatever is actually mounted there on every start (idempotent, and cheap
+# even once it holds TDLib's database), then drops to the unprivileged `tgmcp` user for the
+# JVM itself via `su` below. A container inspection or static Dockerfile scanner that only
+# checks the image's declared `USER` will still report this as root, which is a known,
+# accepted gap, not something to "fix" by removing the chown step. Real-account testing on
+# this branch caught this the first time the TDLIB adapter ever ran against a
 # real mounted volume: setTdlibParameters failed with "Permission denied" creating
 # TGMCP_TDLIB_DIR/files, since the app previously ran as `tgmcp` from container start with
 # no chance to fix a root-owned mount it has no permission to chown itself.

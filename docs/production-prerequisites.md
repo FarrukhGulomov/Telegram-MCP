@@ -208,6 +208,21 @@ Also outstanding:
   IP-keyed, proxy-boundary-dependent limiter security-audit finding SEC-10 already flagged for
   login and OAuth token issuance -- not a substitute for a real CAPTCHA or email-verification
   step if this is exposed to the open internet.
+- **Container does not run as non-root at the image level (security-audit finding SEC-R10).**
+  `Dockerfile` deliberately has no `USER tgmcp` directive: `TGMCP_TDLIB_DIR` is a runtime volume
+  mount that Railway provisions root-owned, and only a container that still has root at startup
+  can `chown` it before the application can write to it -- a declared non-root `USER` would
+  remove that ability with no way to get it back. The container starts as root, fixes ownership
+  of whatever is actually mounted there, then drops to the unprivileged `tgmcp` user (uid 10001)
+  via `su` for the JVM itself, which is the process that actually serves traffic; see the comment
+  above the Dockerfile's `ENTRYPOINT` for the full reasoning and the real "Permission denied"
+  failure that shaped it. A static Dockerfile/image scanner (or a Kubernetes `runAsNonRoot`
+  admission check relying on image metadata rather than a pod-level `securityContext`) will still
+  report this image's declared user as root. Fully resolving that needs infrastructure this
+  codebase does not control -- an init container or job that pre-chowns the volume before the
+  main container starts, or a hosting platform that lets the operator provision the mount with
+  the right ownership or grant `CAP_CHOWN` without full root -- not a Dockerfile change made
+  blind, since Railway's current volume-mount behavior does not offer either.
 
 ## 4. Safety interlocks currently in place
 
