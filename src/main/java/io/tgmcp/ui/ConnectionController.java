@@ -130,6 +130,17 @@ public class ConnectionController {
         return "redirect:/connect";
     }
 
+    @PostMapping("/connect/code/resend")
+    public String resendCode(RedirectAttributes redirectAttributes) {
+        AuthenticatedActor actor = this.currentActor.requireAdmin();
+        if (rateLimited(actor, redirectAttributes)) {
+            return "redirect:/connect";
+        }
+        LoginState state = this.connectionService.resendCode(actor);
+        redirectAttributes.addFlashAttribute("message", Messages.text(this.messages, state.message()));
+        return "redirect:/connect";
+    }
+
     @PostMapping("/connect/password")
     public String password(@RequestParam("password") String password, RedirectAttributes redirectAttributes) {
         AuthenticatedActor actor = this.currentActor.requireAdmin();

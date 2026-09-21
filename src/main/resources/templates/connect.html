@@ -71,6 +71,9 @@
              autofocus required>
       <button type="submit" th:text="#{connect.code.button}">Continue</button>
     </form>
+    <form th:action="@{/connect/code/resend}" method="post" data-guard-resubmit>
+      <button type="submit" class="link" th:text="#{connect.code.resend}">Didn't get a code? Resend it</button>
+    </form>
   </div>
 
   <div class="card step-card" th:if="${stage == 'WAIT_PASSWORD'}">

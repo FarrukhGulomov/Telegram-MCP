@@ -410,6 +410,21 @@ public class TdlibTelegramGateway implements TelegramGateway {
     }
 
     @Override
+    public LoginState resendCode(ConnectionRef ref) {
+        requireCurrentOwner(ref);
+        if (this.loginState.get().stage() != LoginStage.WAIT_CODE) {
+            return this.loginState.get();
+        }
+        this.client.request("resendAuthenticationCode", Map.of());
+        // A distinct message from plain "waiting for a code" (login.tdlib.waitCode) so the
+        // operator gets confirmation the resend actually happened, not just the same static
+        // copy they were already looking at.
+        LoginState state = LoginState.of(LoginStage.WAIT_CODE, "login.tdlib.codeResent");
+        this.loginState.set(state);
+        return state;
+    }
+
+    @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
         requireCurrentOwner(ref);
         this.client.request("checkAuthenticationPassword", Map.of("password", password));

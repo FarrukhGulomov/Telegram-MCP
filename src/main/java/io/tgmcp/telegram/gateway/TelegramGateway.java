@@ -35,6 +35,13 @@ public interface TelegramGateway {
 
     LoginState submitCode(ConnectionRef ref, String code);
 
+    /**
+     * Asks Telegram to resend the login code, for when the first one never arrived. Only
+     * meaningful while {@link LoginStage#WAIT_CODE} is the current stage; implementations are
+     * free to treat any other stage as a no-op that simply returns the current state.
+     */
+    LoginState resendCode(ConnectionRef ref);
+
     /** Two-factor authentication password step. */
     LoginState submitPassword(ConnectionRef ref, String password);
 

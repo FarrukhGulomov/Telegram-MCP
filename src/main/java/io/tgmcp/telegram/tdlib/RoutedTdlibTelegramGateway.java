@@ -100,6 +100,11 @@ public class RoutedTdlibTelegramGateway implements TelegramGateway {
     }
 
     @Override
+    public LoginState resendCode(ConnectionRef ref) {
+        return forTenant(ref.tenantId()).resendCode(ref);
+    }
+
+    @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
         return forTenant(ref.tenantId()).submitPassword(ref, password);
     }

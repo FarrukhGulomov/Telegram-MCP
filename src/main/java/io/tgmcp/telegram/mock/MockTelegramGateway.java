@@ -143,6 +143,17 @@ public class MockTelegramGateway implements TelegramGateway {
     }
 
     @Override
+    public LoginState resendCode(ConnectionRef ref) {
+        LoginState current = this.sessions.getOrDefault(ref.connectionId(), LoginState.of(LoginStage.DISCONNECTED, null));
+        if (current.stage() != LoginStage.WAIT_CODE) {
+            return current;
+        }
+        LoginState state = LoginState.of(LoginStage.WAIT_CODE, "login.mock.codeResent");
+        this.sessions.put(ref.connectionId(), state);
+        return state;
+    }
+
+    @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
         LoginState state = new LoginState(LoginStage.READY, null, 400001L, "synthetic_demo_owner",
                 "login.mock.ready");

@@ -188,6 +188,14 @@ public class TelegramConnectionService {
     }
 
     @Transactional
+    public LoginState resendCode(AuthenticatedActor actor) {
+        TelegramConnection connection = getOrCreate(actor);
+        LoginState state = this.gateway.resendCode(connection.ref());
+        persist(actor, connection, state);
+        return state;
+    }
+
+    @Transactional
     public LoginState submitPassword(AuthenticatedActor actor, String password) {
         TelegramConnection connection = getOrCreate(actor);
         LoginState state = this.gateway.submitPassword(connection.ref(), password);
