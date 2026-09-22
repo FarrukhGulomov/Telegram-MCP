@@ -34,6 +34,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -290,6 +291,31 @@ class TdlibTelegramGatewayTests {
                  "authorization_state":{"@type":"authorizationStateWaitTdlibParameters"}}""");
 
         assertThat(this.client.timesSent("setTdlibParameters")).isEqualTo(2);
+    }
+
+    /**
+     * Real production logs showed this exact race: after a disconnect, beginLogin's own
+     * proactive {@code ensureTdlibParametersSent()} call (on the HTTP request thread) can win
+     * against this same push arriving through the update-dispatch path -- already having sent
+     * parameters and moved the session on. TDLib then rejects this push's own resend attempt as
+     * unexpected (code 400), since it is no longer in a state where one is valid. That rejection
+     * must not propagate out of update dispatch: it would otherwise surface as an unhandled
+     * error for a login attempt that, from the caller's perspective on the other thread, is
+     * proceeding completely normally.
+     */
+    @Test
+    void aWaitTdlibParametersPushRejectedAsUnexpectedIsSwallowedRatherThanPropagated() {
+        this.client.enqueueError(400, "Unexpected setTdlibParameters");
+
+        assertThatCode(() -> this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateWaitTdlibParameters"}}"""))
+                .as("a benign, already-superseded resend rejection must not propagate out of update dispatch")
+                .doesNotThrowAnyException();
+
+        assertThat(this.gateway.currentState(this.ref).stage())
+                .as("the listener must still be notified of the state transition despite the swallowed error")
+                .isEqualTo(LoginStage.DISCONNECTED);
     }
 
     /**

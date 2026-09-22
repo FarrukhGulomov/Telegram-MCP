@@ -296,7 +296,23 @@ public class TdlibTelegramGateway implements TelegramGateway {
             // A fresh epoch (cold start, or right after a logout) that needs parameters sent
             // again, regardless of whether a previous epoch already sent them.
             this.tdlibParametersPending = true;
-            ensureTdlibParametersSent();
+            try {
+                ensureTdlibParametersSent();
+            }
+            catch (RuntimeException ex) {
+                // Confirmed from live production logs: this push (F11 moved its dispatch off
+                // the receive thread, through the SEC-14-bounded update queue) can be delivered
+                // late enough that beginLogin()'s own proactive ensureTdlibParametersSent() call
+                // -- reacting to the SAME logout, on the HTTP request thread, faster than this
+                // queued push arrives -- has already sent parameters and moved the live session
+                // on to setAuthenticationPhoneNumber/checkAuthenticationCode by the time this
+                // runs. TDLib then correctly rejects this now-redundant resend with "Unexpected
+                // setTdlibParameters" (code 400), which is a genuinely benign outcome here --
+                // the parameters this stale push wanted sent already were -- not a real failure,
+                // so it must not propagate and abort the update-dispatch of this login attempt.
+                log.warn("Ignoring a setTdlibParameters resend rejected as unexpected -- a faster "
+                        + "concurrent send for the same epoch already succeeded: {}", ex.getMessage());
+            }
         }
         Consumer<LoginState> listener = this.stateListener;
         if (listener != null) {
