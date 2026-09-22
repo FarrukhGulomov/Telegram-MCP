@@ -388,6 +388,13 @@ public class TdlibTelegramGateway implements TelegramGateway {
         String nextChannel = codeChannelKey(codeInfo.path("next_type"));
         Integer timeoutSeconds = nextChannel == null || !codeInfo.has("timeout")
                 ? null : codeInfo.path("timeout").asInt();
+        // No PII here (no phone number, no code) -- just which of TDLib's own named channels it
+        // is offering. Logged because the alternative, asking a real visitor to transcribe exact
+        // UI copy back to us, has repeatedly been too slow and too lossy to actually root-cause
+        // reports of "no code arrived" against what Telegram itself is telling this session.
+        log.info("TDLib code delivery: channel={} nextChannel={} timeoutSeconds={} rawType={} rawNextType={}",
+                channel, nextChannel, timeoutSeconds, codeInfo.path("type").path("@type").asString("none"),
+                codeInfo.path("next_type").path("@type").asString("none"));
         return new LoginState(LoginStage.WAIT_CODE, null, null, null, null, messageKey, timeoutSeconds, nextChannel);
     }
 
