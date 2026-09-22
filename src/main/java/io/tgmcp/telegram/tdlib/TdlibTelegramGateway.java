@@ -332,7 +332,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
             case "authorizationStateWaitPhoneNumber" ->
                     LoginState.of(LoginStage.WAIT_PHONE_NUMBER, "login.tdlib.waitPhone");
             case "authorizationStateWaitCode" ->
-                    LoginState.of(LoginStage.WAIT_CODE, "login.tdlib.waitCode");
+                    LoginState.of(LoginStage.WAIT_CODE, waitCodeMessageKey(state));
             case "authorizationStateWaitOtherDeviceConfirmation" ->
                     new LoginState(LoginStage.WAIT_QR_SCAN, state.path("link").asString(null), null, null, null,
                             "login.tdlib.waitQrScan");
@@ -345,6 +345,29 @@ public class TdlibTelegramGateway implements TelegramGateway {
                     LoginState.of(LoginStage.DISCONNECTED, "login.tdlib.initialising");
             default -> LoginState.of(LoginStage.ERROR,
                     "Unsupported Telegram authorization state: " + state.path("@type").asString("unknown"));
+        };
+    }
+
+    /**
+     * Confirmed from live production logs: a visitor who never receives a login code had no way
+     * to tell, from the previous one-size-fits-all "Telegram sent a login code" hint, that
+     * Telegram may have delivered it somewhere other than SMS -- most commonly as a message
+     * inside the Telegram app on another device already signed into this same account, which a
+     * visitor testing with a number that has no other active Telegram session (or who simply
+     * isn't checking that device) will never see arrive at all. TDLib's own {@code
+     * authorizationStateWaitCode} already carries exactly this as {@code code_info.type}; this
+     * was previously discarded entirely. Surfacing it as a distinct, channel-specific message
+     * key instead of the generic one tells the visitor where to actually look, rather than
+     * leaving them to conclude -- wrongly -- that no code was ever sent.
+     */
+    private static String waitCodeMessageKey(JsonNode state) {
+        return switch (state.path("code_info").path("type").path("@type").asString("")) {
+            case "authenticationCodeTypeSms" -> "login.tdlib.waitCode.sms";
+            case "authenticationCodeTypeTelegramMessage" -> "login.tdlib.waitCode.telegramApp";
+            case "authenticationCodeTypeCall" -> "login.tdlib.waitCode.call";
+            case "authenticationCodeTypeFlashCall" -> "login.tdlib.waitCode.flashCall";
+            case "authenticationCodeTypeMissedCall" -> "login.tdlib.waitCode.missedCall";
+            default -> "login.tdlib.waitCode";
         };
     }
 

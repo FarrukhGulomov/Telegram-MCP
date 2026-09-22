@@ -93,6 +93,40 @@ class TdlibTelegramGatewayTests {
     }
 
     @Test
+    void picksADeliveryChannelSpecificHintFromWaitCodeSCodeInfo() {
+        assertThat(this.gateway.mapAuthorizationState(json("""
+                {"@type":"authorizationStateWaitCode","code_info":
+                    {"@type":"authenticationCodeInfo","type":
+                        {"@type":"authenticationCodeTypeSms","length":5}}}""")).message())
+                .isEqualTo("login.tdlib.waitCode.sms");
+        assertThat(this.gateway.mapAuthorizationState(json("""
+                {"@type":"authorizationStateWaitCode","code_info":
+                    {"@type":"authenticationCodeInfo","type":
+                        {"@type":"authenticationCodeTypeTelegramMessage","length":5}}}""")).message())
+                .isEqualTo("login.tdlib.waitCode.telegramApp");
+        assertThat(this.gateway.mapAuthorizationState(json("""
+                {"@type":"authorizationStateWaitCode","code_info":
+                    {"@type":"authenticationCodeInfo","type":
+                        {"@type":"authenticationCodeTypeCall","length":5}}}""")).message())
+                .isEqualTo("login.tdlib.waitCode.call");
+        assertThat(this.gateway.mapAuthorizationState(json("""
+                {"@type":"authorizationStateWaitCode","code_info":
+                    {"@type":"authenticationCodeInfo","type":
+                        {"@type":"authenticationCodeTypeFlashCall","pattern":"+1***"}}}""")).message())
+                .isEqualTo("login.tdlib.waitCode.flashCall");
+        assertThat(this.gateway.mapAuthorizationState(json("""
+                {"@type":"authorizationStateWaitCode","code_info":
+                    {"@type":"authenticationCodeInfo","type":
+                        {"@type":"authenticationCodeTypeMissedCall","phone_number_prefix":"123","length":2}}}"""))
+                .message())
+                .isEqualTo("login.tdlib.waitCode.missedCall");
+        assertThat(this.gateway.mapAuthorizationState(json("""
+                {"@type":"authorizationStateWaitCode"}""")).message())
+                .as("no code_info at all (or an unrecognised type) falls back to the generic hint")
+                .isEqualTo("login.tdlib.waitCode");
+    }
+
+    @Test
     void exposesTheQrLoginLinkFromWaitOtherDeviceConfirmation() {
         var state = this.gateway.mapAuthorizationState(json("""
                 {"@type":"authorizationStateWaitOtherDeviceConfirmation","link":"tg://login?token=abc"}"""));
