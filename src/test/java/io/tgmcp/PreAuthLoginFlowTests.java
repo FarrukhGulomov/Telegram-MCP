@@ -268,6 +268,44 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
     }
 
     /**
+     * Regression for a real report: a visitor who navigated away before ever submitting a phone
+     * number or QR choice (leaving the pending login stuck at WAIT_PHONE_NUMBER), then came back
+     * to /login later in the same browser session -- in the reported case, via an OAuth client's
+     * authorize redirect reusing that same session -- had no way back to the phone/QR chooser at
+     * all: that form belongs only to the PHONE_ENTRY/DISCONNECTED branch, and WAIT_PHONE_NUMBER
+     * previously rendered nothing but the hint (see the test above). Asserts a cancel control is
+     * now present and that using it actually clears the stuck pending login, restoring the
+     * ordinary chooser on the next visit.
+     */
+    @Test
+    void aStuckWaitPhoneNumberScreenCanBeCancelledBackToTheChooser() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        LoginState stillWaitingForPhoneNumber = LoginState.of(LoginStage.WAIT_PHONE_NUMBER, "login.tdlib.waitPhone");
+        Mockito.doReturn(stillWaitingForPhoneNumber).when(this.gateway)
+                .beginLogin(ArgumentMatchers.any(), ArgumentMatchers.any(), ArgumentMatchers.any());
+
+        String phoneNumber = "+19995550066";
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", phoneNumber))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+        Mockito.doReturn(stillWaitingForPhoneNumber).when(this.gateway)
+                .currentState(ArgumentMatchers.any());
+
+        this.mockMvc.perform(get("/login").session(session))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("/login/cancel")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Cancel and start over")));
+
+        this.mockMvc.perform(post("/login/cancel").session(session).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+
+        this.mockMvc.perform(get("/login").session(session))
+                .andExpect(content().string(
+                        org.hamcrest.Matchers.containsString("data-login-stage=\"PHONE_ENTRY\"")));
+    }
+
+    /**
      * Regression for a real follow-up report: a visitor whose code was sent to a channel they
      * cannot check (the Telegram app on a device they don't have) had no way to learn Telegram
      * itself will use a different, named channel once a resend is actually allowed -- {@code

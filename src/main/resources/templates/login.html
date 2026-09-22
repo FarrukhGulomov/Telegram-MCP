@@ -73,6 +73,17 @@
     -->
     <div class="card step-card" th:if="${stage == 'WAIT_PHONE_NUMBER'}">
       <p class="hint" th:text="${stateHint} ?: #{login.tdlib.waitPhone}">Telegram is waiting for a phone number or QR login.</p>
+      <!--
+        Confirmed from a real report: unlike every other in-progress stage below, this branch
+        originally had no way out. A genuinely stale pending login left in this stage (the
+        visitor navigated away before ever submitting a phone number or QR choice, then came
+        back to /login later -- e.g. via an OAuth client's authorize redirect reusing the same
+        browser session) trapped them here permanently: nothing on this page could get back to
+        the phone/QR chooser, since that form belongs to PHONE_ENTRY/DISCONNECTED only.
+      -->
+      <form th:action="@{/login/cancel}" method="post" data-guard-resubmit>
+        <button type="submit" class="link" th:text="#{connect.step3.cancel}">Cancel and start over</button>
+      </form>
     </div>
 
     <div class="card step-card" th:if="${stage == 'WAIT_QR_SCAN'}">
