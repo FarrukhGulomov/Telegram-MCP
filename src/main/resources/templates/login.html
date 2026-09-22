@@ -103,6 +103,7 @@
     <div class="card step-card" th:if="${stage == 'WAIT_CODE'}">
       <h2 th:text="#{connect.step2.title}">Enter the code</h2>
       <p class="muted" th:text="${stateHint} ?: #{connect.step2.hint}">Telegram just sent it to you.</p>
+      <p class="hint" th:if="${resendChannelHint}" th:text="${resendChannelHint}"></p>
       <form th:action="@{/login/code}" method="post" data-guard-resubmit>
         <label for="code" th:text="#{connect.code.label}">Code</label>
         <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code"

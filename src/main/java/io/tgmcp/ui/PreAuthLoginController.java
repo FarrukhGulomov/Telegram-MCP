@@ -63,6 +63,17 @@ public class PreAuthLoginController {
         if (state != null && state.qrLoginLink() != null) {
             model.addAttribute("qrCodeImage", this.qrCodeRenderer.toDataUri(state.qrLoginLink()));
         }
+        if (state != null && state.nextCodeChannelKey() != null) {
+            // Confirmed from a real follow-up report: a visitor stuck on a channel they cannot
+            // check (e.g. the Telegram app on a device they don't have) had no way to learn that
+            // Telegram itself -- not this app -- will switch to a different, named channel once
+            // resendAuthenticationCode is allowed again. Telegram refuses that call outright
+            // ("Authentication code can't be resend") until code_info.timeout has elapsed, so
+            // this is the exact wait this visitor needs before "Resend" will actually help.
+            String channelName = Messages.text(this.messages, "channel." + state.nextCodeChannelKey());
+            model.addAttribute("resendChannelHint", Messages.text(this.messages,
+                    "login.tdlib.nextCodeChannelHint", state.resendAvailableInSeconds(), channelName));
+        }
         return "login";
     }
 

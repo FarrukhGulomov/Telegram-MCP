@@ -126,6 +126,34 @@ class TdlibTelegramGatewayTests {
                 .isEqualTo("login.tdlib.waitCode");
     }
 
+    /**
+     * Regression for a real follow-up report: knowing the code was sent to the wrong channel is
+     * not actionable on its own -- the visitor also needs to know that resending after {@code
+     * code_info.timeout} switches to a genuinely different channel ({@code code_info.next_type}),
+     * since Telegram (not this app) refuses an earlier resend outright. Both were previously
+     * discarded exactly like {@code code_info.type} was before the delivery-channel fix.
+     */
+    @Test
+    void exposesWhenAndToWhatChannelAResendWillSwitch() {
+        LoginState withNextType = this.gateway.mapAuthorizationState(json("""
+                {"@type":"authorizationStateWaitCode","code_info":
+                    {"@type":"authenticationCodeInfo",
+                     "type":{"@type":"authenticationCodeTypeTelegramMessage","length":5},
+                     "next_type":{"@type":"authenticationCodeTypeSms","length":5},
+                     "timeout":62}}"""));
+        assertThat(withNextType.resendAvailableInSeconds()).isEqualTo(62);
+        assertThat(withNextType.nextCodeChannelKey()).isEqualTo("sms");
+
+        LoginState withoutNextType = this.gateway.mapAuthorizationState(json("""
+                {"@type":"authorizationStateWaitCode","code_info":
+                    {"@type":"authenticationCodeInfo",
+                     "type":{"@type":"authenticationCodeTypeSms","length":5}}}"""));
+        assertThat(withoutNextType.resendAvailableInSeconds())
+                .as("no next_type at all means there is nothing actionable to tell the visitor to wait for")
+                .isNull();
+        assertThat(withoutNextType.nextCodeChannelKey()).isNull();
+    }
+
     @Test
     void exposesTheQrLoginLinkFromWaitOtherDeviceConfirmation() {
         var state = this.gateway.mapAuthorizationState(json("""

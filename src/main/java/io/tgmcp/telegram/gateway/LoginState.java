@@ -17,10 +17,12 @@ public record LoginState(LoginStage stage,
                          Long tgUserId,
                          String tgUsername,
                          String tgPhoneNumber,
-                         String message) {
+                         String message,
+                         Integer resendAvailableInSeconds,
+                         String nextCodeChannelKey) {
 
     public static LoginState of(LoginStage stage, String message) {
-        return new LoginState(stage, null, null, null, null, message);
+        return new LoginState(stage, null, null, null, null, message, null, null);
     }
 
     public boolean ready() {

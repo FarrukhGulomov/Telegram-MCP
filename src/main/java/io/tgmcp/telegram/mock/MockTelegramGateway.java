@@ -166,7 +166,7 @@ public class MockTelegramGateway implements TelegramGateway {
                 phoneNumber != null ? phoneNumber : "+10000000000");
         LoginState state = (method == LoginMethod.QR_CODE)
                 ? new LoginState(LoginStage.WAIT_QR_SCAN, "tg://login?token=SYNTHETIC-DEMO-TOKEN", null, null, null,
-                        "login.mock.qrLogin")
+                        "login.mock.qrLogin", null, null)
                 : LoginState.of(LoginStage.WAIT_CODE, "login.mock.waitCode");
         this.sessions.put(ref.connectionId(), state);
         return state;
@@ -200,7 +200,7 @@ public class MockTelegramGateway implements TelegramGateway {
         String tgUsername = "synthetic_" + ref.connectionId().toString().replace("-", "").substring(0, 12);
         String phoneNumber = this.pendingPhoneNumbers.getOrDefault(ref.connectionId(), "+10000000000");
         LoginState state = new LoginState(LoginStage.READY, null, tgUserId, tgUsername, phoneNumber,
-                "login.mock.ready");
+                "login.mock.ready", null, null);
         this.sessions.put(ref.connectionId(), state);
         return state;
     }

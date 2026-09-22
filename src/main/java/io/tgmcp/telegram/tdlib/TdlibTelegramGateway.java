@@ -330,7 +330,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
                 phoneNumber = "+" + phoneNumber;
             }
             return new LoginState(state.stage(), state.qrLoginLink(), tgUserId, username, phoneNumber,
-                    state.message());
+                    state.message(), state.resendAvailableInSeconds(), state.nextCodeChannelKey());
         }
         catch (RuntimeException ex) {
             log.warn("Reached authorizationStateReady but could not fetch account identity via getMe: {}",
@@ -343,11 +343,10 @@ public class TdlibTelegramGateway implements TelegramGateway {
         return switch (state.path("@type").asString("")) {
             case "authorizationStateWaitPhoneNumber" ->
                     LoginState.of(LoginStage.WAIT_PHONE_NUMBER, "login.tdlib.waitPhone");
-            case "authorizationStateWaitCode" ->
-                    LoginState.of(LoginStage.WAIT_CODE, waitCodeMessageKey(state));
+            case "authorizationStateWaitCode" -> waitCodeLoginState(state);
             case "authorizationStateWaitOtherDeviceConfirmation" ->
                     new LoginState(LoginStage.WAIT_QR_SCAN, state.path("link").asString(null), null, null, null,
-                            "login.tdlib.waitQrScan");
+                            "login.tdlib.waitQrScan", null, null);
             case "authorizationStateWaitPassword" ->
                     LoginState.of(LoginStage.WAIT_PASSWORD, "login.tdlib.waitPassword");
             case "authorizationStateReady" -> LoginState.of(LoginStage.READY, "login.tdlib.ready");
@@ -371,15 +370,35 @@ public class TdlibTelegramGateway implements TelegramGateway {
      * was previously discarded entirely. Surfacing it as a distinct, channel-specific message
      * key instead of the generic one tells the visitor where to actually look, rather than
      * leaving them to conclude -- wrongly -- that no code was ever sent.
+     *
+     * <p>Confirmed from a real follow-up report: knowing the wrong channel was used is not
+     * enough on its own -- a visitor stuck on {@code authenticationCodeTypeTelegramMessage} with
+     * no other signed-in device has no way to get Telegram to try a different one, since Telegram
+     * itself (not this app) decides the very first channel, and {@code resendAuthenticationCode}
+     * is refused ("Authentication code can't be resend") until {@code code_info.timeout} has
+     * elapsed. TDLib already names what will happen after that wait -- {@code code_info.next_type}
+     * -- which was, like {@code type} before it, previously discarded. Surfacing both turns "code
+     * never arrives, no idea why or what to do" into an actionable instruction: wait N seconds,
+     * then resend, and it will come by a named, different channel.
      */
-    private static String waitCodeMessageKey(JsonNode state) {
-        return switch (state.path("code_info").path("type").path("@type").asString("")) {
-            case "authenticationCodeTypeSms" -> "login.tdlib.waitCode.sms";
-            case "authenticationCodeTypeTelegramMessage" -> "login.tdlib.waitCode.telegramApp";
-            case "authenticationCodeTypeCall" -> "login.tdlib.waitCode.call";
-            case "authenticationCodeTypeFlashCall" -> "login.tdlib.waitCode.flashCall";
-            case "authenticationCodeTypeMissedCall" -> "login.tdlib.waitCode.missedCall";
-            default -> "login.tdlib.waitCode";
+    private static LoginState waitCodeLoginState(JsonNode state) {
+        JsonNode codeInfo = state.path("code_info");
+        String channel = codeChannelKey(codeInfo.path("type"));
+        String messageKey = channel == null ? "login.tdlib.waitCode" : "login.tdlib.waitCode." + channel;
+        String nextChannel = codeChannelKey(codeInfo.path("next_type"));
+        Integer timeoutSeconds = nextChannel == null || !codeInfo.has("timeout")
+                ? null : codeInfo.path("timeout").asInt();
+        return new LoginState(LoginStage.WAIT_CODE, null, null, null, null, messageKey, timeoutSeconds, nextChannel);
+    }
+
+    private static String codeChannelKey(JsonNode authenticationCodeType) {
+        return switch (authenticationCodeType.path("@type").asString("")) {
+            case "authenticationCodeTypeSms" -> "sms";
+            case "authenticationCodeTypeTelegramMessage" -> "telegramApp";
+            case "authenticationCodeTypeCall" -> "call";
+            case "authenticationCodeTypeFlashCall" -> "flashCall";
+            case "authenticationCodeTypeMissedCall" -> "missedCall";
+            default -> null;
         };
     }
 

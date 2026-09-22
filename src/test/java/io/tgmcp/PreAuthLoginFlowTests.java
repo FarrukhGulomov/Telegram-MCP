@@ -171,7 +171,7 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                 .isPresent();
 
         deliverToListener.accept(new LoginState(LoginStage.READY, null, 777L, "real_scanner", phoneNumber,
-                "login.tdlib.ready"));
+                "login.tdlib.ready", null, null));
         // The mock's own in-memory session map still says WAIT_QR_SCAN (nothing ever drove it
         // through submitCode/submitPassword) -- exactly like a real TDLib ref no one has
         // reclaimed since a restart, this makes status() fall back to the persisted stage the
@@ -211,7 +211,7 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
         MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
 
         deliverToListener.accept(new LoginState(LoginStage.READY, null, 781L, "real_scanner", phoneNumber,
-                "login.tdlib.ready"));
+                "login.tdlib.ready", null, null));
         stubCurrentStateToThrowNotCurrentOwner();
 
         this.mockMvc.perform(get("/login").session(session))
@@ -267,6 +267,39 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                         org.hamcrest.Matchers.containsString("Telegram is waiting for a phone number")));
     }
 
+    /**
+     * Regression for a real follow-up report: a visitor whose code was sent to a channel they
+     * cannot check (the Telegram app on a device they don't have) had no way to learn Telegram
+     * itself will use a different, named channel once a resend is actually allowed -- {@code
+     * code_info.next_type} and {@code timeout} were discarded exactly like {@code type} was
+     * before the delivery-channel fix. Asserts the wait-code screen now spells out both the wait
+     * and the channel a resend will switch to.
+     */
+    @Test
+    void waitCodeScreenExplainsWhenAndToWhatChannelAResendWillSwitch() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        LoginState waitingViaTelegramAppWithSmsNext = new LoginState(LoginStage.WAIT_CODE, null, null, null, null,
+                "login.tdlib.waitCode.telegramApp", 62, "sms");
+        Mockito.doReturn(waitingViaTelegramAppWithSmsNext).when(this.gateway)
+                .beginLogin(ArgumentMatchers.any(), ArgumentMatchers.any(), ArgumentMatchers.any());
+
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", "+19995550044"))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        // The live gateway is asked again on the GET below, same as every other test here that
+        // reloads /login rather than relying on beginLogin's own synchronous response.
+        Mockito.doReturn(waitingViaTelegramAppWithSmsNext).when(this.gateway)
+                .currentState(ArgumentMatchers.any());
+
+        this.mockMvc.perform(get("/login").session(session))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("62")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("SMS")));
+    }
+
     @Test
     void aBrandNewSignupWhoseConfirmedIdentityAlreadyBelongsToAnotherAccountRollsBack() throws Exception {
         Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
@@ -285,7 +318,7 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
 
         // The scanning device turns out to already be a different, existing account.
         deliverToListener.accept(new LoginState(LoginStage.READY, null, existingTelegramUserId, "collides",
-                newPhoneNumber, "login.tdlib.ready"));
+                newPhoneNumber, "login.tdlib.ready", null, null));
         stubCurrentStateToThrowNotCurrentOwner();
 
         this.mockMvc.perform(post("/login/finish").with(csrf()).session(session)
@@ -323,7 +356,7 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
         MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
 
         deliverToListener.accept(new LoginState(LoginStage.READY, null, 778L, "real_scanner", phoneNumber,
-                "login.tdlib.ready"));
+                "login.tdlib.ready", null, null));
         stubCurrentStateToThrowNotCurrentOwner();
 
         this.mockMvc.perform(post("/login/finish").with(csrf()).session(session)
@@ -348,7 +381,7 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
         MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
 
         deliverToListener.accept(new LoginState(LoginStage.READY, null, 779L, "real_scanner", phoneNumber,
-                "login.tdlib.ready"));
+                "login.tdlib.ready", null, null));
         stubCurrentStateToThrowNotCurrentOwner();
         String nonce = finishNonceFor(session);
 
