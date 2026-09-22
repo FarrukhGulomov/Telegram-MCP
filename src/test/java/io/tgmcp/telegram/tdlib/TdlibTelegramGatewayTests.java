@@ -410,6 +410,43 @@ class TdlibTelegramGatewayTests {
         assertThat(this.client.timesSent("requestQrCodeAuthentication")).isEqualTo(2);
     }
 
+    /**
+     * Regression for a real production report: a returning account's ordinary sign-in (which
+     * always disconnects any existing session first -- see {@code
+     * PreAuthLoginService#begin}) intermittently failed with "Call to setAuthenticationPhoneNumber
+     * unexpected" / "Unexpected setTdlibParameters", with no error shown to the visitor -- it
+     * simply never received a fresh code. Root cause: {@link TdlibTelegramGateway#disconnect}
+     * used to return as soon as the {@code logOut} request's own "Ok" response came back, well
+     * before TDLib's real, asynchronous teardown (LoggingOut -> Closing -> Closed) actually
+     * finished -- so the very next call in the same request (an ordinary {@code beginLogin})
+     * could reach this client while it was still mid-teardown, and TDLib correctly rejected
+     * whichever request landed in that window as "unexpected". Proves {@code disconnect} now
+     * genuinely blocks until {@code authorizationStateClosed} is observed, using a real delay
+     * (a background thread pushing it) rather than the other tests' synchronous auto-push, so a
+     * regression back to "returns immediately" would actually be caught.
+     */
+    @Test
+    void disconnectBlocksUntilTheRealAuthorizationStateClosedArrivesBeforeReturning() throws Exception {
+        this.client.disableAutoCloseOnLogout();
+        this.client.enqueue("{\"@type\":\"ok\"}");
+
+        java.util.concurrent.CompletableFuture<Void> disconnectCall =
+                java.util.concurrent.CompletableFuture.runAsync(() -> this.gateway.disconnect(this.ref));
+
+        // Give disconnect() every chance to have issued logOut and started waiting on the latch
+        // before asserting it has NOT returned yet.
+        Thread.sleep(300);
+        assertThat(disconnectCall.isDone())
+                .as("disconnect must still be waiting for the real authorizationStateClosed, not have "
+                        + "returned as soon as the logOut request's own response came back")
+                .isFalse();
+
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState","authorization_state":{"@type":"authorizationStateClosed"}}""");
+
+        disconnectCall.get(2, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
     @Test
     void mapsChatTypes() {
         assertThat(this.gateway.toRemoteChat(json("""
@@ -1150,6 +1187,17 @@ class TdlibTelegramGatewayTests {
         private final List<String> sentMethods = new ArrayList<>();
         private final java.util.Map<String, Map<String, Object>> lastParamsByMethod = new java.util.HashMap<>();
         private Consumer<JsonNode> updateListener;
+        private boolean autoCloseOnLogout = true;
+
+        /**
+         * Opts out of the default auto-fired {@code authorizationStateClosed} push on {@code
+         * logOut} (see {@link #request}), for the one test that needs to control exactly when
+         * that push arrives to prove {@code TdlibTelegramGateway#disconnect} actually blocks
+         * until it does, rather than returning early.
+         */
+        void disableAutoCloseOnLogout() {
+            this.autoCloseOnLogout = false;
+        }
 
         private ScriptedTdlibClient(ObjectMapper mapper) {
             this.mapper = mapper;
@@ -1188,6 +1236,15 @@ class TdlibTelegramGatewayTests {
             JsonNode node = this.mapper.readTree(response);
             if (TdlibErrors.isError(node)) {
                 throw TdlibErrors.translate(node);
+            }
+            if ("logOut".equals(method) && this.updateListener != null && this.autoCloseOnLogout) {
+                // Mirrors real TDLib's eventual authorizationStateClosed push closely enough for
+                // TdlibTelegramGateway#disconnect's own wait-for-it logic to be exercised
+                // deterministically, without reproducing every intermediate LoggingOut/Closing
+                // step a real client also emits before reaching it.
+                this.updateListener.accept(this.mapper.readTree("""
+                        {"@type":"updateAuthorizationState",
+                         "authorization_state":{"@type":"authorizationStateClosed"}}"""));
             }
             return node;
         }

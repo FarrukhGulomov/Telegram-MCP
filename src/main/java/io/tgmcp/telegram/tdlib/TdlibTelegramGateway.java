@@ -14,6 +14,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -259,6 +261,16 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // than TDLib's, replaces it: one line per real transition, never per-file/per-reaction
         // engine noise.
         log.info("TDLib authorization state changed to {}", state.path("@type").asString("unknown"));
+        if ("authorizationStateClosed".equals(state.path("@type").asString(""))) {
+            // Confirmed from live production logs: releases whichever disconnect() call (if any)
+            // is currently waiting on this exact signal -- see its own javadoc for why that wait
+            // exists. A stray countDown() with nobody waiting (a Closed transition TDLib reached
+            // on its own, e.g. a remote logout, never through our own disconnect()) is harmless.
+            CountDownLatch signal = this.closedSignal;
+            if (signal != null) {
+                signal.countDown();
+            }
+        }
         LoginState mapped = mapAuthorizationState(state);
         // Security-audit finding F13: authorizationStateReady on its own carries no account
         // identity. Fetching it here -- rather than leaving tgUserId/tgUsername null until
@@ -493,10 +505,40 @@ public class TdlibTelegramGateway implements TelegramGateway {
         return this.loginState.get();
     }
 
+    /**
+     * Bounds how long {@link #disconnect} will block waiting for the real teardown to finish
+     * (see that method's own doc) before giving up and returning anyway -- real production
+     * logout round trips observed so far finish in well under two seconds, so this is a generous
+     * safety margin, not a tuned deadline.
+     */
+    private static final Duration DISCONNECT_TEARDOWN_TIMEOUT = Duration.ofSeconds(5);
+
+    /**
+     * Confirmed from live production logs (the exact "Call to setAuthenticationPhoneNumber
+     * unexpected" / "Unexpected setTdlibParameters" failures reported against
+     * telegram-mcp-tdlib-test): completed by {@link #handleAuthorizationStateUpdate} the moment
+     * it observes {@code authorizationStateClosed} -- see {@link #disconnect}.
+     */
+    private volatile CountDownLatch closedSignal;
+
     @Override
     public void disconnect(ConnectionRef ref) {
         requireCurrentOwner(ref);
-        // logOut ends the Telegram-side session for this client; close only detaches locally.
+        // Confirmed from live production logs: logOut only *starts* tearing this client down --
+        // TDLib announces the real teardown asynchronously as authorizationStateLoggingOut,
+        // authorizationStateClosing, then authorizationStateClosed, well after this request's own
+        // "Ok" response returns. Returning immediately after that response (as this method used
+        // to) let PreAuthLoginService.prepareForFreshLogin's very next call -- an ordinary
+        // returning-account beginLogin -- reach this same client while it was still mid-teardown.
+        // TDLib correctly rejected whichever of setTdlibParameters or setAuthenticationPhoneNumber
+        // landed in that window as "unexpected", since the client was not actually in a state
+        // that accepts either yet -- surfacing to the visitor as a login that appeared to work
+        // (no error) but silently never sent a fresh code, indistinguishable from Telegram simply
+        // not delivering one. Waiting here for the real, unambiguous completion signal
+        // (authorizationStateClosed) closes that window: by the time this method returns, no
+        // caller can land on a client that is still tearing down.
+        CountDownLatch latch = new CountDownLatch(1);
+        this.closedSignal = latch;
         this.client.request("logOut", Map.of());
         this.loginState.set(LoginState.of(LoginStage.DISCONNECTED, "login.tdlib.signedOut"));
         // Security-audit finding SEC-01: releases the claim so a future legitimate owner's
@@ -507,17 +549,21 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // whatever account was just signed out of; a future login (the same account signing
         // back in, or a different one) must not have it silently applied on its behalf.
         this.pendingRevisions.clear();
-        // Confirmed from live production logs: logOut does not synchronously push
-        // authorizationStateWaitTdlibParameters -- TDLib only announces that state once
-        // something (the next request) actually prompts it to, well after this method
-        // returns. ensureTdlibParametersSent's own guard was still seeing the *previous*
-        // epoch's tdlibParametersPending=false at that point, so a login attempted right after
-        // this disconnect skipped resending parameters and reached TDLib as
-        // requestQrCodeAuthentication/setAuthenticationPhoneNumber, which TDLib correctly
-        // rejected with "Initialization parameters are needed". Setting this here, at the one
-        // moment this class can be certain a fresh epoch has begun, closes that gap without
-        // waiting for a push that may arrive too late.
+        // Belt-and-braces alongside the wait above: if the wait below times out (Closed never
+        // arrives for some reason), a login attempted right after this disconnect must still
+        // resend parameters rather than skip straight to requestQrCodeAuthentication/
+        // setAuthenticationPhoneNumber, which TDLib would then reject with "Initialization
+        // parameters are needed".
         this.tdlibParametersPending = true;
+        try {
+            boolean closed = latch.await(DISCONNECT_TEARDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            if (!closed) {
+                log.warn("Timed out waiting for authorizationStateClosed after logOut; proceeding anyway");
+            }
+        }
+        catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     // --- read-only data ---------------------------------------------------------------
