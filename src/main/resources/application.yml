@@ -181,6 +181,13 @@ tgmcp:
   forwarded-headers:
     trusted-hosts: ${TGMCP_TRUSTED_FORWARDED_HOSTS:}
 
+  # Cross-tenant /platform-admin overview: empty by default, so nobody can reach it until an
+  # operator explicitly lists at least one phone number here. A fixed, infra-level allowlist
+  # rather than a database-stored role -- no tenant-scoped OWNER/ADMIN can ever grant it to
+  # themselves from inside the application. Comma-separated for more than one operator.
+  platform-admin:
+    phone-numbers: ${TGMCP_PLATFORM_ADMIN_PHONE_NUMBERS:}
+
   oauth:
     issuer: ${TGMCP_OAUTH_ISSUER:http://localhost:8080}
     public-base-url: ${TGMCP_PUBLIC_BASE_URL:http://localhost:8080}
