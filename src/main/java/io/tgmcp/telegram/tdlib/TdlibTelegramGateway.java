@@ -296,23 +296,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
             // A fresh epoch (cold start, or right after a logout) that needs parameters sent
             // again, regardless of whether a previous epoch already sent them.
             this.tdlibParametersPending = true;
-            try {
-                ensureTdlibParametersSent();
-            }
-            catch (RuntimeException ex) {
-                // Confirmed from live production logs: this push (F11 moved its dispatch off
-                // the receive thread, through the SEC-14-bounded update queue) can be delivered
-                // late enough that beginLogin()'s own proactive ensureTdlibParametersSent() call
-                // -- reacting to the SAME logout, on the HTTP request thread, faster than this
-                // queued push arrives -- has already sent parameters and moved the live session
-                // on to setAuthenticationPhoneNumber/checkAuthenticationCode by the time this
-                // runs. TDLib then correctly rejects this now-redundant resend with "Unexpected
-                // setTdlibParameters" (code 400), which is a genuinely benign outcome here --
-                // the parameters this stale push wanted sent already were -- not a real failure,
-                // so it must not propagate and abort the update-dispatch of this login attempt.
-                log.warn("Ignoring a setTdlibParameters resend rejected as unexpected -- a faster "
-                        + "concurrent send for the same epoch already succeeded: {}", ex.getMessage());
-            }
+            ensureTdlibParametersSent();
         }
         Consumer<LoginState> listener = this.stateListener;
         if (listener != null) {
@@ -407,7 +391,25 @@ public class TdlibTelegramGateway implements TelegramGateway {
         params.put("system_language_code", "en");
         params.put("device_model", "telegram-consent-mcp");
         params.put("application_version", "0.1.0");
-        this.client.request("setTdlibParameters", params);
+        try {
+            this.client.request("setTdlibParameters", params);
+        }
+        catch (TelegramTransientException ex) {
+            // Confirmed from live production logs: this call can lose a race against another
+            // caller of ensureTdlibParametersSent() for the very same client -- disconnect()
+            // marks a fresh epoch proactively, anticipating a later authorizationStateWait
+            // TdlibParameters push that a concurrent beginLogin() (HTTP thread) can also react
+            // to and send first. TDLib then rejects this now-redundant send as "Unexpected
+            // setTdlibParameters" (TdlibErrors' PARAMETERS_ALREADY_SET_MESSAGE) -- meaning the
+            // client already has valid parameters, exactly what this method set out to ensure.
+            // That is success, not failure, for every caller (beginLogin, onStateChange, and the
+            // authorizationStateWaitTdlibParameters push handler alike), so it must not
+            // propagate -- unlike any other TelegramTransientException, which a caller may
+            // reasonably want to retry or report.
+            if (!TdlibErrors.PARAMETERS_ALREADY_SET_MESSAGE.equals(ex.getMessage())) {
+                throw ex;
+            }
+        }
     }
 
     @Override

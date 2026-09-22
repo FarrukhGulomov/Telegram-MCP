@@ -22,6 +22,17 @@ public final class TdlibErrors {
     private static final Pattern FLOOD_WAIT = Pattern.compile("FLOOD_WAIT_(\\d+)");
     private static final Pattern RETRY_AFTER = Pattern.compile("retry after (\\d+)", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * Confirmed from live production logs: {@code setTdlibParameters} can lose a race against
+     * a faster concurrent send for the very same client (see {@code
+     * TdlibTelegramGateway#ensureTdlibParametersSent}) and come back rejected with exactly this
+     * message -- meaning the client already has valid parameters, never that anything is wrong.
+     * A distinct, checkable message (rather than falling into the generic code-400 case below)
+     * lets {@code TdlibTelegramGateway#sendTdlibParameters} recognise and swallow exactly this
+     * outcome, from every caller, instead of surfacing it as a real failure.
+     */
+    public static final String PARAMETERS_ALREADY_SET_MESSAGE = "TDLib already has valid parameters (code 400)";
+
     private TdlibErrors() {
     }
 
@@ -49,6 +60,9 @@ public final class TdlibErrors {
                 || message.contains("USER_BANNED")) {
             return new TelegramPermissionException("Chat is not readable by the connected account (code "
                     + code + ")");
+        }
+        if (code == 400 && "Unexpected setTdlibParameters".equals(message)) {
+            return new TelegramTransientException(PARAMETERS_ALREADY_SET_MESSAGE);
         }
         if (code == 400 && "Chat not found".equals(message)) {
             // Real-account testing found this exact message coming back from getChat and

@@ -319,6 +319,32 @@ class TdlibTelegramGatewayTests {
     }
 
     /**
+     * The user-visible half of the same race (the other half is the push-handler case just
+     * above): after a disconnect marks a fresh epoch, beginLogin's own proactive resend can
+     * ITSELF be the one TDLib rejects as unexpected -- e.g. if the delayed
+     * authorizationStateWaitTdlibParameters push this epoch is still waiting for turns out
+     * never to arrive at all before this call (a version/timing quirk, not something this class
+     * can predict), so parameters were in fact already valid the whole time. Before this fix
+     * that rejection propagated straight out of beginLogin(), uncaught, surfacing to a real
+     * visitor as "Telegram could not process that just now" on the very first screen -- exactly
+     * a real production report. The login attempt must proceed regardless.
+     */
+    @Test
+    void beginLoginSwallowsItsOwnUnexpectedSetTdlibParametersRejectionAndStillProceeds() {
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.gateway.disconnect(this.ref);
+
+        this.client.enqueueError(400, "Unexpected setTdlibParameters");
+        this.client.enqueue("{\"@type\":\"ok\"}");
+
+        assertThatCode(() -> this.gateway.beginLogin(this.ref, io.tgmcp.telegram.gateway.LoginMethod.QR_CODE, null))
+                .as("a benign, already-superseded parameters rejection must not abort the login attempt")
+                .doesNotThrowAnyException();
+
+        assertThat(this.client.timesSent("requestQrCodeAuthentication")).isEqualTo(1);
+    }
+
+    /**
      * Confirmed from live production logs: a real disconnect followed shortly by a reconnect
      * attempt still failed with "Initialization parameters are needed" even after the earlier
      * fix, because {@code logOut} does not synchronously push {@code
