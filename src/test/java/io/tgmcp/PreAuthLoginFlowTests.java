@@ -38,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.flash;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -183,6 +184,47 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                 .andExpect(redirectedUrl("/"));
 
         assertThat(this.users.findByPhoneNumber(phoneNumber).orElseThrow().telegramUserId()).isEqualTo(777L);
+    }
+
+    /**
+     * Regression: a real user hit a genuinely blank {@code /login} page after a QR scan reached
+     * READY on Telegram's side, before the client-side poll in login.js had run {@code
+     * /login/finish}. login.html has no visible branch for {@code stage == 'READY'} by design
+     * (the normal path never server-renders it -- login.js finishes the sign-in itself via
+     * background polling, without a full page load), but a page load can still land here
+     * directly: this browser's session still holds the pending login, unconsumed, exactly as it
+     * would right after a QR scan confirms and before the next poll tick. Asserts the page shows
+     * a real "finishing" message instead of nothing, and still carries {@code
+     * data-login-stage="READY"} so login.js (which now treats READY as a stage to resume polling
+     * from, not one to ignore) picks the sign-in back up rather than leaving it to time out.
+     */
+    @Test
+    void reloadingLoginWhileReadyButNotYetFinishedShowsAFinishingMessageRatherThanNothing() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+
+        String phoneNumber = "+19995550055";
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.QR_CODE.name())
+                        .param("phoneNumber", phoneNumber))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, 781L, "real_scanner", phoneNumber,
+                "login.tdlib.ready"));
+        stubCurrentStateToThrowNotCurrentOwner();
+
+        this.mockMvc.perform(get("/login").session(session))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("data-login-stage=\"READY\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Finishing sign-in")));
+
+        // The pending login is still intact (untouched by the reload above), so the same finish
+        // round trip login.js would now run on its own still completes it correctly.
+        this.mockMvc.perform(post("/login/finish").with(csrf()).session(session)
+                        .param("nonce", finishNonceFor(session)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/"));
     }
 
     @Test

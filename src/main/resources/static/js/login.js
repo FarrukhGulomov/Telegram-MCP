@@ -2,7 +2,13 @@
 // out -- once it does, /login/finish reads the now-READY connection back and signs in, exactly
 // the way /login/code and /login/password already do synchronously for their own methods.
 (function () {
-    const POLLING_STAGES = ['WAIT_QR_SCAN', 'WAIT_CODE', 'WAIT_PASSWORD'];
+    // READY is included here too: a page load can land on this stage directly (not just reach
+    // it mid-poll) when a pending login already completed on Telegram's side but this browser's
+    // authenticated session was lost before /login/finish ever ran -- e.g. a server restart
+    // between reaching READY and the hidden form submitting. Without READY in this list the
+    // page below renders nothing for that stage and this script, seeing it isn't a stage it
+    // polls, does nothing either: a login that will never finish itself.
+    const POLLING_STAGES = ['WAIT_QR_SCAN', 'WAIT_CODE', 'WAIT_PASSWORD', 'READY'];
     const shell = document.querySelector('[data-login-stage]');
     if (!shell) {
         return;

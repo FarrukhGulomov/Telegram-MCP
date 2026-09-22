@@ -51,6 +51,17 @@
       </form>
     </div>
 
+    <!--
+      A page load can land here directly (not just reach it mid-poll): the underlying Telegram
+      login already reached READY, but this browser hadn't yet run /login/finish -- e.g. a QR
+      scan confirmed just as the visitor navigated or refreshed instead of waiting for the next
+      poll tick. login.js treats READY as a polling stage too, so it picks up from here and
+      finishes the sign-in itself; this is only what is shown while that happens.
+    -->
+    <div class="card step-card" th:if="${stage == 'READY'}">
+      <p class="hint" th:text="#{login.finishing}">Finishing sign-in…</p>
+    </div>
+
     <div class="card step-card" th:if="${stage == 'WAIT_QR_SCAN'}">
       <h2 th:text="#{connect.qrStep.title}">Scan to connect</h2>
       <div class="qr-frame" th:if="${qrCodeImage}">
