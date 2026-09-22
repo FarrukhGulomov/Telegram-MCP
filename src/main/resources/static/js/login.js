@@ -8,7 +8,15 @@
     // between reaching READY and the hidden form submitting. Without READY in this list the
     // page below renders nothing for that stage and this script, seeing it isn't a stage it
     // polls, does nothing either: a login that will never finish itself.
-    const POLLING_STAGES = ['WAIT_QR_SCAN', 'WAIT_CODE', 'WAIT_PASSWORD', 'READY'];
+    //
+    // WAIT_PHONE_NUMBER is included for the same reason found in real production use: beginLogin
+    // sends setAuthenticationPhoneNumber and returns, but the resulting authorizationStateWaitCode
+    // transition is pushed asynchronously (a real network round trip to Telegram) -- a page load
+    // that lands before that push arrives sees the client still reporting the stage it was in
+    // *before* the phone number was submitted. Without polling here, that page never advances on
+    // its own: the phone-entry form was already replaced by the redirect to this same stage, and
+    // nothing this page renders for WAIT_PHONE_NUMBER submits it again.
+    const POLLING_STAGES = ['WAIT_PHONE_NUMBER', 'WAIT_QR_SCAN', 'WAIT_CODE', 'WAIT_PASSWORD', 'READY'];
     const shell = document.querySelector('[data-login-stage]');
     if (!shell) {
         return;

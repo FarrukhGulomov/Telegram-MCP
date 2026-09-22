@@ -62,6 +62,19 @@
       <p class="hint" th:text="#{login.finishing}">Finishing sign-in…</p>
     </div>
 
+    <!--
+      Confirmed from live production reports: beginLogin sends setAuthenticationPhoneNumber and
+      redirects back here immediately, but TDLib only pushes the resulting authorizationState
+      WaitCode transition asynchronously (a real round trip to Telegram) -- a page load that
+      lands before that push arrives finds the connection still reporting WAIT_PHONE_NUMBER, the
+      stage it was in *before* the number was submitted. Without this branch (and login.js
+      polling it) that page rendered a blank card forever: the phone-entry form for this stage
+      was already gone, replaced by the redirect that got here.
+    -->
+    <div class="card step-card" th:if="${stage == 'WAIT_PHONE_NUMBER'}">
+      <p class="hint" th:text="${stateHint} ?: #{login.tdlib.waitPhone}">Telegram is waiting for a phone number or QR login.</p>
+    </div>
+
     <div class="card step-card" th:if="${stage == 'WAIT_QR_SCAN'}">
       <h2 th:text="#{connect.qrStep.title}">Scan to connect</h2>
       <div class="qr-frame" th:if="${qrCodeImage}">

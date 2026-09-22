@@ -227,6 +227,46 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                 .andExpect(redirectedUrl("/"));
     }
 
+    /**
+     * Regression for a real production report: a visitor reloading {@code /login} right after
+     * submitting a phone number saw a blank card. Root cause: {@code TdlibTelegramGateway
+     * .beginLogin} sends {@code setAuthenticationPhoneNumber} and returns, but the resulting
+     * {@code authorizationStateWaitCode} transition is pushed asynchronously (a real round trip
+     * to Telegram) -- a page load that lands before that push arrives finds the connection still
+     * reporting {@code WAIT_PHONE_NUMBER}, the stage it was in *before* the number was submitted.
+     * login.html had no branch for that stage (only the pseudo-stage {@code PHONE_ENTRY} a
+     * brand-new, no-pending-login visitor gets), so the card rendered nothing at all. Asserts the
+     * page now shows a real hint instead, carrying {@code data-login-stage="WAIT_PHONE_NUMBER"}
+     * so login.js (which now polls this stage too) can recover once the real transition lands.
+     */
+    @Test
+    void reloadingLoginWhileStillWaitingForThePhoneNumberToBeConfirmedShowsAHintRatherThanNothing()
+            throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        LoginState stillWaitingForPhoneNumber = LoginState.of(LoginStage.WAIT_PHONE_NUMBER, "login.tdlib.waitPhone");
+        Mockito.doReturn(stillWaitingForPhoneNumber).when(this.gateway)
+                .beginLogin(ArgumentMatchers.any(), ArgumentMatchers.any(), ArgumentMatchers.any());
+
+        String phoneNumber = "+19995550033";
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", phoneNumber))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        // The live gateway (still owned by this same ref) is asked again on the reload below,
+        // exactly like beginLogin's own async push had simply not arrived yet.
+        Mockito.doReturn(stillWaitingForPhoneNumber).when(this.gateway)
+                .currentState(ArgumentMatchers.any());
+
+        this.mockMvc.perform(get("/login").session(session))
+                .andExpect(status().isOk())
+                .andExpect(content().string(
+                        org.hamcrest.Matchers.containsString("data-login-stage=\"WAIT_PHONE_NUMBER\"")))
+                .andExpect(content().string(
+                        org.hamcrest.Matchers.containsString("Telegram is waiting for a phone number")));
+    }
+
     @Test
     void aBrandNewSignupWhoseConfirmedIdentityAlreadyBelongsToAnotherAccountRollsBack() throws Exception {
         Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
