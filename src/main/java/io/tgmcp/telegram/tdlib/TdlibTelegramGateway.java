@@ -476,6 +476,20 @@ public class TdlibTelegramGateway implements TelegramGateway {
     @Override
     public LoginState beginLogin(ConnectionRef ref, LoginMethod method, String phoneNumber) {
         requireRealAccessAuthorized();
+        // Security-audit follow-up on e514a6d: disconnect() already blocks (bounded by
+        // DISCONNECT_TEARDOWN_TIMEOUT) for authorizationStateClosed before returning, but on a
+        // genuinely slow teardown it can still give up and return with the client not actually
+        // closed yet -- previously a silent "proceeding anyway" warning. Sending
+        // setAuthenticationPhoneNumber/requestQrCodeAuthentication into that still-tearing-down
+        // client is exactly the original race (TDLib rejects it as unexpected, no code is ever
+        // sent, nothing tells the visitor why): fail loud here instead of repeating it silently.
+        // The common case -- no logout in flight, or one that already reached
+        // authorizationStateClosed -- costs nothing (closedSignal is null, or already counted
+        // down to zero).
+        CountDownLatch stillClosing = this.closedSignal;
+        if (stillClosing != null && stillClosing.getCount() > 0) {
+            throw new TelegramTransientException("Previous Telegram session has not finished closing yet");
+        }
         // Claims ownership, same as onStateChange above and for the same reason: this is the
         // other of the two calls TelegramConnectionService.beginLogin makes to establish a
         // brand new, already-verified owner.

@@ -475,6 +475,32 @@ class TdlibTelegramGatewayTests {
         disconnectCall.get(2, java.util.concurrent.TimeUnit.SECONDS);
     }
 
+    /**
+     * Security-audit follow-up: {@code disconnect()}'s wait above is bounded -- a genuinely slow
+     * teardown can still make it give up and return with {@code authorizationStateClosed} never
+     * having arrived. That used to leave the very next {@code beginLogin} free to send
+     * {@code setAuthenticationPhoneNumber} straight into the still-tearing-down client, silently
+     * repeating the exact race {@code disconnectBlocksUntilTheRealAuthorizationStateClosedArrivesBeforeReturning}
+     * above proves was otherwise closed -- no error, no code ever sent. Proves {@code beginLogin}
+     * now refuses outright instead, and never lets a request reach TDLib while that is true.
+     */
+    @Test
+    void beginLoginRefusesWhileATimedOutDisconnectSTeardownIsStillPending() throws Exception {
+        this.client.disableAutoCloseOnLogout();
+        this.client.enqueue("{\"@type\":\"ok\"}");
+
+        // No authorizationStateClosed is ever pushed, so disconnect() must exhaust its own
+        // bounded wait (DISCONNECT_TEARDOWN_TIMEOUT) and give up rather than block forever.
+        this.gateway.disconnect(this.ref);
+
+        assertThatThrownBy(() -> this.gateway.beginLogin(this.ref, io.tgmcp.telegram.gateway.LoginMethod.PHONE_NUMBER,
+                "+15551234567"))
+                .isInstanceOf(io.tgmcp.telegram.gateway.TelegramTransientException.class);
+        assertThat(this.client.timesSent("setAuthenticationPhoneNumber"))
+                .as("no phone number may be sent to a client that has not actually finished closing yet")
+                .isZero();
+    }
+
     @Test
     void mapsChatTypes() {
         assertThat(this.gateway.toRemoteChat(json("""
