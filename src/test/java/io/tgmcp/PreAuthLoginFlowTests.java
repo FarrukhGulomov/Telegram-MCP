@@ -143,9 +143,14 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                 .isPresent();
     }
 
+    /**
+     * QR remains phone-code-only for an existing account that has never actually completed a
+     * real, code-verified Telegram login -- there is nothing trustworthy on file yet to check a
+     * scan's identity against (see {@link io.tgmcp.security.PreAuthLoginService}'s class doc).
+     */
     @Test
-    void qrCodeIsRejectedForAnAlreadyRegisteredPhoneNumber() throws Exception {
-        Fixtures.Team team = this.fixtures.team("qr-existing");
+    void qrCodeIsRejectedForAnExistingAccountThatHasNeverCompletedARealLogin() throws Exception {
+        Fixtures.Team team = this.fixtures.signInReadyTeam("qr-unverified", "qr-unverified-seed");
 
         this.mockMvc.perform(post("/login/start").with(csrf())
                         .param("method", LoginMethod.QR_CODE.name())
@@ -153,6 +158,70 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/login"))
                 .andExpect(flash().attribute("error", org.hamcrest.Matchers.notNullValue()));
+    }
+
+    /**
+     * A returning account that has previously completed a real login (so {@code
+     * app_users.telegram_user_id} is already on file) can now reconnect via QR -- e.g. after
+     * logging out of Telegram on every device, leaving no way to receive a fresh SMS/code but
+     * still able to scan from a freshly reinstalled app. Safe because {@link
+     * io.tgmcp.security.PreAuthLoginService#finishIfReady} checks the scan's confirmed identity
+     * against the one already on file before ever touching this account -- see the mismatch test
+     * below for the rejection path that check exists for.
+     */
+    @Test
+    void qrCodeIsAllowedForAReturningAccountOnceItHasAConfirmedIdentityOnFile() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = this.fixtures.team("qr-returning");
+
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.QR_CODE.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login"))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        this.mockMvc.perform(get("/login").session(session))
+                .andExpect(content().string(
+                        org.hamcrest.Matchers.containsString("data-login-stage=\"WAIT_QR_SCAN\"")));
+    }
+
+    /**
+     * The actual account-takeover attempt {@link io.tgmcp.security.PreAuthLoginService}'s class
+     * doc describes: a QR scan can be completed by any Telegram account regardless of what phone
+     * number was typed to reach it. Asserts a scan resolving to a DIFFERENT Telegram identity
+     * than the one already on file for this phone number is rejected outright, with the existing
+     * account's own confirmed identity left completely untouched -- not silently overwritten.
+     */
+    @Test
+    void qrScanFromADifferentTelegramAccountIsRejectedWithoutTouchingTheExistingAccount() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = this.fixtures.team("qr-mismatch");
+        long originalTelegramUserId = team.user().telegramUserId();
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.QR_CODE.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        // A different real Telegram account scans the code.
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, originalTelegramUserId + 1, "attacker",
+                "+19995559999", "login.tdlib.ready", null, null));
+        stubCurrentStateToThrowNotCurrentOwner();
+
+        this.mockMvc.perform(post("/login/finish").with(csrf()).session(session)
+                        .param("nonce", finishNonceFor(session)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login"))
+                .andExpect(flash().attribute("error", org.hamcrest.Matchers.notNullValue()));
+
+        assertThat(this.users.findById(team.user().id()).orElseThrow().telegramUserId())
+                .as("the existing account's own confirmed identity must be completely untouched "
+                        + "by the mismatched scan")
+                .isEqualTo(originalTelegramUserId);
     }
 
     @Test

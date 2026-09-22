@@ -31,14 +31,18 @@ import org.springframework.stereotype.Service;
  * here, but only Telegram's own login (the code it sends, and the two-factor password if one
  * is set) ever proves who actually holds it.
  *
- * <p>QR-code login is accepted only when the typed phone number matches no existing account.
- * Reason: unlike the phone-number method, where Telegram itself only ever delivers a code to
- * the real owner of that number, a QR scan can be completed by <em>any</em> Telegram account
- * regardless of what was typed. If an already-registered phone number's tenant were reused for
- * a QR attempt, whoever scans it -- not whoever typed the phone number -- would end up signed
- * into that tenant's existing dashboard and OAuth-connected clients: a full account takeover.
- * Restricting QR to brand-new tenants means there is never any existing data or session for a
- * mismatched scan to inherit.
+ * <p>QR-code login for an already-registered phone number is accepted only when that account
+ * has previously completed a real, code-verified login -- i.e. {@link AppUser#telegramUserId()}
+ * is already on file. Reason: unlike the phone-number method, where Telegram itself only ever
+ * delivers a code to the real owner of that number, a QR scan can be completed by <em>any</em>
+ * Telegram account regardless of what phone number was typed to reach it. Requiring a
+ * previously confirmed identity gives {@link #finishIfReady} something trustworthy to check
+ * the scan against: a scan that resolves to a <em>different</em> Telegram account than the one
+ * already on file is rejected outright (see there), leaving the existing account's identity and
+ * session completely untouched -- exactly the account-takeover attempt this guard exists to
+ * stop. A phone number with no confirmed identity yet (never signed in for real, or an
+ * abandoned signup) has nothing trustworthy on file to check against, so QR remains
+ * phone-code-only for it, same as before.
  */
 @Service
 public class PreAuthLoginService {
@@ -75,7 +79,7 @@ public class PreAuthLoginService {
      *                    response, and only once the stage it reports actually is READY.
      */
     private record Pending(UUID tenantId, UUID userId, String phoneNumber, boolean newAccount,
-                           String finishNonce) implements Serializable {
+                           LoginMethod method, String finishNonce) implements Serializable {
     }
 
     /**
@@ -114,10 +118,14 @@ public class PreAuthLoginService {
         AuthenticatedActor actor;
         boolean newAccount;
         if (existing.isPresent()) {
-            if (method == LoginMethod.QR_CODE) {
+            AppUser existingUser = existing.get();
+            if (method == LoginMethod.QR_CODE && existingUser.telegramUserId() == null) {
+                // No previously confirmed identity to check a scan against yet -- see the class
+                // javadoc for why that specifically, not merely "an account already exists",  is
+                // what QR needs before it can be trusted for a returning number.
                 throw new IllegalArgumentException("login.qrNotForExistingAccount");
             }
-            actor = actorFor(existing.get());
+            actor = actorFor(existingUser);
             this.connectionService.prepareForFreshLogin(actor);
             newAccount = false;
         }
@@ -127,7 +135,7 @@ public class PreAuthLoginService {
             newAccount = true;
         }
         request.getSession(true).setAttribute(SESSION_KEY,
-                new Pending(actor.tenantId(), actor.userId(), phoneNumber, newAccount,
+                new Pending(actor.tenantId(), actor.userId(), phoneNumber, newAccount, method,
                         UUID.randomUUID().toString()));
         return this.connectionService.beginLogin(actor, method,
                 method == LoginMethod.PHONE_NUMBER ? phoneNumber : null);
@@ -221,6 +229,32 @@ public class PreAuthLoginService {
         TelegramConnection connection = this.connectionService.find(actor).orElseThrow();
         String confirmedPhoneNumber = connection.tgPhoneNumber() != null
                 ? connection.tgPhoneNumber() : pending.phoneNumber();
+
+        if (!pending.newAccount() && pending.method() == LoginMethod.QR_CODE) {
+            // Deliberately scoped to QR only: a PHONE_NUMBER re-login is already Telegram's own
+            // verification of this exact number (a code delivered to it), and the mock adapter's
+            // (and, in principle, any adapter's) own tgUserId for a fresh connection need not
+            // literally equal whatever value happened to be on file from a previous session --
+            // there is nothing here worth double-guessing. QR is different: begin() only allows
+            // it for a returning number once this account already has a confirmed identity on
+            // file (see its own doc) specifically so this check has something trustworthy to
+            // verify the scan against.
+            Long previouslyConfirmedTelegramUserId = this.users.findById(pending.userId())
+                    .map(AppUser::telegramUserId).orElse(null);
+            if (previouslyConfirmedTelegramUserId != null
+                    && !previouslyConfirmedTelegramUserId.equals(connection.tgUserId())) {
+                // A scan can be completed by any Telegram account regardless of what phone
+                // number was typed to reach it, so this is exactly the account-takeover attempt
+                // the class javadoc describes: reject it outright, leaving the existing
+                // account's own identity and session completely untouched (unlike the
+                // DuplicateKeyException case below, there is no "other account" row to roll
+                // back -- this tenant's own data was never at risk of being overwritten, only of
+                // being handed to the wrong person).
+                this.connectionService.disconnect(actor);
+                clearPending(request);
+                throw new IllegalStateException("login.qrScanDidNotMatchAccount");
+            }
+        }
         try {
             this.users.updateTelegramIdentity(pending.tenantId(), pending.userId(), confirmedPhoneNumber,
                     connection.tgUserId(), connection.tgUsername());
