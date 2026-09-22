@@ -30,7 +30,7 @@ class McpBearerAuthenticationEntryPointTests {
             "http://localhost:8080/mcp", "mcp:read");
 
     private static AppProperties properties() {
-        return new AppProperties(null, MCP_DEFAULTS, null, null, null, null, null, null);
+        return new AppProperties(null, MCP_DEFAULTS, null, null, null, null, null, null, null);
     }
 
     @Test

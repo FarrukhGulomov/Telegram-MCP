@@ -33,6 +33,12 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
       <span th:text="#{nav.account}">Account</span>
     </a>
+    <a class="nav-link" th:if="${platformAdminVisible}"
+       th:classappend="${#strings.startsWith(currentPath, '/platform-admin')} ? 'is-active'"
+       th:href="@{/platform-admin}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 6v6c0 5 4 9 9 10 5-1 9-5 9-10V6z"/></svg>
+      <span th:text="#{nav.platformAdmin}">Platform admin</span>
+    </a>
     <span class="nav-sep" aria-hidden="true"></span>
     <form th:action="@{/logout}" method="post" data-guard-resubmit class="inline">
       <button type="submit" class="link nav-link" th:text="#{nav.signOut}">Sign out</button>

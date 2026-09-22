@@ -215,6 +215,7 @@ class RateLimitAndResponseCapTests extends AbstractIntegrationTest {
                 new AppProperties.Secrets(null, "test", null, null, List.of()),
                 new AppProperties.Demo(false, "demo", "Demo", List.of(), false),
                 null,
+                null,
                 null);
     }
 }

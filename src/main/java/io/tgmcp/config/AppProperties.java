@@ -19,7 +19,8 @@ public record AppProperties(@DefaultValue Telegram telegram,
                             @DefaultValue Secrets secrets,
                             @DefaultValue Demo demo,
                             @DefaultValue AbuseControls abuseControls,
-                            @DefaultValue ForwardedHeaders forwardedHeaders) {
+                            @DefaultValue ForwardedHeaders forwardedHeaders,
+                            @DefaultValue PlatformAdmin platformAdmin) {
 
     public record Telegram(@DefaultValue("MOCK") TelegramAdapterKind adapter,
                            /** TDLib api_id / api_hash. Required only for the TDLIB adapter. */
@@ -229,5 +230,16 @@ public record AppProperties(@DefaultValue Telegram telegram,
      * reachable at a hostname it was not actually configured for.
      */
     public record ForwardedHeaders(@DefaultValue List<String> trustedHosts) {
+    }
+
+    /**
+     * A fixed, infra-level allowlist for the cross-tenant {@code /platform-admin} overview
+     * (every tenant's footprint and a merged audit feed, including a filtered "suspicious
+     * activity" view) -- deliberately configured here rather than as a database-stored role,
+     * so that no tenant-scoped OWNER/ADMIN can ever grant themselves or anyone else access to
+     * it from inside the application itself. Empty by default: nobody can reach the page until
+     * an operator explicitly configures at least one number here.
+     */
+    public record PlatformAdmin(@DefaultValue List<String> phoneNumbers) {
     }
 }

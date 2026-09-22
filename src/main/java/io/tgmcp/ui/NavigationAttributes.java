@@ -10,11 +10,28 @@ import org.springframework.web.bind.annotation.ModelAttribute;
  * active-link highlighting needs the current path handed in explicitly instead.
  */
 @ControllerAdvice(assignableTypes = {DashboardController.class, ChatController.class,
-        ConnectionController.class, AuditController.class, AccountController.class})
+        ConnectionController.class, AuditController.class, AccountController.class,
+        PlatformAdminController.class})
 public class NavigationAttributes {
+
+    private final CurrentActor currentActor;
+
+    public NavigationAttributes(CurrentActor currentActor) {
+        this.currentActor = currentActor;
+    }
 
     @ModelAttribute("currentPath")
     public String currentPath(HttpServletRequest request) {
         return request.getRequestURI();
+    }
+
+    /**
+     * Governs only the nav link's visibility; {@link PlatformAdminController} enforces the
+     * real, config-backed check independently on every request regardless of what the nav
+     * happens to show.
+     */
+    @ModelAttribute("platformAdminVisible")
+    public boolean platformAdminVisible() {
+        return this.currentActor.isPlatformAdmin();
     }
 }

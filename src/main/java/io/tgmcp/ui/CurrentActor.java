@@ -1,5 +1,6 @@
 package io.tgmcp.ui;
 
+import io.tgmcp.config.AppProperties;
 import io.tgmcp.tenancy.ActorType;
 import io.tgmcp.tenancy.AppUser;
 import io.tgmcp.tenancy.AppUserRepository;
@@ -19,9 +20,11 @@ import org.springframework.stereotype.Component;
 public class CurrentActor {
 
     private final AppUserRepository users;
+    private final AppProperties properties;
 
-    public CurrentActor(AppUserRepository users) {
+    public CurrentActor(AppUserRepository users, AppProperties properties) {
         this.users = users;
+        this.properties = properties;
     }
 
     public AuthenticatedActor require() {
@@ -42,6 +45,30 @@ public class CurrentActor {
         AppUser user = requireUser();
         if (!user.isAdmin()) {
             throw new IllegalStateException("error.roleNoLongerAuthorizes");
+        }
+        return actor(user);
+    }
+
+    /**
+     * True when the signed-in phone number is on the configured platform-admin allowlist
+     * ({@code tgmcp.platform-admin.phone-numbers}) -- a fixed, infra-level identity list rather
+     * than a database-stored role, so no tenant-scoped OWNER/ADMIN can ever grant it to
+     * themselves. Governs only whether the nav link is shown; {@link #requirePlatformAdmin()}
+     * is what actually gates the page.
+     */
+    public boolean isPlatformAdmin() {
+        return isPlatformAdmin(requireUser());
+    }
+
+    private boolean isPlatformAdmin(AppUser user) {
+        return this.properties.platformAdmin().phoneNumbers().contains(user.phoneNumber());
+    }
+
+    /** As {@link #isPlatformAdmin()}, but throws when the check fails. */
+    public AuthenticatedActor requirePlatformAdmin() {
+        AppUser user = requireUser();
+        if (!isPlatformAdmin(user)) {
+            throw new IllegalStateException("error.notPlatformAdmin");
         }
         return actor(user);
     }

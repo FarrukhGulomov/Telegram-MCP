@@ -17,7 +17,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 /** Keeps stack traces and internal identifiers out of the browser. */
 @ControllerAdvice(assignableTypes = {DashboardController.class, ChatController.class,
-        ConnectionController.class, AuditController.class})
+        ConnectionController.class, AuditController.class, PlatformAdminController.class})
 public class UiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(UiExceptionHandler.class);

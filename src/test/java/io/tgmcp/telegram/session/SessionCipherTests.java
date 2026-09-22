@@ -27,7 +27,7 @@ class SessionCipherTests {
 
     private SessionCipher newCipher(String keyId) {
         AppProperties.Secrets secrets = new AppProperties.Secrets(null, keyId, null, null, List.of());
-        AppProperties properties = new AppProperties(null, null, null, null, secrets, null, null, null);
+        AppProperties properties = new AppProperties(null, null, null, null, secrets, null, null, null, null);
         return new SessionCipher(properties);
     }
 

@@ -105,7 +105,7 @@ class ProductionSafetyValidatorTests {
         AppProperties.Demo demo = new AppProperties.Demo(seedSyntheticData, "demo", "Demo",
                 List.of(), false);
         AppProperties.ForwardedHeaders forwardedHeaders = new AppProperties.ForwardedHeaders(trustedForwardedHosts);
-        return new AppProperties(telegram, null, null, null, secrets, demo, null, forwardedHeaders);
+        return new AppProperties(telegram, null, null, null, secrets, demo, null, forwardedHeaders, null);
     }
 
     @Test

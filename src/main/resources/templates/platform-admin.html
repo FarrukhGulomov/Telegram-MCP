@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(#{nav.platformAdmin}, ~{::section})}">
+<body>
+<section>
+  <div class="page-head">
+    <h1 th:text="#{nav.platformAdmin}">Platform admin</h1>
+    <p class="muted" th:text="#{platformAdmin.hint}">
+      A cross-tenant view of this whole deployment: every tenant's footprint and a merged audit
+      feed spanning all of them. Visible only to the operator identities configured for this
+      deployment. Message text is never shown here.
+    </p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2 th:text="#{platformAdmin.stat.tenants}">Tenants</h2>
+      <p class="stat-number" th:text="${totalTenants}">0</p>
+    </div>
+    <div class="card">
+      <h2 th:text="#{platformAdmin.stat.users}">Users</h2>
+      <p class="stat-number" th:text="${totalUsers}">0</p>
+    </div>
+    <div class="card">
+      <h2 th:text="#{platformAdmin.stat.connectedAccounts}">Connected Telegram accounts</h2>
+      <p class="stat-number" th:text="${totalConnectedAccounts}">0</p>
+    </div>
+    <div class="card">
+      <h2 th:text="#{platformAdmin.stat.activeChats}">Active chats</h2>
+      <p class="stat-number" th:text="${totalActiveChats} + ' / ' + ${totalChats}">0 / 0</p>
+    </div>
+  </div>
+
+  <div class="page-head">
+    <h2 th:text="#{platformAdmin.tenants.title}">Tenants</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+      <tr>
+        <th th:text="#{platformAdmin.table.slug}">Slug</th>
+        <th th:text="#{platformAdmin.table.name}">Name</th>
+        <th th:text="#{platformAdmin.table.demo}">Demo</th>
+        <th th:text="#{platformAdmin.table.createdAt}">Created</th>
+        <th th:text="#{platformAdmin.table.users}">Users</th>
+        <th th:text="#{platformAdmin.table.chats}">Chats (active)</th>
+        <th th:text="#{platformAdmin.table.connected}">Connected</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr th:each="t : ${tenants}">
+        <td th:text="${t.slug}"></td>
+        <td th:text="${t.name}"></td>
+        <td>
+          <span class="pill" th:if="${t.demoMode}" th:text="#{platformAdmin.demo.yes}">Demo</span>
+          <span th:unless="${t.demoMode}">—</span>
+        </td>
+        <td th:text="${t.createdAt}"></td>
+        <td th:text="${t.userCount}"></td>
+        <td th:text="${t.activeChatCount} + ' / ' + ${t.chatCount}"></td>
+        <td th:text="${t.connectedTelegramAccounts}"></td>
+      </tr>
+      <tr th:if="${#lists.isEmpty(tenants)}">
+        <td colspan="7">
+          <div class="empty-state">
+            <span th:text="#{platformAdmin.tenants.empty}">No tenants yet.</span>
+          </div>
+        </td>
+      </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="page-head">
+    <h2 th:text="#{platformAdmin.suspicious.title}">Suspicious activity</h2>
+    <p class="muted" th:text="#{platformAdmin.suspicious.hint}">
+      Denied, errored, or rate-limited access attempts across every tenant -- the closest signal
+      this application records to something worth a second look.
+    </p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+      <tr>
+        <th th:text="#{audit.table.when}">When</th>
+        <th th:text="#{platformAdmin.table.tenant}">Tenant</th>
+        <th th:text="#{audit.table.actor}">Actor</th>
+        <th th:text="#{audit.table.action}">Action</th>
+        <th th:text="#{audit.table.outcome}">Outcome</th>
+        <th th:text="#{audit.table.detail}">Detail</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr th:each="e : ${suspiciousEvents}">
+        <td th:text="${e.occurredAt}"></td>
+        <td th:text="${e.tenantSlug}"></td>
+        <td th:text="#{${'actorType.' + e.actorType}} + ' · ' + (${e.actorId} ?: '—')"></td>
+        <td th:text="#{${'auditAction.' + e.action}}"></td>
+        <td>
+          <span class="pill" th:text="#{${'auditOutcome.' + e.outcome}}"
+                th:classappend="${e.outcome} == 'DENIED' ? 'warn' : (${e.outcome} == 'ERROR' ? 'err' : 'ok')"></span>
+        </td>
+        <td><code th:text="${e.detail}"></code></td>
+      </tr>
+      <tr th:if="${#lists.isEmpty(suspiciousEvents)}">
+        <td colspan="6">
+          <div class="empty-state">
+            <span th:text="#{platformAdmin.suspicious.empty}">Nothing suspicious recorded.</span>
+          </div>
+        </td>
+      </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="page-head">
+    <h2 th:text="#{platformAdmin.recent.title}">Recent activity (all tenants)</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+      <tr>
+        <th th:text="#{audit.table.when}">When</th>
+        <th th:text="#{platformAdmin.table.tenant}">Tenant</th>
+        <th th:text="#{audit.table.actor}">Actor</th>
+        <th th:text="#{audit.table.action}">Action</th>
+        <th th:text="#{audit.table.outcome}">Outcome</th>
+        <th th:text="#{audit.table.detail}">Detail</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr th:each="e : ${recentEvents}">
+        <td th:text="${e.occurredAt}"></td>
+        <td th:text="${e.tenantSlug}"></td>
+        <td th:text="#{${'actorType.' + e.actorType}} + ' · ' + (${e.actorId} ?: '—')"></td>
+        <td th:text="#{${'auditAction.' + e.action}}"></td>
+        <td>
+          <span class="pill" th:text="#{${'auditOutcome.' + e.outcome}}"
+                th:classappend="${e.outcome} == 'DENIED' ? 'warn' : (${e.outcome} == 'ERROR' ? 'err' : 'ok')"></span>
+        </td>
+        <td><code th:text="${e.detail}"></code></td>
+      </tr>
+      <tr th:if="${#lists.isEmpty(recentEvents)}">
+        <td colspan="6">
+          <div class="empty-state">
+            <span th:text="#{audit.table.empty}">No events yet.</span>
+          </div>
+        </td>
+      </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+</body>
+</html>

@@ -50,6 +50,7 @@ class CursorCodecTests {
                 new AppProperties.Secrets(null, "test", base64Key, null, List.of()),
                 new AppProperties.Demo(false, "demo", "Demo", List.of(), false),
                 null,
+                null,
                 null);
         return new CursorCodec(properties, this.clock);
     }

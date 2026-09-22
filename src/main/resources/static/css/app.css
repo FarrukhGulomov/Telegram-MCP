@@ -224,6 +224,8 @@ p { margin: 0 0 10px; }
 }
 .card.danger { border-color: var(--danger-soft-border); }
 .card.ok { border-color: var(--success-soft-border); }
+/* platform-admin.html's summary tiles: a card whose body is one large number rather than text. */
+.stat-number { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
 .card-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   margin-bottom: 4px;

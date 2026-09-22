@@ -71,8 +71,14 @@ public class Fixtures {
      * a normalized-looking phone number: digits and a leading {@code +} only, so it round-trips
      * unchanged through {@code PreAuthLoginService#normalizePhoneNumber} and can be looked up
      * again by exactly the value stored here.
+     *
+     * <p>Public (not just used internally) so a test needing to know a fixture's phone number
+     * <em>before</em> the fixture itself is created -- e.g. to register it in a {@code
+     * tgmcp.platform-admin.phone-numbers} property via {@code @DynamicPropertySource}, which
+     * runs before the Spring context (and so before any {@link Fixtures} bean) exists -- can
+     * compute the exact same value {@link #signInReadyTeam(String, String)} will derive.
      */
-    private static String phoneNumberFor(String seed) {
+    public static String phoneNumberFor(String seed) {
         long digits = Math.floorMod((long) seed.hashCode(), 900_000_000L) + 100_000_000L;
         return "+1" + digits;
     }
