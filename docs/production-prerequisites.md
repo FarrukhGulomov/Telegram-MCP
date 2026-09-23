@@ -54,14 +54,46 @@ conclusion. Before launch, establish with counsel:
 
 ## 3. Engineering work not done in this MVP
 
-**Verified against a live Telegram account: no.** The TDLib adapter's JSON translation is
-covered by unit tests against a scripted client, using method and object shapes taken from
-the current `td_api.tl` and `td_json_client.h` in the `tdlib/td` repository. The native
-transport has not been exercised: no `libtdjson` binary was available in the build
-environment, and connecting a real account was outside the authorization for this work. Treat
-the adapter as unproven until you have run it end to end. Specifically untested: the
-`td_receive` loop under load, TDLib's authorization state machine in real time, and
-`updateMessageContent` / `updateDeleteMessages` handling.
+**Verified against a live Telegram account: partially, since a real-account test deployment
+(`telegram-mcp-tdlib-test` on Railway, TDLIB adapter, a real `api_id`/`api_hash`) has since run.**
+This paragraph originally said "no" -- that predates the test deployment described below and was
+left stale for too long; treat this revision, not that one, as current.
+
+Confirmed working against real Telegram accounts, through repeated live testing rather than only
+unit tests against a scripted client:
+
+- Phone-number login end to end (`setAuthenticationPhoneNumber` → `checkAuthenticationCode` →
+  `authorizationStateReady`), including a real, production-log-confirmed race
+  (`disconnect()` returning before TDLib's asynchronous teardown actually finished, letting the
+  next login's `setAuthenticationPhoneNumber` land on a still-closing client) that was found,
+  fixed, and reverified against live logs -- see the `TdlibTelegramGateway.disconnect()` commit
+  history for specifics.
+- QR-code login end to end, including reconnecting an account that previously completed a real
+  phone+code login after it was logged out of Telegram on every device.
+- Telegram's actual code-delivery-channel behaviour (`authenticationCodeInfo.type`/`next_type`),
+  observed directly via the `TDLib code delivery: channel=...` diagnostic log line added
+  specifically to make this verifiable from server logs rather than a visitor's transcription of
+  UI text.
+
+**Still not verified against a live account**, and each remains a real gap until it is:
+
+- The `td_receive` loop under sustained load (multiple chats, high message volume).
+- Edit/deletion propagation (`updateMessageContent` / `updateDeleteMessages`) reaching a real
+  message that already exists in this application's database -- the pipeline described below is
+  unit-tested against a scripted client's JSON shapes only, never against real TDLib output.
+  `TelegramAdapterKind.supportsLiveRevisions()` still returns `false` for TDLIB, and
+  `tgmcp.telegram.acknowledge-missing-edit-deletion-pipeline` still gates starting against this
+  adapter for exactly this reason.
+- Full restart-recovery: does a real, previously-authorized TDLib session actually come back to
+  `READY` with no re-login after a process restart, in production, not just in the
+  `reclaimOwnershipIfPersistedAsOwner` unit tests.
+- A full multi-day sync cycle against real chat activity (backfill completing, retention sweeps
+  running against real messages, `sync_checkpoints` behaving correctly across many ticks).
+- Live connection testing with real Claude or ChatGPT accounts over OAuth (see the paragraph
+  below -- this is a separate, still entirely unverified surface).
+
+Do not read the items above as fixed just because phone/QR login now is. Test each one
+specifically before relying on it for a real account you cannot afford to have silently fail.
 
 **Edit/deletion pipeline exists but is unverified against a real account.** `fetchRevisions()`
 used to unconditionally return an empty list for the TDLIB adapter. It no longer does:
