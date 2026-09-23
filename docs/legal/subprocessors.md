@@ -7,12 +7,15 @@
 > receiving content via a user-initiated tool call may be classified differently than a
 > traditional processor, depending on your regulator's guidance). Placeholders are `[FILL IN]`.
 
-## AI providers (receive message content, per-chat, only once consented)
+## AI providers (receive message content, per-chat, only once the operator activates that chat)
 
 | Provider | Role | Trigger |
 |---|---|---|
-| Anthropic (Claude) | Processes message text retrieved via an MCP tool call, under its own terms | Only for a chat whose provider scope includes `ANTHROPIC_CLAUDE` and whose consent covers it |
-| OpenAI (ChatGPT) | Processes message text retrieved via an MCP tool call, under its own terms | Only for a chat whose provider scope includes `OPENAI_CHATGPT` and whose consent covers it |
+| Anthropic (Claude) | Processes message text retrieved via an MCP tool call, under its own terms | Only for a chat the operator has activated with `ANTHROPIC_CLAUDE` in its provider scope |
+| OpenAI (ChatGPT) | Processes message text retrieved via an MCP tool call, under its own terms | Only for a chat the operator has activated with `OPENAI_CHATGPT` in its provider scope |
+
+Activation is the operator's own decision, not something gated on participant consent -- see
+[`../consent-model.md`](../consent-model.md)'s status notice.
 
 Which provider(s) apply to a given chat is visible on that chat's own page in the management UI
 (`chat.shared.title` / "What gets shared, and with whom"). Neither provider receives anything

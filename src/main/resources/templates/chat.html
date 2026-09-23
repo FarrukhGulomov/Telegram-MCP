@@ -59,8 +59,7 @@
         <span th:text="#{chat.select.title}">Select this chat</span></h2>
       <h2 th:if="${view.selected}" th:text="#{chat.select.settingsTitle}">Approval settings</h2>
       <p class="muted" th:unless="${view.selected}" th:text="#{chat.select.hint}">
-        Fill in the 4 boxes below, then press "Select chat". Nothing is read from this chat yet —
-        that only happens after every participant has given consent and you press "Activate".
+        Fill in the fields below, then select the chat. Nothing is read until you activate it.
       </p>
       <form th:action="${view.selected}
                         ? @{'/chats/' + ${view.chat.id} + '/settings'}

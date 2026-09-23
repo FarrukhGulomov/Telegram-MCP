@@ -1,5 +1,21 @@
 # Consent model
 
+> **Current status (corrected 2026-09-23): per-participant consent is no longer required for a
+> chat to be activated, stored, or read.** On 2026-09-20 (commit `c508f30`), the operator made an
+> explicit, informed decision to remove that gate after being told this removes the app's core
+> consent-first guarantee, and accepted the resulting legal/compliance responsibility themselves.
+> Since then, `ConsentService.coverageFor()` always reports full coverage regardless of whether
+> any participant has actually consented, and `hasValidConsent()` always returns `true` -- the
+> account owner's own decision to activate a chat is now the only authorization this deployment
+> enforces. This document was not updated when that decision was made; everything below describes
+> the **optional, still-functional consent-recording subsystem** (`/consent/all`,
+> `/consent/revoke`, the audit trail) an operator can still use to document consent for a
+> specific chat, not something the application requires or verifies on its own. Read every
+> "requires", "must", or "cannot" below in that light -- as what the mechanism does *when used*,
+> not as an enforced precondition. See [`production-prerequisites.md`](production-prerequisites.md)
+> section 2 and [`legal/terms-of-service.md`](legal/terms-of-service.md) for what this means for
+> the operator's own legal exposure.
+
 ## The problem this model exists to solve
 
 A Telegram group chat is a conversation between several people. The account owner who

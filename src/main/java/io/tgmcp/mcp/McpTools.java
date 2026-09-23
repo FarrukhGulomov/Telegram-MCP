@@ -614,7 +614,14 @@ public class McpTools {
         item.put("purpose", allowed.activation().purpose());
         item.put("providerScope", List.copyOf(allowed.activation().providers()));
         item.put("consentVersion", allowed.activation().consentVersion());
-        item.put("participantsRequiringConsent", allowed.coverage().requiredParticipants());
+        // Renamed from "participantsRequiringConsent": since the operator's explicit decision
+        // (commit c508f30) to remove per-participant consent gating, ConsentService.coverageFor
+        // always reports full coverage -- this number was never actually "how many still need
+        // to consent" after that change, only ever the chat's total non-bot participant count,
+        // which misled at least one caller into asking who that outstanding participant was
+        // when nobody was actually outstanding. Kept as a plain informational count, not
+        // reframed as a gating signal it has not been since c508f30.
+        item.put("participantCount", allowed.coverage().requiredParticipants());
         item.put("coverage", coverage(allowed, now));
         item.put("freshness", freshness(allowed, now));
         return item;
