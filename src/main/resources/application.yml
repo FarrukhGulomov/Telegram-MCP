@@ -76,7 +76,10 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        # 'info' exposes only DeploymentInfoContributor's two non-sensitive facts (configured
+        # adapter, whether real-account access is authorized) -- both already logged at INFO on
+        # every startup, so this is not a new disclosure, just a way to see it without log access.
+        include: health,info
   endpoint:
     health:
       show-details: never
