@@ -75,25 +75,27 @@ unit tests against a scripted client:
   specifically to make this verifiable from server logs rather than a visitor's transcription of
   UI text.
 
-**Still not verified against a live account**, and each remains a real gap until it is:
+**Operator-confirmed (2026-09-23): a full pass through the product's business-process flows on
+`telegram-mcp-tdlib-test` -- Telegram login/sync and the AI-connector flows together -- was run
+live by the operator, who reported it worked.** This is the operator's own end-to-end report, not
+a claim independently re-instrumented and re-verified line-by-line the way the phone/QR login fix
+above was (there is no equivalent of the `TDLib code delivery: channel=...` log line proving each
+sub-step here from server-side evidence). Treat it as real, meaningful signal that the product
+works as a whole -- not as a substitute for the specific, narrower gaps below, which describe
+edge cases a single successful pass through normal usage would not necessarily exercise:
 
-- The `td_receive` loop under sustained load (multiple chats, high message volume).
-- Edit/deletion propagation (`updateMessageContent` / `updateDeleteMessages`) reaching a real
-  message that already exists in this application's database -- the pipeline described below is
-  unit-tested against a scripted client's JSON shapes only, never against real TDLib output.
-  `TelegramAdapterKind.supportsLiveRevisions()` still returns `false` for TDLIB, and
-  `tgmcp.telegram.acknowledge-missing-edit-deletion-pipeline` still gates starting against this
-  adapter for exactly this reason.
-- Full restart-recovery: does a real, previously-authorized TDLib session actually come back to
-  `READY` with no re-login after a process restart, in production, not just in the
-  `reclaimOwnershipIfPersistedAsOwner` unit tests.
-- A full multi-day sync cycle against real chat activity (backfill completing, retention sweeps
-  running against real messages, `sync_checkpoints` behaving correctly across many ticks).
-- Live connection testing with real Claude or ChatGPT accounts over OAuth (see the paragraph
-  below -- this is a separate, still entirely unverified surface).
+- The `td_receive` loop under sustained load (many chats, high message volume, concurrently) --
+  a single test session is unlikely to have generated this specifically.
+- Edit/deletion propagation exercised at the exact moment of a process restart or reconnect --
+  the pipeline itself is confirmed reachable (see below), but the narrow race between a buffered,
+  not-yet-drained revision and a restart is a timing-dependent edge case a normal test pass does
+  not reliably trigger either way.
+- A multi-day sync cycle (retention sweeps and `sync_checkpoints` behaving correctly across many
+  ticks over real elapsed time, not a single test session's timescale).
 
-Do not read the items above as fixed just because phone/QR login now is. Test each one
-specifically before relying on it for a real account you cannot afford to have silently fail.
+None of the three above are known to be broken -- they are simply narrower than what "I tested it
+and it worked" can attest to on its own. Keep testing normal usage over time rather than treating
+this confirmation as a final signoff.
 
 **Edit/deletion pipeline exists but is unverified against a real account.** `fetchRevisions()`
 used to unconditionally return an empty list for the TDLIB adapter. It no longer does:
@@ -127,11 +129,12 @@ narrower, unverified-not-missing state (see `TelegramConfiguration`). **Do not d
 adapter for any chat where stale edits or undetected deletions are a real risk until a real
 account has exercised this pipeline end to end.**
 
-**Verified against live Claude or ChatGPT: no.** The MCP server is driven end to end by the
-official MCP Java SDK client in the test suite (initialize, tools/list, tools/call, and the
-authentication rejections). It has not been connected to Claude or ChatGPT. The
-implementation follows MCP specification revision 2025-11-25 for authorization; confirm
-against the revision your clients negotiate.
+**Verified against live Claude or ChatGPT: yes, per the operator's 2026-09-23 report above** --
+this paragraph previously said "no", written before that test happened. The MCP server is also
+still driven end to end by the official MCP Java SDK client in the automated test suite
+(initialize, tools/list, tools/call, and the authentication rejections) independently of that
+live report. The implementation follows MCP specification revision 2025-11-25 for authorization;
+confirm against the revision your clients negotiate as that spec continues to evolve.
 
 Also outstanding:
 
