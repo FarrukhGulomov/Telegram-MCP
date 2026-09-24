@@ -99,8 +99,16 @@ public class McpTools {
             Map<String, Object> payload = envelope();
             payload.put("items", items);
             payload.put("provider", context.provider());
-            payload.put("notice", "Only chats that were explicitly activated and whose participants all have "
-                    + "current consent for this provider are listed. Other chats are omitted entirely.");
+            // Security-audit follow-up: this used to claim "whose participants all have current
+            // consent for this provider", which stopped being true the moment the operator
+            // removed per-participant consent gating (commit c508f30, 2026-09-20) --
+            // ConsentService.coverageFor() has reported full coverage unconditionally ever
+            // since, so that sentence was reaching every MCP client (and, through it, the AI
+            // provider) as a false attestation on every single call. Only claim what is
+            // actually still true: the operator explicitly activated the chat.
+            payload.put("notice", "Only chats an operator has explicitly activated for this provider are "
+                    + "listed. Other chats are omitted entirely. This server does not itself verify that "
+                    + "chat participants have consented; that is the operator's own responsibility.");
             return this.responses.success(payload);
         });
     }
