@@ -267,6 +267,17 @@ public class TelegramConnectionService {
     }
 
     /**
+     * Security-audit finding H3: a brand-new tenant abandoned before ever reaching a real login
+     * (an explicit {@code /login/cancel}, or {@code AbandonedSignupReaper}'s own scheduled sweep)
+     * has no session worth ending gracefully through {@link #disconnect} -- there was never a
+     * confirmed owner to reclaim, only whatever native client {@link TelegramGateway#beginLogin}
+     * may already have started. Tells the gateway to discard that tenant's resources outright.
+     */
+    public void discardAbandonedSignup(java.util.UUID tenantId) {
+        this.gateway.discardTenant(tenantId);
+    }
+
+    /**
      * Tears down whichever Telegram session an account currently holds, without pausing any of
      * its already-activated chats. Unlike {@link #disconnect}, an explicit "stop using
      * Telegram" action, this is step one of an ordinary sign-in: {@code PreAuthLoginService}

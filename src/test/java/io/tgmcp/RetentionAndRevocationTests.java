@@ -23,6 +23,7 @@ import io.tgmcp.telegram.mock.SyntheticDataset;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.TestPropertySource;
 
 import static io.tgmcp.McpProtocolTests.asMap;
 import static io.tgmcp.McpProtocolTests.errorCode;
@@ -38,6 +39,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * data purge is a separate, idempotent step. A design that only deleted data would leave a
  * window where a request in flight still succeeds.
  */
+// RetentionService is now @ConditionalOnProperty on its class (fixing security-audit finding L2
+// -- the annotation had no effect on its @Scheduled method), so it needs this override to even
+// exist as a bean under the test profile's tgmcp.sync.scheduled=false default. Its own
+// @Scheduled trigger is never exercised by this test class either way -- runAll() is always
+// called directly.
+@TestPropertySource(properties = "tgmcp.sync.scheduled=true")
 class RetentionAndRevocationTests extends AbstractIntegrationTest {
 
     @Autowired

@@ -28,6 +28,13 @@ import org.springframework.transaction.annotation.Transactional;
  * read path in the same statement — there is no second copy to forget about.
  */
 @Service
+// Security-audit finding L2: @ConditionalOnProperty has no effect on an ordinary @Scheduled
+// method -- Spring's condition evaluator only ever consults it on a class (component-scan
+// registration) or a @Bean factory method, never on a plain instance method a
+// ScheduledAnnotationBeanPostProcessor discovers after the bean already exists. It used to sit
+// on runAll() itself, silently doing nothing: retention kept running every tgmcp.sync.scheduled
+// tick regardless of that flag. Moved to the class, matching SyncScheduler's own working pattern.
+@ConditionalOnProperty(name = "tgmcp.sync.scheduled", havingValue = "true", matchIfMissing = true)
 public class RetentionService {
 
     private static final Logger log = LoggerFactory.getLogger(RetentionService.class);
@@ -48,7 +55,6 @@ public class RetentionService {
     }
 
     @Scheduled(fixedDelayString = "${tgmcp.sync.retention-interval:PT1H}")
-    @ConditionalOnProperty(name = "tgmcp.sync.scheduled", havingValue = "true", matchIfMissing = true)
     public void runAll() {
         for (ChatActivation activation : this.activationRepository.findAll()) {
             try {

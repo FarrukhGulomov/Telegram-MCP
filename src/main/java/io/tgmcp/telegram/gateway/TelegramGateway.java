@@ -3,6 +3,7 @@ package io.tgmcp.telegram.gateway;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * The only way the rest of the application talks to Telegram.
@@ -64,6 +65,17 @@ public interface TelegramGateway {
      * itself revoke the session inside Telegram; the UI tells users how to do that.
      */
     void disconnect(ConnectionRef ref);
+
+    /**
+     * Security-audit finding H3: permanently discards a tenant's local session state (native
+     * client, if any, and its on-disk directory) for a tenant whose row no longer exists at all
+     * -- never for one that is merely disconnected but might sign in again. {@link #disconnect}
+     * ends a session gracefully through Telegram's own login state machine; this is for a tenant
+     * abandoned before it ever had one worth ending gracefully. Adapters with no persistent
+     * per-tenant native resource (the mock adapter) leave this a no-op default.
+     */
+    default void discardTenant(UUID tenantId) {
+    }
 
     // --- read-only data access --------------------------------------------------------
 

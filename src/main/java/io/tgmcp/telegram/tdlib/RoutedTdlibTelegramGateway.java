@@ -1,5 +1,6 @@
 package io.tgmcp.telegram.tdlib;
 
+import java.io.File;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -22,6 +23,7 @@ import io.tgmcp.telegram.gateway.TelegramAdapterKind;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.util.FileSystemUtils;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -88,6 +90,30 @@ public class RoutedTdlibTelegramGateway implements TelegramGateway {
     @Override
     public TelegramAdapterKind kind() {
         return TelegramAdapterKind.TDLIB;
+    }
+
+    /**
+     * Security-audit finding H3: {@link #forTenant} above never evicts a real tenant's client --
+     * a documented, accepted per-tenant cost for an account actually using this deployment. A
+     * tenant reaped as an abandoned signup ({@link io.tgmcp.tenancy.AbandonedSignupReaper}) or
+     * discarded on an explicit {@code /login/cancel} for a brand-new account is different: its
+     * database row is gone, so its client is pure waste from this point on, and an anonymous
+     * caller could otherwise keep creating more of them without limit. Removes it from the
+     * routing map (so no later call can reach it) and closes it (releasing the JVM-side
+     * resources {@link TdlibTelegramGateway#close} describes) before deleting its on-disk
+     * session directory.
+     */
+    @Override
+    public void discardTenant(UUID tenantId) {
+        TdlibTelegramGateway gateway = this.gatewaysByTenant.remove(tenantId);
+        if (gateway != null) {
+            gateway.close();
+        }
+        File directory = new File(this.baseConfig.databaseDirectory(), tenantId.toString());
+        if (!FileSystemUtils.deleteRecursively(directory)) {
+            log.warn("Could not fully delete TDLib session directory for discarded tenant {} at {}",
+                    tenantId, directory);
+        }
     }
 
     @Override

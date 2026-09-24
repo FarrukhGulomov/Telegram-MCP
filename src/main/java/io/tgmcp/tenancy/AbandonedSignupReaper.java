@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Instant;
 
 import io.tgmcp.config.AppProperties;
+import io.tgmcp.telegram.gateway.TelegramGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +30,12 @@ import org.springframework.stereotype.Service;
  * is by the time this runs.
  */
 @Service
+// Security-audit finding L2: @ConditionalOnProperty has no effect on an ordinary @Scheduled
+// method -- Spring's condition evaluator only ever consults it on a class (component-scan
+// registration) or a @Bean factory method. It used to sit on reap() itself, silently doing
+// nothing: the reaper kept running every tick regardless of tgmcp.sync.scheduled. Moved to the
+// class, matching SyncScheduler's own working pattern.
+@ConditionalOnProperty(name = "tgmcp.sync.scheduled", havingValue = "true", matchIfMissing = true)
 public class AbandonedSignupReaper {
 
     private static final Logger log = LoggerFactory.getLogger(AbandonedSignupReaper.class);
@@ -36,20 +43,28 @@ public class AbandonedSignupReaper {
     private final TenantRepository tenants;
     private final AppProperties properties;
     private final Clock clock;
+    private final TelegramGateway gateway;
 
-    public AbandonedSignupReaper(TenantRepository tenants, AppProperties properties, Clock clock) {
+    public AbandonedSignupReaper(TenantRepository tenants, AppProperties properties, Clock clock,
+                                 TelegramGateway gateway) {
         this.tenants = tenants;
         this.properties = properties;
         this.clock = clock;
+        this.gateway = gateway;
     }
 
     @Scheduled(fixedDelayString = "${tgmcp.abuse-controls.abandoned-signup-max-age:PT1H}")
-    @ConditionalOnProperty(name = "tgmcp.sync.scheduled", havingValue = "true", matchIfMissing = true)
     public void reap() {
         Instant olderThan = this.clock.instant().minus(this.properties.abuseControls().abandonedSignupMaxAge());
         for (Tenant tenant : this.tenants.findAbandonedSignups(olderThan)) {
             log.info("Deleting abandoned signup: tenant {} (created {}) never completed Telegram login",
                     tenant.id(), tenant.createdAt());
+            // Security-audit finding H3: deleting only the database row left that tenant's TDLib
+            // client (native session, executor thread pool, on-disk directory) resident for the
+            // life of the JVM regardless -- unlike a real tenant's client (a documented,
+            // accepted per-tenant cost), this one belongs to nothing any longer, so keeping it
+            // alive is pure, uncapped waste an anonymous caller could keep growing indefinitely.
+            this.gateway.discardTenant(tenant.id());
             this.tenants.delete(tenant.id());
         }
     }

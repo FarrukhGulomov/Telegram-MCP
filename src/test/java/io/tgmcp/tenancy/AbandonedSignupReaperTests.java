@@ -25,7 +25,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the visitor holds it. {@link AbandonedSignupReaper} is the remediation -- these tests pin
  * exactly what it may and may not delete.
  */
-@TestPropertySource(properties = "tgmcp.abuse-controls.abandoned-signup-max-age=PT1H")
+@TestPropertySource(properties = {
+        "tgmcp.abuse-controls.abandoned-signup-max-age=PT1H",
+        // AbandonedSignupReaper is now @ConditionalOnProperty on its class (fixing security-audit
+        // finding L2 -- the annotation had no effect on its @Scheduled method), so it needs this
+        // override to even exist as a bean under the test profile's tgmcp.sync.scheduled=false
+        // default. Its own @Scheduled trigger is never exercised by this test class either way --
+        // reap() is always called directly.
+        "tgmcp.sync.scheduled=true"
+})
 class AbandonedSignupReaperTests extends AbstractIntegrationTest {
 
     @Autowired
