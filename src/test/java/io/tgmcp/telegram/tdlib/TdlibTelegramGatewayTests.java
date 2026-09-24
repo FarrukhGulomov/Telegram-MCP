@@ -739,6 +739,13 @@ class TdlibTelegramGatewayTests {
         long resumeFrom = firstCall.resumeCursor();
         long[] nextIds = {resumeFrom - 3, resumeFrom - 2, resumeFrom - 1};
         this.client.enqueue(historyPage(nextIds, 1500L));
+        // External review finding: TDLib's own getChatHistory documentation is explicit that a
+        // page shorter than the requested limit is not itself proof the end of history was
+        // reached -- only a genuinely empty response is. This last page is short (3 of the 5
+        // requested), so the fix under test must keep paging rather than stopping here; this
+        // empty follow-up is what a real TDLib client would eventually return once the chat's
+        // history is truly exhausted, and is what lets hasMore legitimately become false below.
+        this.client.enqueue(historyPage(new long[0], new long[0]));
 
         RemoteMessagePage secondCall = this.gateway.fetchMessages(this.ref, -100123L,
                 MessageWindow.forward(Instant.ofEpochSecond(1000L), Instant.ofEpochSecond(2000L), null,
@@ -747,6 +754,35 @@ class TdlibTelegramGatewayTests {
         assertThat(secondCall.messages()).extracting(RemoteMessage::messageId)
                 .containsExactly(nextIds[0], nextIds[1], nextIds[2]);
         assertThat(secondCall.hasMore()).isFalse();
+    }
+
+    /**
+     * External review finding: {@code getChatHistory}'s own documented behaviour is that TDLib
+     * may return fewer messages than requested "even if the end of the list is not reached" --
+     * an internal choice made for its own reasons, never a promise that nothing older exists.
+     * Treating a short page as exhaustion (as this used to) could mark backfill complete while
+     * real, older messages were still sitting unfetched on Telegram's side -- permanently out of
+     * reach, since a completed backfill never resumes. Proves a short-but-nonempty page is
+     * followed by another raw request rather than being treated as the end.
+     */
+    @Test
+    void aShortPageIsNeverTreatedAsTheEndOfHistoryOnItsOwn() {
+        // Only 2 of the requested 5 messages come back on the first raw page -- short, but not
+        // empty -- immediately followed by a second page that reaches the window's own floor,
+        // the actual (and only reliable) reason to stop.
+        this.client.enqueue(historyPage(new long[] {50, 49}, 1500L));
+        this.client.enqueue(historyPage(new long[] {48, 47}, 500L));
+
+        RemoteMessagePage page = this.gateway.fetchMessages(this.ref, -100123L,
+                MessageWindow.forward(Instant.ofEpochSecond(1000L), Instant.ofEpochSecond(2000L), null, 5));
+
+        assertThat(page.messages()).extracting(RemoteMessage::messageId).containsExactly(49L, 50L);
+        assertThat(page.hasMore())
+                .as("a short page must not by itself be mistaken for the end of history")
+                .isFalse();
+        assertThat(this.client.timesSent("getChatHistory"))
+                .as("a short-but-nonempty page must not stop the traversal on its own")
+                .isEqualTo(2);
     }
 
     private String historyPage(long[] ids, long uniformDateEpochSeconds) {

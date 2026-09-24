@@ -861,10 +861,16 @@ public class TdlibTelegramGateway implements TelegramGateway {
             if (reachedBoundary) {
                 break;
             }
-            if (rawCount < limit) {
-                sourceExhausted = true;
-                break;
-            }
+            // External review finding: TDLib's own documentation for getChatHistory is explicit
+            // that "the number of returned messages is chosen by TDLib and can be smaller than
+            // the specified limit, even if the end of the list is not reached" -- a short page is
+            // an internal performance choice, never a promise that nothing older exists. Treating
+            // rawCount < limit as sourceExhausted (as this used to) could stop backfill early and
+            // mark it complete while real, older messages were still sitting unfetched on
+            // Telegram's side, permanently out of reach since a completed backfill never resumes.
+            // The only response TDLib gives that unambiguously means "nothing more exists" is a
+            // genuinely empty one, handled above; every other case here keeps paging (bounded, as
+            // always, by MAX_HISTORY_RAW_PAGES_PER_CALL and hasMore/resumeCursor below).
             if (matched.size() >= limit) {
                 break;
             }
