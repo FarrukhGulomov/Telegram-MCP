@@ -159,16 +159,23 @@ public class MockTelegramGateway implements TelegramGateway {
 
     @Override
     public LoginState beginLogin(ConnectionRef ref, LoginMethod method, String phoneNumber) {
+        // Security-audit finding H1: keyed by routingKey(), not connectionId(), so a shadow
+        // login attempt (a freshly minted routing key -- see ConnectionRef's own javadoc) tracks
+        // its own progress in its own bucket, entirely separate from whatever bucket the
+        // account's real, already-connected session (if any) is sitting in under its own
+        // tenantId-as-routingKey entry. Mirrors RoutedTdlibTelegramGateway's own reasoning for
+        // routing native clients the same way.
+        //
         // Real getMe() always reports a phone number, QR-confirmed logins included (it belongs
         // to whichever device scanned, never to anything a form typed) -- a fixed synthetic
         // stand-in here keeps that property true for QR in the mock adapter too.
-        this.pendingPhoneNumbers.put(ref.connectionId(),
+        this.pendingPhoneNumbers.put(ref.routingKey(),
                 phoneNumber != null ? phoneNumber : "+10000000000");
         LoginState state = (method == LoginMethod.QR_CODE)
                 ? new LoginState(LoginStage.WAIT_QR_SCAN, "tg://login?token=SYNTHETIC-DEMO-TOKEN", null, null, null,
                         "login.mock.qrLogin", null, null)
                 : LoginState.of(LoginStage.WAIT_CODE, "login.mock.waitCode");
-        this.sessions.put(ref.connectionId(), state);
+        this.sessions.put(ref.routingKey(), state);
         return state;
     }
 
@@ -176,43 +183,86 @@ public class MockTelegramGateway implements TelegramGateway {
     public LoginState submitCode(ConnectionRef ref, String code) {
         // The mock always asks for a 2FA password so that the two-step path is exercised.
         LoginState state = LoginState.of(LoginStage.WAIT_PASSWORD, "login.mock.waitPassword");
-        this.sessions.put(ref.connectionId(), state);
+        this.sessions.put(ref.routingKey(), state);
         return state;
     }
 
     @Override
     public LoginState resendCode(ConnectionRef ref) {
-        LoginState current = this.sessions.getOrDefault(ref.connectionId(), LoginState.of(LoginStage.DISCONNECTED, null));
+        LoginState current = this.sessions.getOrDefault(ref.routingKey(), LoginState.of(LoginStage.DISCONNECTED, null));
         if (current.stage() != LoginStage.WAIT_CODE) {
             return current;
         }
         LoginState state = LoginState.of(LoginStage.WAIT_CODE, "login.mock.codeResent");
-        this.sessions.put(ref.connectionId(), state);
+        this.sessions.put(ref.routingKey(), state);
         return state;
     }
 
     @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
-        // Deterministic per connection (never a fixed constant): app_users.telegram_user_id and
+        // Deterministic per *connection* (never a fixed constant, and deliberately never by
+        // routingKey(), unlike the session-progress maps above): app_users.telegram_user_id and
         // .telegram_username are both uniquely constrained, and every login now writes an
-        // account's identity from this, so two different tenants' mock logins must never collide.
+        // account's identity from this, so two different tenants' mock logins must never
+        // collide. Keying identity on connectionId() (stable across a shadow login and the
+        // account's ordinary one -- see ConnectionRef's own javadoc) means a shadow re-login for
+        // an existing account resolves to that same account's identity by default, exactly like
+        // a real Telegram re-login normally would; a test that wants to simulate a *different*
+        // Telegram account confirming the scan/code instead pushes a LoginState of its own
+        // choosing directly (see PreAuthLoginFlowTests' captureRegisteredListener()) rather than
+        // relying on this derivation.
         long tgUserId = ref.connectionId().getLeastSignificantBits() & Long.MAX_VALUE;
         String tgUsername = "synthetic_" + ref.connectionId().toString().replace("-", "").substring(0, 12);
-        String phoneNumber = this.pendingPhoneNumbers.getOrDefault(ref.connectionId(), "+10000000000");
+        String phoneNumber = this.pendingPhoneNumbers.getOrDefault(ref.routingKey(), "+10000000000");
         LoginState state = new LoginState(LoginStage.READY, null, tgUserId, tgUsername, phoneNumber,
                 "login.mock.ready", null, null);
-        this.sessions.put(ref.connectionId(), state);
+        this.sessions.put(ref.routingKey(), state);
         return state;
     }
 
     @Override
     public LoginState currentState(ConnectionRef ref) {
-        return this.sessions.getOrDefault(ref.connectionId(), LoginState.of(LoginStage.DISCONNECTED, null));
+        return this.sessions.getOrDefault(ref.routingKey(), LoginState.of(LoginStage.DISCONNECTED, null));
     }
 
     @Override
     public void disconnect(ConnectionRef ref) {
-        this.sessions.remove(ref.connectionId());
+        this.sessions.remove(ref.routingKey());
+    }
+
+    /**
+     * Security-audit finding H1: bounds the memory an attacker could otherwise grow without
+     * limit by repeatedly starting and abandoning shadow login attempts (see {@link
+     * ConnectionRef#routingKey()}) -- each one mints a fresh, never-reused routing key, so
+     * without this the two maps above would simply grow forever. Also used, exactly as {@link
+     * io.tgmcp.telegram.gateway.TelegramGateway#discardTenant}'s own javadoc describes, to clean
+     * up a real tenant abandoned before it ever completed a login; the mock adapter keeps no
+     * other per-tenant resource, so removing these two map entries is the whole of it.
+     */
+    @Override
+    public void discardTenant(java.util.UUID routingKey) {
+        this.sessions.remove(routingKey);
+        this.pendingPhoneNumbers.remove(routingKey);
+    }
+
+    /**
+     * Security-audit finding H1: moves a shadow login's in-memory progress from its own routing
+     * key to {@code targetRoutingKey}, discarding whatever session previously lived there --
+     * the mock-adapter equivalent of {@code RoutedTdlibTelegramGateway.promoteSession}'s re-keying
+     * of its native-client map.
+     */
+    @Override
+    public void promoteSession(ConnectionRef shadowRef, java.util.UUID targetRoutingKey) {
+        LoginState shadowState = this.sessions.remove(shadowRef.routingKey());
+        if (shadowState == null) {
+            throw new IllegalStateException(
+                    "No pending login session found to promote for routing key " + shadowRef.routingKey());
+        }
+        this.sessions.put(targetRoutingKey, shadowState);
+        String shadowPhone = this.pendingPhoneNumbers.remove(shadowRef.routingKey());
+        if (shadowPhone != null) {
+            this.pendingPhoneNumbers.put(targetRoutingKey, shadowPhone);
+        }
     }
 
     // --- read-only data ---------------------------------------------------------------

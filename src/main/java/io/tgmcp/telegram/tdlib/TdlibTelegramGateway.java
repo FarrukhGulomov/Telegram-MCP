@@ -568,8 +568,9 @@ public class TdlibTelegramGateway implements TelegramGateway {
         // TDLib announces the real teardown asynchronously as authorizationStateLoggingOut,
         // authorizationStateClosing, then authorizationStateClosed, well after this request's own
         // "Ok" response returns. Returning immediately after that response (as this method used
-        // to) let PreAuthLoginService.prepareForFreshLogin's very next call -- an ordinary
-        // returning-account beginLogin -- reach this same client while it was still mid-teardown.
+        // to) let a very next call into this same client -- historically, an ordinary
+        // returning-account beginLogin, right after PreAuthLoginService disconnected the account's
+        // old session as step one of signing back in -- reach it while it was still mid-teardown.
         // TDLib correctly rejected whichever of setTdlibParameters or setAuthenticationPhoneNumber
         // landed in that window as "unexpected", since the client was not actually in a state
         // that accepts either yet -- surfacing to the visitor as a login that appeared to work
@@ -618,6 +619,26 @@ public class TdlibTelegramGateway implements TelegramGateway {
      */
     void close() {
         this.client.close();
+    }
+
+    /** @see #databaseDirectory() */
+    String databaseDirectory() {
+        return this.config.databaseDirectory();
+    }
+
+    /**
+     * Security-audit finding H1: this class represents exactly one native client (one {@code
+     * ConnectionRef#routingKey()}'s worth of session state), so "move a session from one routing
+     * key to another" is meaningless at this level -- it is {@link RoutedTdlibTelegramGateway},
+     * which holds the map of routing keys to instances of this class, that actually performs a
+     * promotion (by re-keying its map, not by asking an instance to do anything to itself). This
+     * class is never itself exposed as the top-level {@code TelegramGateway} bean, so this method
+     * is unreachable in practice; it exists only to satisfy the interface.
+     */
+    @Override
+    public void promoteSession(ConnectionRef shadowRef, java.util.UUID targetRoutingKey) {
+        throw new UnsupportedOperationException(
+                "promoteSession is handled by RoutedTdlibTelegramGateway, not by a single client instance");
     }
 
     // --- read-only data ---------------------------------------------------------------

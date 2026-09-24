@@ -162,13 +162,16 @@ public class ChatAccessService {
             }
             // Security-audit finding SEC-R03: the freshness check above only ever catches
             // staleness that has already accumulated for a full budget window (default 24h) --
-            // it says nothing about whether the connection is live *right now*. A returning
-            // account's fresh login (PreAuthLoginService#begin -> prepareForFreshLogin) tears
-            // the connection down before re-authenticating it, which can otherwise leave a chat
-            // fully ACTIVE and still "fresh enough" by the clock while nothing could actually
-            // reconfirm membership or permissions if it needed to. Blocking reads the instant
-            // the connection is known not to be READY closes that gap immediately rather than
-            // waiting out the freshness budget.
+            // it says nothing about whether the connection is live *right now*. A connection that
+            // has lost authorization for any other reason (a remote logout, a ban, an explicit
+            // disconnect) can otherwise leave a chat fully ACTIVE and still "fresh enough" by the
+            // clock while nothing could actually reconfirm membership or permissions if it needed
+            // to. Blocking reads the instant the connection is known not to be READY closes that
+            // gap immediately rather than waiting out the freshness budget. (Security-audit
+            // finding H1: a returning account's own fresh-login attempt used to also trigger this
+            // -- PreAuthLoginService#begin's prepareForFreshLogin tore the real connection down
+            // before re-authenticating it -- but that no longer happens at all; see
+            // TelegramConnectionService#beginShadowLogin.)
             if (!connectionReady(actor.tenantId())) {
                 throw ChatAccessException.connectionUnavailable(
                         "This account's Telegram connection is not currently active; this chat will become "

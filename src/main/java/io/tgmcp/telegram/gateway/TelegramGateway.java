@@ -73,9 +73,30 @@ public interface TelegramGateway {
      * ends a session gracefully through Telegram's own login state machine; this is for a tenant
      * abandoned before it ever had one worth ending gracefully. Adapters with no persistent
      * per-tenant native resource (the mock adapter) leave this a no-op default.
+     *
+     * <p>Security-audit finding H1: also the right call for discarding an abandoned or rejected
+     * <em>shadow</em> login attempt (see {@link ConnectionRef#routingKey()}) -- {@code
+     * routingKey} is passed here in place of a real tenant id, and this method never needed to
+     * know the difference: both are simply the opaque key under which an adapter is keeping some
+     * session state that nothing will ever finish or reclaim.
      */
     default void discardTenant(UUID tenantId) {
     }
+
+    /**
+     * Security-audit finding H1: moves an already-established session from a shadow login
+     * attempt (see {@link ConnectionRef#routingKey()}) so that it becomes the live session for
+     * {@code targetRoutingKey}, discarding whatever session previously lived there. Called only
+     * once the shadow login has reached {@link LoginStage#READY} <em>and</em> its confirmed
+     * identity has been checked against whatever this account already has on file -- by that
+     * point the new session is known-good and safe to adopt as the account's own.
+     *
+     * <p>Unlike {@link #discardTenant}, this has no safe no-op default: an adapter that keeps any
+     * per-routing-key state at all (session stage, native client, on-disk directory) must move it
+     * across the two keys itself, or a caller relying on the promoted session being reachable at
+     * {@code targetRoutingKey} afterward would silently find nothing there.
+     */
+    void promoteSession(ConnectionRef shadowRef, UUID targetRoutingKey);
 
     // --- read-only data access --------------------------------------------------------
 

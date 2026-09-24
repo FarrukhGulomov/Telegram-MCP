@@ -53,6 +53,16 @@ public class TelegramConnectionService {
     private final AuditService auditService;
     private final Clock clock;
     private final TransactionTemplate transactionTemplate;
+    /**
+     * Security-audit finding H1: in-memory progress for a shadow login attempt (see {@link
+     * #beginShadowLogin}), keyed by its own {@code loginSlot} -- deliberately never a database
+     * table, since a shadow attempt has no lasting existence of its own: it either gets promoted
+     * into this account's real connection row ({@link #promoteShadowLogin}) or is discarded
+     * ({@link #discardShadowLogin}) without a trace, same as every other not-yet-READY login
+     * this application has never persisted.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<UUID, LoginState> shadowStates =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     public TelegramConnectionService(TelegramConnectionRepository connectionRepository,
                                      ChatRepository chatRepository,
@@ -278,27 +288,107 @@ public class TelegramConnectionService {
     }
 
     /**
-     * Tears down whichever Telegram session an account currently holds, without pausing any of
-     * its already-activated chats. Unlike {@link #disconnect}, an explicit "stop using
-     * Telegram" action, this is step one of an ordinary sign-in: {@code PreAuthLoginService}
-     * calls it immediately before {@link #beginLogin} for a returning account, since signing in
-     * is now the same act as connecting Telegram, and Telegram itself has no way to re-verify a
-     * phone number that already owns an authorized session -- no fresh code is ever sent to
-     * one, so the old session must end before a new login can even begin. The chats this
-     * account already activated must keep working exactly as they did the moment before, once
-     * the fresh login reaches READY again -- signing back in is not a decision to stop reading
-     * them.
+     * Security-audit finding H1: an already-registered account's fresh login attempt (phone
+     * number or QR) used to tear down whichever session that account currently held -- {@code
+     * TelegramConnectionService#prepareForFreshLogin}, called from {@code
+     * PreAuthLoginService#begin} before anyone had proven anything -- on the reasoning that
+     * Telegram has no way to re-verify a phone number that already owns an authorized session,
+     * so the old one had to end before a new login could even begin. That reasoning is true of a
+     * single native client, but nothing required reusing the account's <em>own</em> client for an
+     * attempt that has not yet proven it deserves to replace it: anyone who merely knew a victim's
+     * phone number could disconnect their live session and pause every chat it had activated,
+     * without ever completing a login of their own.
+     *
+     * <p>This runs the whole attempt -- {@link #beginLogin} through the eventual READY -- against
+     * an isolated shadow session instead, keyed by a freshly minted {@code loginSlot} distinct
+     * from this account's own {@link ConnectionRef#routingKey()} (see that field's own javadoc for
+     * how an adapter uses it). The account's real session, if it has one, is never touched: not
+     * disconnected, not persisted over, not even asked a single question. Nothing is written to
+     * this connection's own database row until {@link #promoteShadowLogin} adopts a
+     * <em>confirmed</em> new session as the real one -- see {@code
+     * PreAuthLoginService#finishIfReady} for the identity check that must pass first.
      */
     @Transactional
-    public void prepareForFreshLogin(AuthenticatedActor actor) {
-        find(actor).ifPresent(connection -> {
-            if (connection.status() == LoginStage.DISCONNECTED) {
-                return;
-            }
-            reclaimOwnershipIfPersistedAsOwner(connection);
-            this.gateway.disconnect(connection.ref());
-            this.connectionRepository.clearSession(actor.tenantId(), connection.id());
-        });
+    public LoginState beginShadowLogin(AuthenticatedActor actor, LoginMethod method, String phoneNumber,
+                                       UUID loginSlot) {
+        TelegramConnection connection = getOrCreate(actor);
+        ConnectionRef shadowRef = new ConnectionRef(connection.tenantId(), connection.id(), loginSlot);
+        // No persistence, unlike reclaimOwnership's identical-looking call for the real ref: an
+        // async push (a QR scan completing out of band) for a shadow login only ever needs to
+        // reach shadowStates below, never the database.
+        this.gateway.onStateChange(shadowRef, asyncState -> this.shadowStates.put(loginSlot, asyncState));
+        LoginState state = this.gateway.beginLogin(shadowRef, method, phoneNumber);
+        this.shadowStates.put(loginSlot, state);
+        // Deliberately records the method, never the phone number -- same as beginLogin's own
+        // audit entry.
+        this.auditService.record(actor, AuditAction.TELEGRAM_CONNECT_STARTED, null, AuditService.ALLOWED,
+                Map.of("method", method.name(), "adapter", this.gateway.kind().name(), "shadow", true));
+        return state;
+    }
+
+    @Transactional
+    public LoginState submitShadowCode(AuthenticatedActor actor, UUID loginSlot, String code) {
+        LoginState state = this.gateway.submitCode(shadowRef(actor, loginSlot), code);
+        this.shadowStates.put(loginSlot, state);
+        return state;
+    }
+
+    @Transactional
+    public LoginState resendShadowCode(AuthenticatedActor actor, UUID loginSlot) {
+        LoginState state = this.gateway.resendCode(shadowRef(actor, loginSlot));
+        this.shadowStates.put(loginSlot, state);
+        return state;
+    }
+
+    @Transactional
+    public LoginState submitShadowPassword(AuthenticatedActor actor, UUID loginSlot, String password) {
+        LoginState state = this.gateway.submitPassword(shadowRef(actor, loginSlot), password);
+        this.shadowStates.put(loginSlot, state);
+        return state;
+    }
+
+    /**
+     * The shadow login's own progress, tracked purely in memory (see {@link #shadowStates}) --
+     * unlike {@link #status}, there is no persisted row to fall back on for a session that, by
+     * design, is never written to this account's connection row until {@link
+     * #promoteShadowLogin} adopts it. A restart mid-attempt loses this the same way it already
+     * loses any other not-yet-READY login's progress; the visitor simply retries.
+     */
+    public LoginState shadowStatus(UUID loginSlot) {
+        return this.shadowStates.getOrDefault(loginSlot, LoginState.of(LoginStage.DISCONNECTED, null));
+    }
+
+    private ConnectionRef shadowRef(AuthenticatedActor actor, UUID loginSlot) {
+        TelegramConnection connection = getOrCreate(actor);
+        return new ConnectionRef(connection.tenantId(), connection.id(), loginSlot);
+    }
+
+    /**
+     * Adopts a shadow login's already-confirmed-good session (see {@code
+     * PreAuthLoginService#finishIfReady}'s identity check, which must pass before this is ever
+     * called) as this account's real, live session -- the one and only point at which a shadow
+     * attempt is allowed to affect the account's own connection row or displace whatever session
+     * it already had.
+     */
+    @Transactional
+    public void promoteShadowLogin(AuthenticatedActor actor, UUID loginSlot, LoginState confirmedState) {
+        TelegramConnection connection = getOrCreate(actor);
+        this.gateway.promoteSession(new ConnectionRef(connection.tenantId(), connection.id(), loginSlot),
+                connection.tenantId());
+        this.shadowStates.remove(loginSlot);
+        persist(actor, connection, confirmedState);
+    }
+
+    /**
+     * Discards an abandoned or rejected shadow login attempt -- an explicit {@code
+     * /login/cancel}, an identity mismatch, or a duplicate-identity rollback -- without touching
+     * whatever real session this account already has, if any. See {@link #discardAbandonedSignup}
+     * for the sibling case (a brand-new tenant abandoned before any login at all) this shares its
+     * gateway-level implementation with.
+     */
+    public void discardShadowLogin(UUID loginSlot) {
+        this.shadowStates.remove(loginSlot);
+        this.gateway.discardTenant(loginSlot);
     }
 
     /**

@@ -152,10 +152,10 @@ class AccessPolicyTests extends AbstractIntegrationTest {
     /**
      * Security-audit finding SEC-R03: the freshness check above only ever fires once staleness
      * has accumulated for a full budget window -- it says nothing about a connection known to be
-     * down *right now* (e.g. mid re-login, after {@code PreAuthLoginService#begin}'s {@code
-     * prepareForFreshLogin} tears it down before re-authenticating). A chat must stop being
-     * readable the instant its tenant's Telegram connection is not READY, not only after the
-     * freshness budget has separately expired.
+     * down *right now* (a remote logout, a ban, or any other loss of authorization {@code
+     * TelegramConnectionService#applyAsyncStateChange} observes). A chat must stop being readable
+     * the instant its tenant's Telegram connection is not READY, not only after the freshness
+     * budget has separately expired.
      */
     @Test
     void blocksReadsWhileTheTenantsTelegramConnectionIsNotReady() {

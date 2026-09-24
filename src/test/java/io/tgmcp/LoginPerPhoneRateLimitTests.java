@@ -16,15 +16,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Security-audit finding SEC-R02: an unauthenticated {@code POST /login/start} for an existing
- * phone number tears down that account's Telegram connection ({@code
- * PreAuthLoginService#begin} -&gt; {@code prepareForFreshLogin}) before any proof of ownership.
- * The pre-existing IP-keyed budget on this endpoint cannot bound how often any single *number*
- * is disrupted this way, since an attacker who knows the victim's number can simply spread
- * attempts across source addresses (or wait out the per-IP window). A second, phone-keyed
- * budget (see {@code WebSecurityConfig#managementUiFilterChain}) closes that gap: deliberately
- * exercised here with no shared session or IP context between calls, since a real attack would
- * not share either. A tiny per-test budget, set via {@link TestPropertySource}, makes the limit
- * reachable without looping dozens of times.
+ * phone number starts a real Telegram login attempt against that number (a code or SMS Telegram
+ * itself sends), and the pre-existing IP-keyed budget on this endpoint cannot bound how often any
+ * single *number* is targeted this way, since an attacker who knows the victim's number can
+ * simply spread attempts across source addresses (or wait out the per-IP window). A second,
+ * phone-keyed budget (see {@code WebSecurityConfig#managementUiFilterChain}) closes that gap:
+ * deliberately exercised here with no shared session or IP context between calls, since a real
+ * attack would not share either. A tiny per-test budget, set via {@link TestPropertySource},
+ * makes the limit reachable without looping dozens of times.
+ *
+ * <p>Security-audit finding H1: such an attempt no longer disrupts the number's own existing
+ * Telegram connection the way it originally could ({@code PreAuthLoginService#begin} used to call
+ * a {@code prepareForFreshLogin} that tore it down before any proof of ownership) -- this budget
+ * remains valuable regardless, to bound how often an uninvolved number can be made to receive
+ * unsolicited Telegram codes at all.
  */
 @AutoConfigureMockMvc
 @TestPropertySource(properties = "tgmcp.abuse-controls.login-attempts-per-hour-per-phone=2")

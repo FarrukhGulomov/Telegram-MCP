@@ -111,13 +111,16 @@ public class WebSecurityConfig {
                 properties.abuseControls().selfRegistrationsPerHourPerIp(), java.time.Duration.ofHours(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/start", loginStartLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
-        // Security-audit finding SEC-R02: a returning phone number's fresh-login attempt tears
-        // down its existing Telegram connection (PreAuthLoginService#begin ->
-        // prepareForFreshLogin) before proving ownership of that number. The IP-keyed budget
-        // above cannot bound how often any one *number* gets disrupted this way -- an attacker
-        // who knows a victim's number can rotate source addresses freely. This second budget is
-        // keyed by the normalized phone number itself, so the same number can only be
-        // (re)connected this often regardless of how many different addresses attempt it.
+        // Security-audit finding SEC-R02: a returning phone number's fresh-login attempt sends
+        // that number a real Telegram login code. The IP-keyed budget above cannot bound how
+        // often any one *number* is targeted this way -- an attacker who knows a victim's number
+        // can rotate source addresses freely. This second budget is keyed by the normalized phone
+        // number itself, so the same number can only be attempted this often regardless of how
+        // many different addresses attempt it. (Security-audit finding H1: this used to also
+        // bound how often such an attempt could tear down the number's existing Telegram
+        // connection before proving ownership of it -- PreAuthLoginService#begin no longer does
+        // that at all, see TelegramConnectionService#beginShadowLogin, but the unsolicited-code
+        // concern alone still justifies this budget.)
         io.tgmcp.ratelimit.RateLimiter loginStartPerPhoneLimiter = new io.tgmcp.ratelimit.RateLimiter(
                 properties.abuseControls().loginAttemptsPerHourPerPhone(), java.time.Duration.ofHours(1), clock);
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/login/start", loginStartPerPhoneLimiter,

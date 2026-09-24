@@ -114,6 +114,53 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
     }
 
     /**
+     * Security-audit finding H1: starting a fresh login for an already-registered account used
+     * to disconnect whatever live session that account already held immediately -- before this
+     * request had proven it was the real account owner at all. Anyone who merely knew a victim's
+     * phone number could disrupt their live session and pause every chat they had activated,
+     * with no login of their own ever needing to succeed. Asserts the account's connection stays
+     * READY and its chat stays ACTIVE throughout an in-progress re-login attempt, and that
+     * cancelling that attempt (never completed) changes nothing either.
+     */
+    @Test
+    void aFreshLoginAttemptOnAnExistingAccountNeverDisturbsItsLiveSessionUnlessAndUntilConfirmed() throws Exception {
+        Fixtures.Team team = this.fixtures.team("h1-existing");
+        Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Live chat", "h1_live_chat");
+        this.fixtures.participants(team, chat, Fixtures.ENGINEERING_MEMBERS);
+        this.fixtures.activation(team, chat, ActivationState.ACTIVE,
+                this.clock.instant().minusSeconds(3600), this.clock.instant().plusSeconds(3600), 365);
+
+        UUID tenantId = team.tenant().id();
+        UUID userId = team.user().id();
+
+        // Someone else, knowing only this account's phone number, starts a fresh login attempt.
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
+                .andReturn();
+        MockHttpSession attackerSession = (MockHttpSession) started.getRequest().getSession(false);
+
+        // The real account's own connection and chat must be completely undisturbed -- not even
+        // paused -- by the mere existence of this in-progress attempt.
+        assertThat(this.connections.findByOwner(tenantId, userId).orElseThrow().status())
+                .as("starting someone else's fresh login must not touch this account's own live session")
+                .isEqualTo(LoginStage.READY);
+        assertThat(this.activations.find(tenantId, chat.id()).orElseThrow().state())
+                .as("starting someone else's fresh login must not pause this account's own chats")
+                .isEqualTo(ActivationState.ACTIVE);
+
+        // The attacker gives up without ever completing the login.
+        this.mockMvc.perform(post("/login/cancel").session(attackerSession).with(csrf()))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(this.connections.findByOwner(tenantId, userId).orElseThrow().status())
+                .as("cancelling an abandoned re-login attempt must not touch the real session either")
+                .isEqualTo(LoginStage.READY);
+        assertThat(this.activations.find(tenantId, chat.id()).orElseThrow().state())
+                .isEqualTo(ActivationState.ACTIVE);
+    }
+
+    /**
      * Regression for a real production incident: TDLib's own {@code getMe().phone_number} is
      * bare digits with no "+", and once a real login confirms an account's identity that value
      * overwrites {@code app_users.phone_number} (see {@link

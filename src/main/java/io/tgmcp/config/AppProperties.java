@@ -188,16 +188,22 @@ public record AppProperties(@DefaultValue Telegram telegram,
                                  * lets one attacker who knows a victim's phone number (rotating
                                  * source IPs, or just waiting out the per-IP window) repeatedly
                                  * call {@code POST /login/start} for that number, each attempt
-                                 * tearing down the victim's existing Telegram connection via
-                                 * {@code PreAuthLoginService#begin}'s {@code
-                                 * prepareForFreshLogin} before any proof of ownership. Keyed by
-                                 * the normalized phone number itself rather than the caller's IP,
-                                 * this bounds how often any single number's connection can be
-                                 * disrupted at all, regardless of how many different addresses an
+                                 * sending that number a real, unsolicited Telegram login code.
+                                 * Keyed by the normalized phone number itself rather than the
+                                 * caller's IP, this bounds how often any single number can be
+                                 * targeted at all, regardless of how many different addresses an
                                  * attacker spreads attempts across. Deliberately a small
                                  * long-window budget: a real device retrying its own login within
-                                 * a minute or two is common, but sustained repeated teardown of
-                                 * the same number many times an hour is not.
+                                 * a minute or two is common, but sustained repeated attempts
+                                 * against the same number many times an hour is not.
+                                 *
+                                 * <p>Security-audit finding H1: this budget originally also bounded
+                                 * how often such an attempt could disrupt the number's own existing
+                                 * Telegram connection ({@code PreAuthLoginService#begin}'s {@code
+                                 * prepareForFreshLogin} tore it down before any proof of
+                                 * ownership) -- that disruption is gone now (see {@code
+                                 * TelegramConnectionService#beginShadowLogin}), but the unsolicited-
+                                 * code concern above still justifies keeping this budget.
                                  */
                                 @DefaultValue("5") int loginAttemptsPerHourPerPhone,
                                 /**

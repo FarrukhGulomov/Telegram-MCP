@@ -76,9 +76,18 @@ public class RoutedTdlibTelegramGateway implements TelegramGateway {
         this.receiveLoop.start();
     }
 
-    private TdlibTelegramGateway forTenant(UUID tenantId) {
-        return this.gatewaysByTenant.computeIfAbsent(tenantId, id -> {
-            log.info("Starting a new TDLib client for tenant {}", id);
+    /**
+     * Security-audit finding H1: keyed by {@link ConnectionRef#routingKey()}, not {@code
+     * tenantId} directly -- for an ordinary call that key is the same thing (the compact
+     * constructor {@link ConnectionRef} defaults it that way), but a shadow login attempt for an
+     * already-registered account (see that field's own javadoc) deliberately routes here under a
+     * freshly minted key instead, so it gets its own brand-new native client and on-disk
+     * directory rather than reusing -- and disturbing -- whatever client already lives at that
+     * account's real tenant id.
+     */
+    private TdlibTelegramGateway forRoutingKey(UUID routingKey) {
+        return this.gatewaysByTenant.computeIfAbsent(routingKey, id -> {
+            log.info("Starting a new TDLib client for routing key {}", id);
             AppProperties.Telegram tenantConfig = this.baseConfig
                     .withDatabaseDirectory(this.baseConfig.databaseDirectory() + "/" + id);
             TdlibClient client = new NativeTdlibClient(this.receiveLoop, this.objectMapper,
@@ -93,91 +102,138 @@ public class RoutedTdlibTelegramGateway implements TelegramGateway {
     }
 
     /**
-     * Security-audit finding H3: {@link #forTenant} above never evicts a real tenant's client --
-     * a documented, accepted per-tenant cost for an account actually using this deployment. A
-     * tenant reaped as an abandoned signup ({@link io.tgmcp.tenancy.AbandonedSignupReaper}) or
-     * discarded on an explicit {@code /login/cancel} for a brand-new account is different: its
-     * database row is gone, so its client is pure waste from this point on, and an anonymous
-     * caller could otherwise keep creating more of them without limit. Removes it from the
-     * routing map (so no later call can reach it) and closes it (releasing the JVM-side
-     * resources {@link TdlibTelegramGateway#close} describes) before deleting its on-disk
-     * session directory.
+     * Security-audit finding H3: {@link #forRoutingKey} above never evicts a real tenant's
+     * client -- a documented, accepted per-tenant cost for an account actually using this
+     * deployment. A tenant reaped as an abandoned signup ({@link
+     * io.tgmcp.tenancy.AbandonedSignupReaper}) or discarded on an explicit {@code /login/cancel}
+     * for a brand-new account is different: its database row is gone, so its client is pure
+     * waste from this point on, and an anonymous caller could otherwise keep creating more of
+     * them without limit. Removes it from the routing map (so no later call can reach it) and
+     * closes it (releasing the JVM-side resources {@link TdlibTelegramGateway#close} describes)
+     * before deleting its on-disk session directory.
+     *
+     * <p>Security-audit finding H1: the same method also cleans up an abandoned or rejected
+     * <em>shadow</em> login attempt (see {@link ConnectionRef#routingKey()}), called with the
+     * shadow's routing key in place of a real tenant id -- the two are equally "some opaque key
+     * nothing will ever finish or reclaim" from this method's point of view. That reuse is why
+     * this asks the live instance itself for its own directory rather than only ever recomputing
+     * one from the key: after a {@link #promoteSession}, the tenant's own key points at an
+     * instance whose actual on-disk directory is still named after whatever routing key first
+     * created it, not the tenant id it was promoted to.
      */
     @Override
-    public void discardTenant(UUID tenantId) {
-        TdlibTelegramGateway gateway = this.gatewaysByTenant.remove(tenantId);
+    public void discardTenant(UUID routingKey) {
+        TdlibTelegramGateway gateway = this.gatewaysByTenant.remove(routingKey);
         if (gateway != null) {
-            gateway.close();
+            closeAndDelete(routingKey, gateway);
         }
-        File directory = new File(this.baseConfig.databaseDirectory(), tenantId.toString());
-        if (!FileSystemUtils.deleteRecursively(directory)) {
-            log.warn("Could not fully delete TDLib session directory for discarded tenant {} at {}",
-                    tenantId, directory);
+        File conventionalDirectory = new File(this.baseConfig.databaseDirectory(), routingKey.toString());
+        if (conventionalDirectory.exists() && !FileSystemUtils.deleteRecursively(conventionalDirectory)) {
+            log.warn("Could not fully delete TDLib session directory for discarded session {} at {}",
+                    routingKey, conventionalDirectory);
+        }
+    }
+
+    private void closeAndDelete(UUID routingKey, TdlibTelegramGateway gateway) {
+        File ownDirectory = new File(gateway.databaseDirectory());
+        gateway.close();
+        if (!FileSystemUtils.deleteRecursively(ownDirectory)) {
+            log.warn("Could not fully delete TDLib session directory for discarded session {} at {}",
+                    routingKey, ownDirectory);
+        }
+    }
+
+    /**
+     * Security-audit finding H1: promotes a shadow login's already-open native client to become
+     * the live client for {@code targetRoutingKey} -- a pure re-keying of {@link
+     * #gatewaysByTenant}, touching no TDLib state at all. Whatever client previously lived at
+     * {@code targetRoutingKey} (the account's own now-superseded session, if it had one) is
+     * closed and its directory deleted, exactly as {@link #discardTenant} would.
+     *
+     * <p>Deliberately does not rename the promoted client's on-disk directory to match {@code
+     * targetRoutingKey}: TDLib was already told its {@code database_directory} once, at {@code
+     * setTdlibParameters} time, and keeps using that exact path for as long as this process
+     * runs -- renaming the directory out from under a native client that may still have it open
+     * risks it silently failing to find files it expects to be there. The directory keeps
+     * whatever name the shadow attempt's own routing key gave it for the rest of this client's
+     * life; {@link #discardTenant} already knows to ask a live instance for its own directory
+     * rather than assume one from its current map key, which is what makes that safe.
+     */
+    @Override
+    public void promoteSession(ConnectionRef shadowRef, UUID targetRoutingKey) {
+        TdlibTelegramGateway shadow = this.gatewaysByTenant.remove(shadowRef.routingKey());
+        if (shadow == null) {
+            throw new IllegalStateException(
+                    "No pending login session found to promote for routing key " + shadowRef.routingKey());
+        }
+        TdlibTelegramGateway previous = this.gatewaysByTenant.put(targetRoutingKey, shadow);
+        if (previous != null) {
+            closeAndDelete(targetRoutingKey, previous);
         }
     }
 
     @Override
     public LoginState beginLogin(ConnectionRef ref, LoginMethod method, String phoneNumber) {
-        return forTenant(ref.tenantId()).beginLogin(ref, method, phoneNumber);
+        return forRoutingKey(ref.routingKey()).beginLogin(ref, method, phoneNumber);
     }
 
     @Override
     public LoginState submitCode(ConnectionRef ref, String code) {
-        return forTenant(ref.tenantId()).submitCode(ref, code);
+        return forRoutingKey(ref.routingKey()).submitCode(ref, code);
     }
 
     @Override
     public LoginState resendCode(ConnectionRef ref) {
-        return forTenant(ref.tenantId()).resendCode(ref);
+        return forRoutingKey(ref.routingKey()).resendCode(ref);
     }
 
     @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
-        return forTenant(ref.tenantId()).submitPassword(ref, password);
+        return forRoutingKey(ref.routingKey()).submitPassword(ref, password);
     }
 
     @Override
     public LoginState currentState(ConnectionRef ref) {
-        return forTenant(ref.tenantId()).currentState(ref);
+        return forRoutingKey(ref.routingKey()).currentState(ref);
     }
 
     @Override
     public void onStateChange(ConnectionRef ref, Consumer<LoginState> listener) {
-        forTenant(ref.tenantId()).onStateChange(ref, listener);
+        forRoutingKey(ref.routingKey()).onStateChange(ref, listener);
     }
 
     @Override
     public void disconnect(ConnectionRef ref) {
-        forTenant(ref.tenantId()).disconnect(ref);
+        forRoutingKey(ref.routingKey()).disconnect(ref);
     }
 
     @Override
     public List<RemoteChat> listAvailableChats(ConnectionRef ref) {
-        return forTenant(ref.tenantId()).listAvailableChats(ref);
+        return forRoutingKey(ref.routingKey()).listAvailableChats(ref);
     }
 
     @Override
     public RemoteMembership listParticipants(ConnectionRef ref, long tgChatId) {
-        return forTenant(ref.tenantId()).listParticipants(ref, tgChatId);
+        return forRoutingKey(ref.routingKey()).listParticipants(ref, tgChatId);
     }
 
     @Override
     public RemoteMessagePage fetchMessages(ConnectionRef ref, long tgChatId, MessageWindow window) {
-        return forTenant(ref.tenantId()).fetchMessages(ref, tgChatId, window);
+        return forRoutingKey(ref.routingKey()).fetchMessages(ref, tgChatId, window);
     }
 
     @Override
     public List<RemoteMessage> fetchRevisions(ConnectionRef ref, long tgChatId, Instant changedSince, int limit) {
-        return forTenant(ref.tenantId()).fetchRevisions(ref, tgChatId, changedSince, limit);
+        return forRoutingKey(ref.routingKey()).fetchRevisions(ref, tgChatId, changedSince, limit);
     }
 
     @Override
     public Optional<String> messageLink(ConnectionRef ref, RemoteChat chat, long tgMessageId) {
-        return forTenant(ref.tenantId()).messageLink(ref, chat, tgMessageId);
+        return forRoutingKey(ref.routingKey()).messageLink(ref, chat, tgMessageId);
     }
 
     @Override
     public Optional<DownloadedMedia> downloadMessageMedia(ConnectionRef ref, String mediaRemoteFileId) {
-        return forTenant(ref.tenantId()).downloadMessageMedia(ref, mediaRemoteFileId);
+        return forRoutingKey(ref.routingKey()).downloadMessageMedia(ref, mediaRemoteFileId);
     }
 }
