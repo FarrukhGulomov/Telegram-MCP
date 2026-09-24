@@ -398,7 +398,13 @@ public class McpTools {
                 return this.responses.success(unavailable(chatId, messageId,
                         "This message's media reference no longer resolves -- deleted upstream, or too old."));
             }
-            if (media.get().bytes().length > this.limits.maxResponseBytes()) {
+            // Security-audit finding L1: what actually goes over the wire is the base64-encoded
+            // string below, not the raw bytes -- about a third larger. Comparing the raw byte
+            // count against the cap let a response through whose real size exceeded it by up to
+            // that margin. Encoding once here and reusing the same string for both the check and
+            // the response also avoids encoding the same bytes twice.
+            String base64 = Base64.getEncoder().encodeToString(media.get().bytes());
+            if (base64.length() > this.limits.maxResponseBytes()) {
                 return this.responses.success(unavailable(chatId, messageId,
                         "This preview exceeds the response size limit and cannot be returned."));
             }
@@ -415,8 +421,7 @@ public class McpTools {
 
             McpSchema.CallToolResult structured = this.responses.success(payload);
             List<McpSchema.Content> content = new ArrayList<>(structured.content());
-            content.add(new McpSchema.ImageContent(null,
-                    Base64.getEncoder().encodeToString(media.get().bytes()), media.get().mimeType()));
+            content.add(new McpSchema.ImageContent(null, base64, media.get().mimeType()));
             return McpSchema.CallToolResult.builder()
                     .content(content)
                     .structuredContent(structured.structuredContent())
