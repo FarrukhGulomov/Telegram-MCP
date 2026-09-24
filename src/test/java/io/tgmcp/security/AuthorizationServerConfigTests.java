@@ -47,7 +47,7 @@ class AuthorizationServerConfigTests {
                 retiringKeys);
         AppProperties.Demo demo = new AppProperties.Demo(false, "demo", "Demo", List.of(),
                 false);
-        return new AppProperties(telegram, null, null, null, secrets, demo, null, null, null);
+        return new AppProperties(telegram, null, null, null, secrets, demo, null, null, null, null);
     }
 
     private static KeyPair freshRsaKeyPair() throws Exception {

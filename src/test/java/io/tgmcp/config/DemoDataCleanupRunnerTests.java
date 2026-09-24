@@ -46,7 +46,7 @@ class DemoDataCleanupRunnerTests extends AbstractIntegrationTest {
                 "./tdlib-data", false, true);
         AppProperties.Demo demo = new AppProperties.Demo(false, "demo", "Demo",
                 List.of(), cleanupEnabled);
-        return new AppProperties(telegram, null, null, null, null, demo, null, null, null);
+        return new AppProperties(telegram, null, null, null, null, demo, null, null, null, null);
     }
 
     private RegisteredClient registerClient(String clientId) {

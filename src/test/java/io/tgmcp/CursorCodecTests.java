@@ -51,6 +51,7 @@ class CursorCodecTests {
                 new AppProperties.Demo(false, "demo", "Demo", List.of(), false),
                 null,
                 null,
+                null,
                 null);
         return new CursorCodec(properties, this.clock);
     }

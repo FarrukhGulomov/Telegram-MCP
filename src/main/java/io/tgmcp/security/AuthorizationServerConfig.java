@@ -274,10 +274,15 @@ public class AuthorizationServerConfig {
      *
      * <p>Security-audit finding SEC-R06: a real authorize request's query string and form body
      * can carry values -- an authorization code, a state or nonce originating from the client --
-     * that no diagnostic needs printed to a production log. Gated to run only where {@link
-     * io.tgmcp.config.ProductionSafetyValidator} would already refuse to start on real-account
-     * use, i.e. never against a real Telegram account, rather than deleting it outright: the hypothesis it exists
-     * to test can recur against ChatGPT or another connector in a demo/staging deployment.
+     * that no diagnostic needs printed to a production log. Never enabled against a real
+     * Telegram account, rather than deleting it outright: the hypothesis it exists to test can
+     * recur against ChatGPT or another connector in a demo/staging deployment.
+     *
+     * <p>Security-audit finding L4: never enabled by default either way, real account or not --
+     * {@link io.tgmcp.config.AppProperties.Diagnostics#rawOAuthLoggingEnabled()} must be turned
+     * on explicitly for the one troubleshooting session that actually needs it, since {@link
+     * io.tgmcp.config.ProductionSafetyValidator} refusing to start on real-account use still left
+     * this logging on by default for every MOCK deployment, a public demo included.
      */
     private static final class RawOAuth2AuthorizeRequestLogger extends OncePerRequestFilter {
         private final boolean enabled;
@@ -395,7 +400,13 @@ public class AuthorizationServerConfig {
         http.addFilterBefore(new PreAuthRateLimitFilter("POST", "/oauth2/register", registrationLimiter),
                 org.springframework.security.web.context.SecurityContextHolderFilter.class);
 
-        boolean rawOAuthDiagnosticsEnabled = !properties.telegram().realAccountAccessAuthorized();
+        // Security-audit finding L4: realAccountAccessAuthorized() alone was true for every MOCK
+        // deployment -- a public demo included -- not only a developer's own local
+        // troubleshooting session. Diagnostics.rawOAuthLoggingEnabled() must now also be
+        // explicitly opted into (off by default); the real-account check remains an
+        // unconditional second gate, never overridable by the new flag.
+        boolean rawOAuthDiagnosticsEnabled = properties.diagnostics().rawOAuthLoggingEnabled()
+                && !properties.telegram().realAccountAccessAuthorized();
         http.securityMatcher(endpoints)
                 .addFilterBefore(new RawOAuth2AuthorizeRequestLogger(rawOAuthDiagnosticsEnabled),
                         SecurityContextHolderFilter.class)

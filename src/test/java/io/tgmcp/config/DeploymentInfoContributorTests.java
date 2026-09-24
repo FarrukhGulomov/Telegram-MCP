@@ -26,7 +26,8 @@ class DeploymentInfoContributorTests {
                 new AppProperties.Demo(false, "demo", "Demo", List.of(), false),
                 new AppProperties.AbuseControls(10, 20, 5, 30, 5, 10, 5, Duration.ofHours(1)),
                 new AppProperties.ForwardedHeaders(List.of()),
-                new AppProperties.PlatformAdmin(List.of()));
+                new AppProperties.PlatformAdmin(List.of()),
+                new AppProperties.Diagnostics(false));
     }
 
     @Test

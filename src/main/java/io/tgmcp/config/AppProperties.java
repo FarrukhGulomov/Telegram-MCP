@@ -20,7 +20,21 @@ public record AppProperties(@DefaultValue Telegram telegram,
                             @DefaultValue Demo demo,
                             @DefaultValue AbuseControls abuseControls,
                             @DefaultValue ForwardedHeaders forwardedHeaders,
-                            @DefaultValue PlatformAdmin platformAdmin) {
+                            @DefaultValue PlatformAdmin platformAdmin,
+                            @DefaultValue Diagnostics diagnostics) {
+
+    /**
+     * Security-audit finding L4: {@code AuthorizationServerConfig}'s raw-OAuth-request loggers
+     * were gated only on {@link Telegram#realAccountAccessAuthorized()} being false -- true for
+     * every MOCK deployment, a public demo included, not only a developer's own local
+     * troubleshooting session. Off by default everywhere; a developer opts in explicitly (e.g.
+     * a local-only property override) for the one session where the diagnostic is actually
+     * needed. {@link Telegram#realAccountAccessAuthorized()} remains an unconditional second
+     * gate in {@code AuthorizationServerConfig} regardless of this flag: raw OAuth request
+     * bodies must never be logged once a real Telegram account is in play, full stop.
+     */
+    public record Diagnostics(@DefaultValue("false") boolean rawOAuthLoggingEnabled) {
+    }
 
     public record Telegram(@DefaultValue("MOCK") TelegramAdapterKind adapter,
                            /** TDLib api_id / api_hash. Required only for the TDLIB adapter. */

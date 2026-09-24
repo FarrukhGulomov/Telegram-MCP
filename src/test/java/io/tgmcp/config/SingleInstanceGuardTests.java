@@ -42,7 +42,8 @@ class SingleInstanceGuardTests {
                 new AppProperties.Demo(false, "demo", "Demo", java.util.List.of(), false),
                 new AppProperties.AbuseControls(10, 20, 5, 30, 5, 10, 5, java.time.Duration.ofHours(1)),
                 new AppProperties.ForwardedHeaders(java.util.List.of()),
-                new AppProperties.PlatformAdmin(java.util.List.of()));
+                new AppProperties.PlatformAdmin(java.util.List.of()),
+                new AppProperties.Diagnostics(false));
     }
 
     @Test
