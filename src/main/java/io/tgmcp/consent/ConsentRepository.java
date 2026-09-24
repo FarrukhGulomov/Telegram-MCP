@@ -81,6 +81,32 @@ public class ConsentRepository {
                 .update();
     }
 
+    /**
+     * Security-audit finding H6: whether this participant's <em>most recent</em> consent record
+     * in this chat is revoked -- deliberately the latest one, not "any ever revoked", so a
+     * participant who was revoked and later gave consent again is not blocked forever by their
+     * own earlier revocation. {@code false} when there is no record at all, matching this
+     * deployment's operator decision that an absent consent record blocks nothing on its own
+     * (see {@link ConsentService#hasValidConsent}) -- this method exists to enforce the one
+     * thing that decision never touched: an <em>explicit</em> revocation.
+     */
+    public boolean latestConsentIsRevoked(UUID tenantId, UUID chatId, long participantTgUserId) {
+        return this.jdbc.sql("""
+                        SELECT revoked_at IS NOT NULL AS revoked
+                          FROM consent_records
+                         WHERE tenant_id = :tenantId AND chat_id = :chatId
+                           AND participant_tg_user_id = :participant
+                         ORDER BY granted_at DESC
+                         LIMIT 1
+                        """)
+                .param("tenantId", tenantId)
+                .param("chatId", chatId)
+                .param("participant", participantTgUserId)
+                .query((rs, rowNum) -> rs.getBoolean("revoked"))
+                .optional()
+                .orElse(false);
+    }
+
     public int revokeChat(UUID tenantId, UUID chatId, String reason) {
         return jdbc.sql("""
                         UPDATE consent_records

@@ -220,6 +220,34 @@ class RetentionAndRevocationTests extends AbstractIntegrationTest {
     }
 
     /**
+     * External audit finding H6: since the operator's 2026-09-20 decision to stop requiring
+     * consent (commit c508f30), {@code ConsentService.authorEligible} always returned {@code
+     * true} for a human sender -- including one whose consent had just been explicitly revoked
+     * through {@code /consent/revoke} above. That purge was a one-time snapshot: revoking Dana
+     * deleted her *existing* messages, but nothing stopped a *later* sync (the chat itself stays
+     * ACTIVE; {@code revokeParticipant} alone never pauses it) from storing a brand-new message
+     * from that same, still-revoked sender right back in. Proves a message she sends after being
+     * revoked is never (re-)stored, independent of the general consent-gate decision.
+     */
+    @Test
+    void revokedParticipantsNewMessagesAreNeverStoredEvenAfterTheChatStaysActive() {
+        Fixtures.ReadyChat chat = synced();
+        this.consentService.revokeParticipant(chat.team().actor(), chat.chat().id(), SyntheticDataset.DANA,
+                "withdrew consent");
+
+        mockGateway().appendMessage(SyntheticDataset.ENGINEERING_CHAT, SyntheticDataset.DANA, "Dana",
+                "a message sent after being revoked");
+        this.syncService.sync(chat.team().tenant().id(), chat.chat().id());
+
+        long danaMessagesAfterResync = this.jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM messages WHERE chat_id = ? AND sender_tg_user_id = ?",
+                Long.class, chat.chat().id(), SyntheticDataset.DANA);
+        assertThat(danaMessagesAfterResync)
+                .as("a revoked participant's new messages must never be (re-)stored")
+                .isZero();
+    }
+
+    /**
      * The race that matters: consent is withdrawn after the rows have been read but before the
      * response is built. Spying on the repository makes that ordering deterministic instead of
      * hoping to hit it by timing.

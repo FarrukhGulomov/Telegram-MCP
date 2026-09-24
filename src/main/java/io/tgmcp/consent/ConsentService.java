@@ -155,6 +155,17 @@ public class ConsentService {
         if (knownBot) {
             return true;
         }
+        // Security-audit finding H6: hasValidConsent() below is an unconditional true (the
+        // operator's own 2026-09-20 decision -- see its javadoc), but that decision was about no
+        // longer *requiring* consent to exist, never about ignoring an *explicit* revocation
+        // once one has actually been recorded through /consent/revoke. Without this check, a
+        // chat revoked for one participant and later resumed would start storing and serving
+        // that same participant's new messages again -- the "Revoke" action's UI promise
+        // ("ends access for good") silently stopped being true the moment consent stopped
+        // gating anything else.
+        if (this.consentRepository.latestConsentIsRevoked(tenantId, chatId, senderTgUserId)) {
+            return false;
+        }
         return hasValidConsent(tenantId, chatId, senderTgUserId, contextRevision);
     }
 
