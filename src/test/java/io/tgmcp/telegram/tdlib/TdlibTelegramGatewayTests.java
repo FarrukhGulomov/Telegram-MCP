@@ -1025,6 +1025,7 @@ class TdlibTelegramGatewayTests {
         this.client.enqueue("""
                 {"@type":"file","id":55,"local":{"is_downloading_completed":true,"path":"%s"}}"""
                 .formatted(file.toString()));
+        this.client.enqueue("{\"@type\":\"ok\"}");
 
         Optional<DownloadedMedia> media = this.gateway.downloadMessageMedia(this.ref, "remote-id-1");
 
@@ -1032,6 +1033,8 @@ class TdlibTelegramGatewayTests {
         assertThat(media.get().bytes()).isEqualTo(bytes);
         assertThat(media.get().mimeType()).isEqualTo("image/jpeg");
         assertThat(this.client.timesSent("downloadFile")).isZero();
+        // Security-audit finding: the local copy must not be left on disk once served.
+        assertThat(this.client.timesSent("deleteFile")).isEqualTo(1);
     }
 
     @Test
@@ -1048,6 +1051,7 @@ class TdlibTelegramGatewayTests {
         this.client.enqueue("""
                 {"@type":"file","id":77,"local":{"is_downloading_completed":true,"path":"%s"}}"""
                 .formatted(file.toString()));
+        this.client.enqueue("{\"@type\":\"ok\"}");
 
         Optional<DownloadedMedia> media = this.gateway.downloadMessageMedia(this.ref, "remote-id-2");
 
@@ -1055,6 +1059,26 @@ class TdlibTelegramGatewayTests {
         assertThat(media.get().bytes()).isEqualTo(bytes);
         assertThat(this.client.timesSent("downloadFile")).isEqualTo(1);
         assertThat(this.client.timesSent("getFile")).isEqualTo(2);
+        assertThat(this.client.timesSent("deleteFile")).isEqualTo(1);
+    }
+
+    @Test
+    void deletesTheLocalFileEvenWhenTdlibDoesNotAcknowledgeTheDeleteRequest(@TempDir Path tempDir) throws IOException {
+        // Security-audit finding: a delete failure must never take away bytes the caller already
+        // received -- it is a best-effort cleanup, not a condition of success.
+        Path file = tempDir.resolve("photo.jpg");
+        byte[] bytes = {5, 6, 7};
+        Files.write(file, bytes);
+
+        this.client.enqueue("""
+                {"@type":"file","id":99,"local":{"is_downloading_completed":true,"path":"%s"}}"""
+                .formatted(file.toString()));
+        this.client.enqueueError(400, "Not Found");
+
+        Optional<DownloadedMedia> media = this.gateway.downloadMessageMedia(this.ref, "remote-id-3");
+
+        assertThat(media).isPresent();
+        assertThat(media.get().bytes()).isEqualTo(bytes);
     }
 
     @Test

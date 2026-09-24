@@ -606,6 +606,20 @@ public class TdlibTelegramGateway implements TelegramGateway {
         }
     }
 
+    /**
+     * Security-audit finding H3: unlike {@link #disconnect}, which ends a session gracefully
+     * through Telegram's own login state machine (and requires an already-claimed owner), this
+     * is for a tenant that is being discarded outright -- {@link RoutedTdlibTelegramGateway}
+     * calls it once it has already removed this instance from its own tenant map, so nothing
+     * here needs to negotiate ownership or wait for TDLib's asynchronous teardown; it only needs
+     * to stop this JVM holding onto the native client's resources (its receive-loop
+     * registration, its executor, its pending request futures) for a tenant that no longer
+     * exists at all.
+     */
+    void close() {
+        this.client.close();
+    }
+
     // --- read-only data ---------------------------------------------------------------
 
     @Override
@@ -1039,8 +1053,8 @@ public class TdlibTelegramGateway implements TelegramGateway {
             // ordinary, expected outcome for old media, not a transient failure to retry.
             return Optional.empty();
         }
+        int fileId = file.path("id").asInt();
         if (!file.path("local").path("is_downloading_completed").asBoolean(false)) {
-            int fileId = file.path("id").asInt();
             this.client.request("downloadFile", Map.of(
                     "file_id", fileId, "priority", 1, "offset", 0, "limit", 0, "synchronous", false));
             file = awaitDownloadCompletion(fileId);
@@ -1057,6 +1071,26 @@ public class TdlibTelegramGateway implements TelegramGateway {
         }
         catch (IOException ex) {
             return Optional.empty();
+        }
+        finally {
+            // Security-audit finding: this call used to leave every downloaded photo/thumbnail
+            // sitting in the TDLib files directory indefinitely -- get_message_media's own tool
+            // description promises nothing is stored, and revoke/delete-data only ever removed
+            // database rows, never this directory. TDLib's own deleteFile removes the local copy
+            // (cancelling an in-flight download if one were somehow still running) without
+            // touching the remote message itself; a failure here is logged, not propagated,
+            // since the caller has already received the bytes it asked for and a stale file
+            // remains a cleanliness gap, not a reason to fail this call.
+            deleteLocalFileBestEffort(fileId);
+        }
+    }
+
+    private void deleteLocalFileBestEffort(int fileId) {
+        try {
+            this.client.request("deleteFile", Map.of("file_id", fileId));
+        }
+        catch (TelegramGatewayException ex) {
+            log.warn("Failed to delete local copy of downloaded file {} after serving it", fileId, ex);
         }
     }
 
