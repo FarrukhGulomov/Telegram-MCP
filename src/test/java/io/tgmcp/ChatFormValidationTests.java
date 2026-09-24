@@ -1,7 +1,10 @@
 package io.tgmcp;
 
+import java.util.List;
+
 import io.tgmcp.chat.Chat;
 import io.tgmcp.chat.ChatActivationRepository;
+import io.tgmcp.consent.ConsentService;
 import io.tgmcp.support.AbstractIntegrationTest;
 import io.tgmcp.support.Fixtures;
 import io.tgmcp.telegram.mock.SyntheticDataset;
@@ -37,6 +40,9 @@ class ChatFormValidationTests extends AbstractIntegrationTest {
 
     @Autowired
     private ChatActivationRepository activations;
+
+    @Autowired
+    private ConsentService consentService;
 
     private MockHttpSession signIn(Fixtures.Team team) throws Exception {
         MockHttpSession session = signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
@@ -112,5 +118,49 @@ class ChatFormValidationTests extends AbstractIntegrationTest {
                         "One of the selected providers is not recognized. Please use only the checkboxes provided."));
 
         assertThat(this.activations.find(team.tenant().id(), chat.id())).isEmpty();
+    }
+
+    /**
+     * Security-audit finding L5: nothing previously stopped a hand-crafted {@code
+     * /chats/{id}/consent/all} submission from recording consent for a {@code
+     * participantTgUserId} that is not actually a participant of this chat at all -- the form
+     * only ever renders one input group per real row, but a direct POST is free to send
+     * anything. Asserts a genuine participant's row is still recorded while a fabricated id
+     * alongside it is rejected with a friendly error and never reaches the database.
+     */
+    @Test
+    void consentAllRejectsAParticipantIdThatIsNotActuallyInTheChat() throws Exception {
+        Fixtures.Team team = this.fixtures.team("consent-all-validation");
+        Chat chat = this.fixtures.chat(team, SyntheticDataset.ENGINEERING_CHAT, "Consent validation chat",
+                "consent_all_validation_chat");
+        this.fixtures.participants(team, chat, Fixtures.ENGINEERING_MEMBERS);
+        MockHttpSession session = signIn(team);
+
+        this.mockMvc.perform(post("/chats/" + chat.id() + "/select").session(session).with(csrf())
+                        .param("purpose", "Answer questions about team decisions")
+                        .param("providers", io.tgmcp.security.McpScopes.ANTHROPIC_CLAUDE)
+                        .param("approvedFrom", "2026-01-01")
+                        .param("approvedTo", "2026-12-31")
+                        .param("retentionDays", "365"))
+                .andExpect(status().is3xxRedirection());
+
+        long fabricatedTgUserId = 999999999L;
+        this.mockMvc.perform(post("/chats/" + chat.id() + "/consent/all").session(session).with(csrf())
+                        .param("participantTgUserId", String.valueOf(SyntheticDataset.ALICE),
+                                String.valueOf(fabricatedTgUserId))
+                        .param("participantDisplayName", "Alice Nakamura (synthetic)", "Not A Real Participant")
+                        .param("method", "DEMO_SYNTHETIC", "DEMO_SYNTHETIC")
+                        .param("evidenceRef", "test-fixture", "test-fixture"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/chats/" + chat.id()))
+                .andExpect(flash().attribute("error", org.hamcrest.Matchers.containsString("not a participant")));
+
+        List<io.tgmcp.consent.ConsentRecord> records = this.consentService.forChat(team.tenant().id(), chat.id());
+        assertThat(records)
+                .as("the genuine participant's consent must still be recorded")
+                .anyMatch(record -> record.participantTgUserId() == SyntheticDataset.ALICE);
+        assertThat(records)
+                .as("no consent record must ever be created for a fabricated, non-participant id")
+                .noneMatch(record -> record.participantTgUserId() == fabricatedTgUserId);
     }
 }

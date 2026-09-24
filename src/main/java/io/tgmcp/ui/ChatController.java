@@ -1,5 +1,6 @@
 package io.tgmcp.ui;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -48,6 +49,7 @@ public class ChatController {
     private final ChatViewFactory chatViewFactory;
     private final AppProperties properties;
     private final MessageSource messages;
+    private final Clock clock;
 
     public ChatController(CurrentActor currentActor,
                           ChatRepository chatRepository,
@@ -57,7 +59,8 @@ public class ChatController {
                           ChatSyncService syncService,
                           ChatViewFactory chatViewFactory,
                           AppProperties properties,
-                          MessageSource messages) {
+                          MessageSource messages,
+                          Clock clock) {
         this.currentActor = currentActor;
         this.chatRepository = chatRepository;
         this.activationService = activationService;
@@ -67,6 +70,7 @@ public class ChatController {
         this.chatViewFactory = chatViewFactory;
         this.properties = properties;
         this.messages = messages;
+        this.clock = clock;
     }
 
     @GetMapping("/chats/{chatId}")
@@ -184,11 +188,25 @@ public class ChatController {
                 failures.add(Messages.text(this.messages, "error.malformedForm"));
                 continue;
             }
+            long tgUserId = tgUserIds.get(i);
+            // Security-audit finding L5: nothing previously stopped a hand-crafted or malformed
+            // request from recording consent for a tgUserId that is not actually a participant
+            // of this chat at all -- a typo, a stale form, or a deliberately fabricated id would
+            // otherwise silently create a consent record for someone with no connection to the
+            // conversation it is supposed to cover.
+            if (this.participantRepository.find(actor.tenantId(), chatId, tgUserId).isEmpty()) {
+                failures.add(displayName + ": " + Messages.text(this.messages, "chat.consentAll.notAParticipant"));
+                continue;
+            }
             try {
-                this.consentService.record(actor, chatId, tgUserIds.get(i), displayName,
+                this.consentService.record(actor, chatId, tgUserId, displayName,
                         activation.purpose(), activation.providerScope(), activation.consentVersion(),
                         activation.contextRevision(), consentMethod, evidence,
-                        Instant.now().plus(this.properties.consent().defaultValidity()));
+                        // Security-audit finding L5: every other expiry/freshness computation in
+                        // this application goes through the injected Clock so tests can control
+                        // it and so a real deployment's notion of "now" stays consistent; this was
+                        // the one place still calling Instant.now() directly.
+                        this.clock.instant().plus(this.properties.consent().defaultValidity()));
                 recorded++;
             }
             catch (IllegalArgumentException ex) {
