@@ -169,6 +169,10 @@ public class PreAuthLoginService {
             AuthenticatedActor actor = new AuthenticatedActor(pending.tenantId(), pending.userId(),
                     pending.phoneNumber(), ActorType.UI_USER, Set.of("ui:manage"), null);
             if (pending.newAccount()) {
+                // Security-audit finding H3: deleting only the database row left this tenant's
+                // TDLib client (if beginLogin had already started one) resident for the life of
+                // the JVM, exactly like an abandoned signup no one ever explicitly cancelled.
+                this.connectionService.discardAbandonedSignup(pending.tenantId());
                 this.tenants.delete(pending.tenantId());
             }
             else {
@@ -230,29 +234,30 @@ public class PreAuthLoginService {
         String confirmedPhoneNumber = connection.tgPhoneNumber() != null
                 ? connection.tgPhoneNumber() : pending.phoneNumber();
 
-        if (!pending.newAccount() && pending.method() == LoginMethod.QR_CODE) {
-            // Deliberately scoped to QR only: a PHONE_NUMBER re-login is already Telegram's own
-            // verification of this exact number (a code delivered to it), and the mock adapter's
-            // (and, in principle, any adapter's) own tgUserId for a fresh connection need not
-            // literally equal whatever value happened to be on file from a previous session --
-            // there is nothing here worth double-guessing. QR is different: begin() only allows
-            // it for a returning number once this account already has a confirmed identity on
-            // file (see its own doc) specifically so this check has something trustworthy to
-            // verify the scan against.
+        if (!pending.newAccount()) {
+            // Security-audit finding H5: originally scoped to QR only, on the reasoning that a
+            // PHONE_NUMBER re-login is already Telegram's own verification of *this number*, so
+            // nothing more was worth checking. That verifies who currently holds the number, not
+            // who originally set up this account -- a carrier-recycled or otherwise reassigned
+            // phone number lets its new, legitimate holder log in and silently inherit the
+            // previous holder's entire tenant (its chats, its connected AI apps, and any
+            // platform-admin grant keyed on this same phone number), with Telegram's own code
+            // delivery offering no protection against that at all. A real Telegram user id never
+            // changes for a given account, so once one has been confirmed on file, every login
+            // method -- not only QR -- must reproduce it before this session is allowed to take
+            // over that identity.
             Long previouslyConfirmedTelegramUserId = this.users.findById(pending.userId())
                     .map(AppUser::telegramUserId).orElse(null);
             if (previouslyConfirmedTelegramUserId != null
                     && !previouslyConfirmedTelegramUserId.equals(connection.tgUserId())) {
-                // A scan can be completed by any Telegram account regardless of what phone
-                // number was typed to reach it, so this is exactly the account-takeover attempt
-                // the class javadoc describes: reject it outright, leaving the existing
-                // account's own identity and session completely untouched (unlike the
-                // DuplicateKeyException case below, there is no "other account" row to roll
-                // back -- this tenant's own data was never at risk of being overwritten, only of
-                // being handed to the wrong person).
+                // Reject outright, leaving the existing account's own identity and session
+                // completely untouched (unlike the DuplicateKeyException case below, there is no
+                // "other account" row to roll back -- this tenant's own data was never at risk of
+                // being overwritten, only of being handed to the wrong person).
                 this.connectionService.disconnect(actor);
                 clearPending(request);
-                throw new IllegalStateException("login.qrScanDidNotMatchAccount");
+                throw new IllegalStateException(pending.method() == LoginMethod.QR_CODE
+                        ? "login.qrScanDidNotMatchAccount" : "login.phoneNumberNoLongerMatchesAccount");
             }
         }
         try {

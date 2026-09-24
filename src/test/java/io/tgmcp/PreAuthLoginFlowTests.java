@@ -224,6 +224,46 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                 .isEqualTo(originalTelegramUserId);
     }
 
+    /**
+     * Security-audit finding H5: the identity-match check above used to be scoped to QR alone,
+     * on the reasoning that a PHONE_NUMBER re-login is already Telegram's own proof of who holds
+     * that number today. That proof says nothing about whether today's holder is the same person
+     * who originally set this account up -- a carrier-recycled phone number lets its new owner
+     * log in with a perfectly genuine code and silently inherit the previous owner's entire
+     * tenant. Proves the same rejection now applies to PHONE_NUMBER logins for an account with a
+     * confirmed identity already on file, leaving that identity untouched.
+     */
+    @Test
+    void phoneLoginFromADifferentTelegramAccountIsRejectedWithoutTouchingTheExistingAccount() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = this.fixtures.team("phone-mismatch");
+        long originalTelegramUserId = team.user().telegramUserId();
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.PHONE_NUMBER.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        // This exact phone number now belongs to a different real Telegram account, which just
+        // completed a perfectly genuine phone+code login.
+        deliverToListener.accept(new LoginState(LoginStage.READY, null, originalTelegramUserId + 1,
+                "new_owner", team.user().phoneNumber(), "login.tdlib.ready", null, null));
+        stubCurrentStateToThrowNotCurrentOwner();
+
+        this.mockMvc.perform(post("/login/finish").with(csrf()).session(session)
+                        .param("nonce", finishNonceFor(session)))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login"))
+                .andExpect(flash().attribute("error", org.hamcrest.Matchers.notNullValue()));
+
+        assertThat(this.users.findById(team.user().id()).orElseThrow().telegramUserId())
+                .as("the existing account's own confirmed identity must be completely untouched "
+                        + "by a recycled-number login from a different Telegram account")
+                .isEqualTo(originalTelegramUserId);
+    }
+
     @Test
     void qrCodeCreatesABrandNewAccountWhenThePhoneNumberMatchesNothing() throws Exception {
         Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);

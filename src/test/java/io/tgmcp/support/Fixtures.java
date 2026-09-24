@@ -115,13 +115,22 @@ public class Fixtures {
         UUID tenantId = Ids.newId();
         this.tenants.insert(new Tenant(tenantId, slug, slug + " team", true, null));
         String phoneNumber = phoneNumberFor(slug);
-        long telegramUserId = Ids.newId().getLeastSignificantBits() & Long.MAX_VALUE;
+        UUID connectionId = Ids.newId();
+        // Security-audit finding H5's regression coverage: MockTelegramGateway.submitPassword
+        // derives a fresh connection's tgUserId from ref.connectionId() -- deriving this
+        // fixture's preset "already confirmed" identity the exact same way means a later
+        // signInViaPhoneNumber() reconnect through that same connection row naturally reproduces
+        // it, exactly as a real Telegram account's unchanging user id would on a genuine
+        // re-login. Two independently-randomized values here would otherwise make every ordinary
+        // fixture-based re-login look like a phone-number identity mismatch once that check is
+        // no longer scoped to QR alone.
+        long telegramUserId = connectionId.getLeastSignificantBits() & Long.MAX_VALUE;
         String telegramUsername = "login_" + slug.replaceAll("[^a-zA-Z0-9]", "");
         AppUser user = new AppUser(Ids.newId(), tenantId, phoneNumber,
                 slug + " owner", "OWNER", true, telegramUserId, telegramUsername);
         this.users.insert(user);
 
-        TelegramConnection connection = new TelegramConnection(Ids.newId(), tenantId, user.id(),
+        TelegramConnection connection = new TelegramConnection(connectionId, tenantId, user.id(),
                 TelegramAdapterKind.MOCK, LoginStage.READY, telegramUserId, telegramUsername,
                 phoneNumber, "test", null, null, null);
         this.connections.insert(connection);
