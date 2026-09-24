@@ -369,12 +369,29 @@ public class TelegramConnectionService {
      * called) as this account's real, live session -- the one and only point at which a shadow
      * attempt is allowed to affect the account's own connection row or displace whatever session
      * it already had.
+     *
+     * <p>Confirmed from live production logs: {@link TelegramGateway#promoteSession} only ever
+     * re-keys an adapter's own routing map (see {@code RoutedTdlibTelegramGateway}'s own javadoc)
+     * -- it does not, and structurally cannot from outside, touch the promoted {@code
+     * TdlibTelegramGateway} instance's own internal {@code currentOwner}/listener state, which is
+     * still whatever the shadow login itself set: the shadow ref (a different {@link
+     * ConnectionRef#routingKey()}) and a no-op listener (see {@link #beginShadowLogin}). Every
+     * ordinary call this account makes afterward uses its normal ref (routingKey == tenantId),
+     * which {@code requireCurrentOwner} then rejects outright as "not the current owner" -- not a
+     * hypothetical: this broke every post-promotion call (in practice, the very next chat
+     * discovery) the first time a real re-login went through this path. {@link
+     * #reclaimOwnership} is exactly the fix already used everywhere else a ref needs to (re)claim
+     * ownership of whatever client currently answers to its routing key -- calling it here, now
+     * that {@link TelegramGateway#promoteSession} has already made that key resolve to the
+     * promoted client, re-establishes both the correct owner and the real listener future async
+     * transitions (a remote logout, SEC-06) need to keep reaching {@link #applyAsyncStateChange}.
      */
     @Transactional
     public void promoteShadowLogin(AuthenticatedActor actor, UUID loginSlot, LoginState confirmedState) {
         TelegramConnection connection = getOrCreate(actor);
         this.gateway.promoteSession(new ConnectionRef(connection.tenantId(), connection.id(), loginSlot),
                 connection.tenantId());
+        reclaimOwnership(actor, connection);
         this.shadowStates.remove(loginSlot);
         persist(actor, connection, confirmedState);
     }

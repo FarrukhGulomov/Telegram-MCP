@@ -161,6 +161,41 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
     }
 
     /**
+     * Regression for a real production incident on the TDLIB adapter: {@code
+     * TelegramGateway#promoteSession} only re-keys an adapter's own routing map (see {@code
+     * RoutedTdlibTelegramGateway}'s own javadoc) -- it cannot reach into the promoted native
+     * client and update its own internal notion of who currently owns it, which was left exactly
+     * where the shadow login itself set it (a different {@link
+     * io.tgmcp.telegram.gateway.ConnectionRef#routingKey()}). Every ordinary call this account
+     * made afterward -- in practice, the very next chat discovery -- used its normal ref and was
+     * rejected outright as "not the current owner". {@link
+     * io.tgmcp.telegram.TelegramConnectionService#promoteShadowLogin} now re-establishes
+     * ownership itself right after promoting; this asserts it by checking the last {@link
+     * io.tgmcp.telegram.gateway.ConnectionRef} registered via {@code onStateChange} -- the one
+     * call every gateway method's ownership check is keyed on -- carries this account's normal
+     * routing key (its tenantId), not the shadow login's own.
+     */
+    @Test
+    void reEstablishesOwnershipUnderTheNormalRefAfterPromotingAShadowLogin() throws Exception {
+        Fixtures.Team team = this.fixtures.team("h1-promote-ownership");
+
+        signInViaPhoneNumber(this.mockMvc, team.user().phoneNumber());
+
+        org.mockito.ArgumentCaptor<io.tgmcp.telegram.gateway.ConnectionRef> refCaptor =
+                org.mockito.ArgumentCaptor.forClass(io.tgmcp.telegram.gateway.ConnectionRef.class);
+        Mockito.verify(this.gateway, Mockito.atLeastOnce())
+                .onStateChange(refCaptor.capture(), ArgumentMatchers.any());
+        io.tgmcp.telegram.gateway.ConnectionRef lastRegisteredRef =
+                refCaptor.getAllValues().get(refCaptor.getAllValues().size() - 1);
+
+        assertThat(lastRegisteredRef.tenantId()).isEqualTo(team.tenant().id());
+        assertThat(lastRegisteredRef.routingKey())
+                .as("ownership must be re-established under the account's own tenantId-routed ref "
+                        + "after promotion, not left on the shadow login's own routing key")
+                .isEqualTo(lastRegisteredRef.tenantId());
+    }
+
+    /**
      * Regression for a real production incident: TDLib's own {@code getMe().phone_number} is
      * bare digits with no "+", and once a real login confirms an account's identity that value
      * overwrites {@code app_users.phone_number} (see {@link
