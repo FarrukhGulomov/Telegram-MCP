@@ -4,6 +4,7 @@ import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -91,17 +92,31 @@ public final class ToolArguments {
         return trimmed;
     }
 
+    /**
+     * External audit finding L6: {@link io.tgmcp.mcp.CursorCodec} encodes a cursor's {@code
+     * from}/{@code to} range at millisecond precision ({@code Instant.toEpochMilli()}), then a
+     * follow-up page's cursor validation compares that decoded (already-truncated) value against
+     * whatever this method returns for the client's freshly re-sent {@code from}/{@code to}
+     * arguments. A client that happens to send an RFC 3339 timestamp with sub-millisecond digits
+     * (legal RFC 3339, and something a client library could produce without anyone intending
+     * it) got a value here that still carried them, so the two never compared equal and every
+     * later page failed with INVALID_CURSOR -- for a reason that had nothing to do with the
+     * cursor actually being tampered with. Truncating to milliseconds here, at the single point
+     * every caller (both the original request and every follow-up page of it) parses this
+     * argument, keeps both sides of that comparison looking at the same value regardless of how
+     * much precision the client happened to send.
+     */
     public Instant requiredInstant(String name) {
         Object value = require(name);
         if (!(value instanceof String text)) {
             throw ChatAccessException.invalidArgument(name + " must be an RFC 3339 date-time string");
         }
         try {
-            return OffsetDateTime.parse(text.trim()).toInstant();
+            return OffsetDateTime.parse(text.trim()).toInstant().truncatedTo(ChronoUnit.MILLIS);
         }
         catch (DateTimeException ex) {
             try {
-                return Instant.parse(text.trim());
+                return Instant.parse(text.trim()).truncatedTo(ChronoUnit.MILLIS);
             }
             catch (DateTimeException ex2) {
                 throw ChatAccessException.invalidArgument(

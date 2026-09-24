@@ -105,6 +105,46 @@ class PaginationAndLimitsTests extends AbstractIntegrationTest {
         assertThat(timestamps).isSorted();
     }
 
+    // --- range precision -------------------------------------------------------------------
+
+    @Test
+    void aFollowUpPageSurvivesTheClientResendingItsRangeWithSubMillisecondPrecision() {
+        // External audit finding L6: CursorCodec.encode() binds a cursor to `from`/`to` at
+        // millisecond precision, but a client resends its own original `from`/`to` strings
+        // (not the cursor's encoded copy of them) on every follow-up page. An RFC 3339 value
+        // with sub-millisecond digits -- legal, and something a client library can produce
+        // without anyone intending it -- used to make ToolArguments#requiredInstant return a
+        // value the cursor's truncated one could never equal, so every page past the first
+        // failed with INVALID_CURSOR for a reason that had nothing to do with tampering.
+        String from = subMillisecond(this.clock.instant().minus(Duration.ofDays(90)), "123456");
+        String to = subMillisecond(this.clock.instant(), "654321");
+
+        McpSchema.CallToolResult first = this.tools.getChatHistory(context(),
+                new McpSchema.CallToolRequest(McpToolNames.GET_CHAT_HISTORY, Map.of(
+                        "chat_id", synced().chat().id().toString(),
+                        "from", from,
+                        "to", to,
+                        "limit", 7)));
+        String valid = cursor(first);
+        assertThat(valid).isNotNull();
+
+        McpSchema.CallToolResult second = this.tools.getChatHistory(context(),
+                new McpSchema.CallToolRequest(McpToolNames.GET_CHAT_HISTORY, Map.of(
+                        "chat_id", synced().chat().id().toString(),
+                        "from", from,
+                        "to", to,
+                        "cursor", valid,
+                        "limit", 7)));
+
+        assertThat(second.isError()).isFalse();
+    }
+
+    private static String subMillisecond(java.time.Instant instant, String extraDigits) {
+        String text = instant.toString();
+        assertThat(text).as("test fixture instants are whole seconds").endsWith("Z");
+        return text.substring(0, text.length() - 1) + "." + extraDigits + "Z";
+    }
+
     // --- cursor tampering ----------------------------------------------------------------
 
     @Test
