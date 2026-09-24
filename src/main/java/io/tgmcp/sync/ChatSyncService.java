@@ -429,11 +429,20 @@ public class ChatSyncService {
                 break;
             }
         }
-        if (complete) {
-            this.checkpointRepository.recordSuccess(tenantId, chat.id(),
-                    checkpoint.newestSyncedMessageId(), cursor, windowStart, windowEnd, true,
-                    this.clock.instant());
-        }
+        // External review finding: this used to persist the advanced cursor only once the whole
+        // backfill finished within this one run (complete). A chat with more history than one
+        // run's page budget (maxPagesPerRun * MAX_HISTORY_RAW_PAGES_PER_CALL raw TDLib pages)
+        // could therefore make real, already-stored progress here -- messages genuinely
+        // ingested, a cursor genuinely walked further back -- that this method then silently
+        // discarded the moment it returned without persisting it. Every later run started over
+        // from the same, never-advanced checkpoint and re-walked the identical pages, so backfill
+        // for such a chat could never get further than whatever the very first run's budget
+        // reached, no matter how many times sync ran afterward. Persisting unconditionally, with
+        // backfillComplete only ever true once genuinely reached, keeps every run's real progress
+        // regardless of whether it happened to finish the whole backfill in one go.
+        this.checkpointRepository.recordSuccess(tenantId, chat.id(),
+                checkpoint.newestSyncedMessageId(), cursor, windowStart, windowEnd, complete,
+                this.clock.instant());
         return ingested;
     }
 
