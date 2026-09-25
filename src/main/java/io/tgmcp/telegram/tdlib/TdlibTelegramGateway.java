@@ -539,6 +539,17 @@ public class TdlibTelegramGateway implements TelegramGateway {
     @Override
     public LoginState submitCode(ConnectionRef ref, String code) {
         requireCurrentOwner(ref);
+        if (this.loginState.get().stage() != LoginStage.WAIT_CODE) {
+            // Live-bug: the same class of race already guarded against in resendCode below --
+            // authorizationStateReady (or any further transition) can arrive asynchronously,
+            // after this method's own synchronous return but before a caller's next read
+            // observes it. A second submission racing that arrival must not resend an
+            // already-superseded checkAuthenticationCode call: TDLib correctly rejects it as
+            // unexpected (code 400) since no code is pending any more, and that rejection used
+            // to propagate straight out as a hard, unrecoverable error on a login step that had,
+            // in fact, already moved on.
+            return this.loginState.get();
+        }
         this.client.request("checkAuthenticationCode", Map.of("code", code));
         return this.loginState.get();
     }
@@ -561,6 +572,18 @@ public class TdlibTelegramGateway implements TelegramGateway {
     @Override
     public LoginState submitPassword(ConnectionRef ref, String password) {
         requireCurrentOwner(ref);
+        if (this.loginState.get().stage() != LoginStage.WAIT_PASSWORD) {
+            // Live report, reproduced from production logs: a QR/shadow login's
+            // authorizationStateReady push can arrive asynchronously right after the first
+            // checkAuthenticationPassword call already succeeded, but before the caller's
+            // synchronous return (and the connect page's next status poll) observed it -- so the
+            // UI re-prompted for the two-factor password a second time with no error shown.
+            // Submitting it then resent checkAuthenticationPassword even though authentication
+            // had already completed; TDLib correctly rejects that as unexpected (code 400),
+            // which used to propagate straight out as a hard, unrecoverable error on a login
+            // that had, in fact, already succeeded.
+            return this.loginState.get();
+        }
         this.client.request("checkAuthenticationPassword", Map.of("password", password));
         return this.loginState.get();
     }

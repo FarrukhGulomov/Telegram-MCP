@@ -412,6 +412,78 @@ class TdlibTelegramGatewayTests {
     }
 
     /**
+     * Live report, reproduced from production logs: a visitor scanned the QR code, was asked for
+     * their two-factor password, entered it correctly, but -- with no error shown -- was asked
+     * for the very same password again; entering it a second time then failed outright. TDLib's
+     * own authorizationStateReady push (triggered by the first, successful submission) arrived
+     * asynchronously, landing after submitPassword's synchronous return but before the connect
+     * page's next status read observed it, so the UI re-displayed the password form. The second
+     * submission then resent checkAuthenticationPassword even though authentication had already
+     * completed, which TDLib correctly rejects as unexpected (code 400) -- previously propagated
+     * straight out as a hard, unrecoverable error on a login that had, in fact, already succeeded.
+     */
+    @Test
+    void aSecondPasswordSubmissionRacingTheReadyPushIsANoOpRatherThanAHardError() {
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateWaitPassword","password_hint":"hint"}}""");
+
+        // The READY push (from the account's own first, successful submission) has already
+        // landed by the time this second submission is made -- exactly the observed race.
+        // Reaching READY also fetches identity and warms the chat list (see
+        // TdlibTelegramGateway.handleAuthorizationStateUpdate/warmChatList), so this test must
+        // script that trio of calls too.
+        this.client.enqueue("""
+                {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueueError(404, "Not Found");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[]}""");
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateReady"}}""");
+
+        assertThatCode(() -> this.gateway.submitPassword(this.ref, "hunter2"))
+                .as("a benign, already-superseded password resubmission must not throw")
+                .doesNotThrowAnyException();
+
+        LoginState result = this.gateway.submitPassword(this.ref, "hunter2");
+
+        assertThat(this.client.timesSent("checkAuthenticationPassword"))
+                .as("authentication had already completed -- no redundant call should be sent")
+                .isZero();
+        assertThat(result.stage()).isEqualTo(LoginStage.READY);
+    }
+
+    /**
+     * The same race, one step earlier: a code submission landing after the authorization state
+     * has already moved past WAIT_CODE (e.g. straight to READY, for an account with no
+     * two-factor password set) must be just as harmless.
+     */
+    @Test
+    void aSecondCodeSubmissionRacingAnAlreadyCompletedLoginIsANoOpRatherThanAHardError() {
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateWaitCode"}}""");
+        this.client.enqueue("""
+                {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueueError(404, "Not Found");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[]}""");
+        this.client.pushUpdate("""
+                {"@type":"updateAuthorizationState",
+                 "authorization_state":{"@type":"authorizationStateReady"}}""");
+
+        LoginState result = this.gateway.submitCode(this.ref, "12345");
+
+        assertThat(this.client.timesSent("checkAuthenticationCode"))
+                .as("authentication had already completed -- no redundant call should be sent")
+                .isZero();
+        assertThat(result.stage()).isEqualTo(LoginStage.READY);
+    }
+
+    /**
      * Confirmed from live production logs: a real disconnect followed shortly by a reconnect
      * attempt still failed with "Initialization parameters are needed" even after the earlier
      * fix, because {@code logOut} does not synchronously push {@code
