@@ -26,6 +26,8 @@ import io.tgmcp.telegram.gateway.TelegramAuthException;
 import io.tgmcp.telegram.gateway.TelegramGateway;
 import io.tgmcp.telegram.session.SessionCipher;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.Ordered;
@@ -44,6 +46,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  */
 @Service
 public class TelegramConnectionService {
+
+    private static final Logger log = LoggerFactory.getLogger(TelegramConnectionService.class);
 
     private final TelegramConnectionRepository connectionRepository;
     private final ChatRepository chatRepository;
@@ -462,6 +466,15 @@ public class TelegramConnectionService {
      *
      * <p>Discovery is not authorization: a chat appearing here is merely selectable in the
      * UI. Nothing is synced and no message is stored until it is activated with consent.
+     *
+     * <p>Live-report finding: right after a fresh login, TDLib's own chat list is still being
+     * populated asynchronously from Telegram's servers -- a chat can appear in {@code getChats}'
+     * ordered id list before TDLib has actually filled in its title, so {@code listAvailableChats}
+     * can (briefly) return entries with a blank title. Upserting those produced permanently blank,
+     * unidentifiable rows in the chat picker that only grew with every "refresh chat list" click
+     * made while TDLib was still catching up. Skipping them here costs nothing: the exact same
+     * {@code tg_chat_id} reappears on a later discoverChats() call once TDLib has the real title,
+     * and upsert()'s ON CONFLICT then fills the row in normally.
      */
     @Transactional
     public List<Chat> discoverChats(AuthenticatedActor actor) {
@@ -470,7 +483,12 @@ public class TelegramConnectionService {
             return List.of();
         }
         ConnectionRef ref = connection.ref();
+        int skippedForBlankTitle = 0;
         for (RemoteChat remote : this.gateway.listAvailableChats(ref)) {
+            if (remote.title() == null || remote.title().isBlank()) {
+                skippedForBlankTitle++;
+                continue;
+            }
             UUID existing = this.chatRepository
                     .findByTgId(actor.tenantId(), connection.id(), remote.tgChatId())
                     .map(Chat::id)
@@ -478,6 +496,11 @@ public class TelegramConnectionService {
             this.chatRepository.upsert(new Chat(existing, actor.tenantId(), connection.id(),
                     remote.tgChatId(), remote.title(), remote.chatType(), remote.username(),
                     remote.memberCount(), null));
+        }
+        if (skippedForBlankTitle > 0) {
+            log.info("discoverChats skipped {} chat(s) TDLib has not finished populating a title "
+                    + "for yet (connection={}); they will appear once TDLib reports a real title",
+                    skippedForBlankTitle, connection.id());
         }
         List<Chat> chats = this.chatRepository.findByConnection(actor.tenantId(), connection.id());
         this.auditService.record(actor, AuditAction.CHAT_DISCOVERED, null, AuditService.ALLOWED,
