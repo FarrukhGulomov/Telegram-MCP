@@ -76,6 +76,20 @@ public class TdlibTelegramGateway implements TelegramGateway {
      * who is actually in the chat and who therefore needs to consent.
      */
     static final int MAX_MEMBERS = 5000;
+    /**
+     * Safety cap on how many {@code loadChats} calls one warmChatList() will make. TDLib's own
+     * documentation for {@code loadChats} says only that it loads "more chats" into the runtime
+     * chat list, with no guarantee the whole list is loaded in one call -- for an account with
+     * many chats, calling it exactly once (as this method used to) could leave chats beyond
+     * whatever partial batch that call loaded permanently unreachable for the rest of this TDLib
+     * session: every subsequent getChat/getChatHistory/getSupergroupMembers on one of them fails
+     * with code 400 "Chat not found", which TdlibErrors.translate() maps to a retryable
+     * TelegramTransientException that then retries forever without ever succeeding. This cap
+     * exists only to bound the work one call may do in the (believed impossible in practice, per
+     * TDLib's own semantics) case where the list never reports itself fully loaded via the 404
+     * below.
+     */
+    static final int MAX_LOAD_CHATS_CALLS = 50;
 
     private final TdlibClient client;
     private final AppProperties.Telegram config;
@@ -663,18 +677,28 @@ public class TdlibTelegramGateway implements TelegramGateway {
      * getChat}/{@code getChatHistory} afterward. Safe and cheap to call more than once per
      * session: once the list is fully loaded, {@code loadChats} answers 404 ("Not Found"), which
      * is documented TDLib behaviour for "nothing left to load", not a failure.
+     *
+     * <p>Calls {@code loadChats} repeatedly (bounded by {@link #MAX_LOAD_CHATS_CALLS}) rather
+     * than exactly once -- a single call is not documented to load the *entire* list, only "more"
+     * of it, so an account with many chats could otherwise be left with chats beyond that first
+     * partial batch permanently unreachable for the rest of this session (see {@link
+     * #MAX_LOAD_CHATS_CALLS}).
      */
     private JsonNode warmChatList() {
-        try {
-            this.client.request("loadChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
-        }
-        catch (TelegramTransientException ignored) {
-            // TdlibErrors.translate() has no specific mapping for code 404 (it is neither a
-            // flood wait, an auth failure, a permission failure, nor a malformed request), so it
-            // falls through to TelegramTransientException -- not TelegramPermissionException,
-            // which this catch clause caught until real-account testing hit exactly this path
-            // and found the "refresh chat list" button crashing every single time with that 404
-            // propagating straight out to the generic error page, uncaught.
+        for (int call = 0; call < MAX_LOAD_CHATS_CALLS; call++) {
+            try {
+                this.client.request("loadChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
+            }
+            catch (TelegramTransientException ignored) {
+                // TdlibErrors.translate() has no specific mapping for code 404 (it is neither a
+                // flood wait, an auth failure, a permission failure, nor a malformed request), so
+                // it falls through to TelegramTransientException -- not TelegramPermissionException,
+                // which this catch clause caught until real-account testing hit exactly this path
+                // and found the "refresh chat list" button crashing every single time with that 404
+                // propagating straight out to the generic error page, uncaught. The 404 means the
+                // list is now fully loaded, so there is nothing more to gain by calling again.
+                break;
+            }
         }
         return this.client.request("getChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
     }

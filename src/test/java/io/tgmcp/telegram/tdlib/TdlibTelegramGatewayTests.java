@@ -182,8 +182,10 @@ class TdlibTelegramGatewayTests {
         this.client.enqueue("""
                 {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
         // Reaching READY also warms the runtime chat list (see TdlibTelegramGateway
-        // .warmChatList()), so this test must script that pair of calls too.
+        // .warmChatList()), so this test must script that trio of calls too: warmChatList()
+        // now loops loadChats until it sees the "already fully loaded" 404.
         this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueueError(404, "Not Found");
         this.client.enqueue("""
                 {"@type":"chats","chat_ids":[]}""");
         this.client.pushUpdate("""
@@ -209,6 +211,7 @@ class TdlibTelegramGatewayTests {
         // Reaching READY also warms the runtime chat list (see TdlibTelegramGateway
         // .warmChatList()), independently of whether the identity lookup above succeeded.
         this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueueError(404, "Not Found");
         this.client.enqueue("""
                 {"@type":"chats","chat_ids":[]}""");
         this.client.pushUpdate("""
@@ -232,9 +235,11 @@ class TdlibTelegramGatewayTests {
 
         this.client.enqueue("""
                 {"@type":"user","id":777,"usernames":{"editable_username":"real_owner"}}""");
-        // loadChats succeeds, but getChats -- the one call in warmChatList() not guarded by its
-        // own catch, since only loadChats' documented "already loaded" 404 is expected -- fails.
+        // loadChats succeeds once, then reports the list fully loaded via its documented
+        // "already loaded" 404, but getChats -- the one call in warmChatList() not guarded by
+        // its own catch -- fails.
         this.client.enqueue("{\"@type\":\"ok\"}");
+        this.client.enqueueError(404, "Not Found");
         this.client.enqueueError(500, "INTERNAL");
         this.client.pushUpdate("""
                 {"@type":"updateAuthorizationState",
@@ -535,6 +540,38 @@ class TdlibTelegramGatewayTests {
         List<RemoteChat> chats = this.gateway.listAvailableChats(this.ref);
 
         assertThat(chats).extracting(RemoteChat::tgChatId).containsExactly(-100123L);
+    }
+
+    /**
+     * New review finding: TDLib's own documentation for {@code loadChats} only promises that one
+     * call loads "more" of the runtime chat list, never that it loads the whole thing -- so
+     * warmChatList() used to call it exactly once and stop, which for an account with many chats
+     * could leave chats beyond that first partial batch permanently unreachable for the rest of
+     * the session (every getChat/getChatHistory on one of them failing "Chat not found" forever).
+     * This reproduces an account whose chat list only finishes loading on a SECOND loadChats
+     * call, asserting the chat that only that second call makes reachable is actually returned.
+     */
+    @Test
+    void keepsCallingLoadChatsUntilTheChatListReportsItselfFullyLoaded() {
+        // First call: more to load, so no 404 yet.
+        this.client.enqueue("{\"@type\":\"ok\"}");
+        // Second call: now the list is fully loaded.
+        this.client.enqueueError(404, "Not Found");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[-100123,-100456]}""");
+        this.client.enqueue("""
+                {"@type":"chat","id":-100123,"title":"Eng",
+                 "type":{"@type":"chatTypeSupergroup","supergroup_id":9,"is_channel":false}}""");
+        this.client.enqueue("""
+                {"@type":"chat","id":-100456,"title":"OnlyAfterSecondLoadChats",
+                 "type":{"@type":"chatTypeSupergroup","supergroup_id":10,"is_channel":false}}""");
+
+        List<RemoteChat> chats = this.gateway.listAvailableChats(this.ref);
+
+        assertThat(this.client.timesSent("loadChats"))
+                .as("a single loadChats call is not documented to load the entire list")
+                .isEqualTo(2);
+        assertThat(chats).extracting(RemoteChat::tgChatId).containsExactly(-100123L, -100456L);
     }
 
     @Test
