@@ -57,8 +57,15 @@
       scan confirmed just as the visitor navigated or refreshed instead of waiting for the next
       poll tick. login.js treats READY as a polling stage too, so it picks up from here and
       finishes the sign-in itself; this is only what is shown while that happens.
+
+      Also shown right after a code/password submission that Telegram already accepted but whose
+      resulting authorizationState transition (PreAuthLoginController's own "submitted" flash
+      attribute) had not yet landed by the time this page rendered -- see /login/code and
+      /login/password. ${stage} itself still reports the pre-transition stage in that case (it is
+      what login.js's own polling keys off), so this only changes which card is shown, not that
+      value.
     -->
-    <div class="card step-card" th:if="${stage == 'READY'}">
+    <div class="card step-card" th:if="${stage == 'READY' or submitted == true}">
       <p class="hint" th:text="#{login.finishing}">Finishing sign-in…</p>
     </div>
 
@@ -111,7 +118,7 @@
       <input type="hidden" name="nonce" value="">
     </form>
 
-    <div class="card step-card" th:if="${stage == 'WAIT_CODE'}">
+    <div class="card step-card" th:if="${stage == 'WAIT_CODE' and submitted != true}">
       <h2 th:text="#{connect.step2.title}">Enter the code</h2>
       <p class="muted" th:text="${stateHint} ?: #{connect.step2.hint}">Telegram just sent it to you.</p>
       <p class="hint" th:if="${resendChannelHint}" th:text="${resendChannelHint}"></p>
@@ -129,7 +136,7 @@
       </form>
     </div>
 
-    <div class="card step-card" th:if="${stage == 'WAIT_PASSWORD'}">
+    <div class="card step-card" th:if="${stage == 'WAIT_PASSWORD' and submitted != true}">
       <h2 th:text="#{connect.step3.title}">Two-factor password</h2>
       <p class="muted" th:text="${stateHint} ?: #{connect.step3.hint}">Only if you've set one on Telegram.</p>
       <form th:action="@{/login/password}" method="post" data-guard-resubmit>

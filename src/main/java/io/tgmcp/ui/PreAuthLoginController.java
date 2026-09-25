@@ -112,6 +112,15 @@ public class PreAuthLoginController {
             if (state.ready() && this.loginService.finishIfReady(request, response)) {
                 return "redirect:/";
             }
+            // Live report: TDLib can accept a correct code and only push the resulting
+            // authorizationState transition (WAIT_PASSWORD, or straight to READY) a moment later
+            // -- reaching here with no exception means the submission itself succeeded, state
+            // .ready() being false yet is only this gap, not a rejection. Redisplaying the plain
+            // WAIT_CODE form asked the visitor to enter the very code that had already worked.
+            // login.js is already polling this stage regardless (see its own doc comment); this
+            // flag only swaps what renders meanwhile for a "finishing" message instead of a
+            // second copy of the form.
+            redirectAttributes.addFlashAttribute("submitted", true);
         }
         catch (IllegalArgumentException | IllegalStateException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));
@@ -151,6 +160,15 @@ public class PreAuthLoginController {
             if (state.ready() && this.loginService.finishIfReady(request, response)) {
                 return "redirect:/";
             }
+            // Live report: a correct two-factor password can be accepted by Telegram before the
+            // resulting authorizationStateReady push has landed here -- state.ready() being
+            // false yet is only this gap, not a rejection. Redisplaying the plain WAIT_PASSWORD
+            // form asked the visitor to enter the very password that had already worked, and
+            // entering it again then raced a second, now-superseded submission. login.js is
+            // already polling this stage regardless (see its own doc comment); this flag only
+            // swaps what renders meanwhile for a "finishing" message instead of a second copy of
+            // the form.
+            redirectAttributes.addFlashAttribute("submitted", true);
         }
         catch (IllegalArgumentException | IllegalStateException ex) {
             redirectAttributes.addFlashAttribute("error", Messages.text(this.messages, ex.getMessage()));

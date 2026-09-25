@@ -270,6 +270,48 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
     }
 
     /**
+     * Live report, reproduced from production logs: a visitor entered the two-factor password
+     * correctly, but Telegram's own authorizationStateReady push had not yet landed by the time
+     * submitPassword's synchronous return was read here -- state.ready() was still false, with no
+     * error at all. Before this fix, /login re-rendered the plain WAIT_PASSWORD form again,
+     * asking the visitor to type in the very password that had already worked.
+     */
+    @Test
+    void aPasswordAcceptedButNotYetConfirmedReadyShowsFinishingInsteadOfTheFormAgain() throws Exception {
+        Mockito.when(this.gateway.kind()).thenReturn(TelegramAdapterKind.TDLIB);
+        Fixtures.Team team = this.fixtures.team("password-race");
+        Consumer<LoginState> deliverToListener = captureRegisteredListener();
+
+        MvcResult started = this.mockMvc.perform(post("/login/start").with(csrf())
+                        .param("method", LoginMethod.QR_CODE.name())
+                        .param("phoneNumber", team.user().phoneNumber()))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) started.getRequest().getSession(false);
+
+        deliverToListener.accept(LoginState.of(LoginStage.WAIT_PASSWORD, null));
+
+        // The submission itself succeeds (no exception thrown) -- exactly what happens once
+        // TdlibTelegramGateway#submitPassword's own race guard is in place -- but the resulting
+        // READY push has not landed here yet, exactly the observed timing.
+        Mockito.doReturn(LoginState.of(LoginStage.WAIT_PASSWORD, null))
+                .when(this.gateway).submitPassword(ArgumentMatchers.any(), ArgumentMatchers.anyString());
+
+        this.mockMvc.perform(post("/login/password").with(csrf()).session(session)
+                        .param("password", "hunter2"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login"))
+                .andExpect(flash().attribute("submitted", true));
+
+        this.mockMvc.perform(get("/login").session(session))
+                .andExpect(status().isOk())
+                .andExpect(content().string(
+                        org.hamcrest.Matchers.containsString("data-login-stage=\"WAIT_PASSWORD\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Finishing sign-in")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("name=\"password\""))));
+    }
+
+    /**
      * The actual account-takeover attempt {@link io.tgmcp.security.PreAuthLoginService}'s class
      * doc describes: a QR scan can be completed by any Telegram account regardless of what phone
      * number was typed to reach it. Asserts a scan resolving to a DIFFERENT Telegram identity
