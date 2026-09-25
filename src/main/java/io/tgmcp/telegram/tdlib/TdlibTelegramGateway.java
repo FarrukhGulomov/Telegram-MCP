@@ -90,6 +90,18 @@ public class TdlibTelegramGateway implements TelegramGateway {
      * below.
      */
     static final int MAX_LOAD_CHATS_CALLS = 50;
+    /**
+     * Safety cap on how many chats one {@code getChats} call will ask TDLib to return. Unlike
+     * {@code loadChats}, {@code getChats} is a purely local read of whatever is already loaded
+     * into the runtime chat list -- it never triggers loading itself, and its own {@code limit}
+     * argument is a hard cap on the result, not a hint. warmChatList() used to pass the same
+     * fixed 200 here that it used per {@code loadChats} chunk, so even after the fix above fully
+     * loaded every chat into TDLib's runtime list, an account with more than 200 chats still had
+     * this final read truncated to (at most) its 200 most-recently-active chats -- silently
+     * dropping any account discoverChats() would otherwise have found beyond that, from the
+     * chat picker onward. This must be large enough to cover the whole list once loaded.
+     */
+    static final int MAX_CHATS = 10_000;
 
     private final TdlibClient client;
     private final AppProperties.Telegram config;
@@ -700,7 +712,7 @@ public class TdlibTelegramGateway implements TelegramGateway {
                 break;
             }
         }
-        return this.client.request("getChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", 200));
+        return this.client.request("getChats", Map.of("chat_list", Map.of("@type", "chatListMain"), "limit", MAX_CHATS));
     }
 
     RemoteChat toRemoteChat(JsonNode chat) {

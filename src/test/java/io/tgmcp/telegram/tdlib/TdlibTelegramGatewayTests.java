@@ -574,6 +574,29 @@ class TdlibTelegramGatewayTests {
         assertThat(chats).extracting(RemoteChat::tgChatId).containsExactly(-100123L, -100456L);
     }
 
+    /**
+     * New review finding, the other half of the loadChats fix above: {@code getChats} is a purely
+     * local read of whatever loadChats has already loaded, and its own {@code limit} is a hard cap
+     * on the result -- unlike loadChats, it never loads more itself. warmChatList() used to pass
+     * the same fixed 200 to getChats that it used per loadChats chunk, so even once every chat was
+     * fully loaded into TDLib's runtime list, an account with more than 200 chats still had this
+     * final read silently truncated to its top 200 -- exactly the failure mode reported live: a
+     * chat missing not just from search, but from the chat picker (discoverChats()) entirely.
+     */
+    @Test
+    void asksGetChatsForFarMoreThanTheLoadChatsChunkSizeSoNoChatIsSilentlyTruncated() {
+        this.client.enqueueError(404, "Not Found");
+        this.client.enqueue("""
+                {"@type":"chats","chat_ids":[]}""");
+
+        this.gateway.listAvailableChats(this.ref);
+
+        assertThat(this.client.lastParamsFor("getChats").get("limit"))
+                .as("getChats never loads more itself -- its limit must already cover the whole "
+                        + "list loadChats just finished loading, not just one loadChats-sized chunk")
+                .isEqualTo(TdlibTelegramGateway.MAX_CHATS);
+    }
+
     @Test
     void mapsATextMessageIncludingTheEditTimestamp() {
         RemoteMessage message = this.gateway.toRemoteMessage(json("""
