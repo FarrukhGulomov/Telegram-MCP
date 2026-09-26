@@ -307,6 +307,10 @@ class PreAuthLoginFlowTests extends AbstractIntegrationTest {
                 .andExpect(content().string(
                         org.hamcrest.Matchers.containsString("data-login-stage=\"WAIT_PASSWORD\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("Finishing sign-in")))
+                // Live report: this wait can genuinely run 30-40+ seconds in production, and a
+                // static line of text with no visible activity read as "stuck" -- the spinner is
+                // what actually addresses that reported experience.
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("class=\"spinner\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("name=\"password\""))));
     }

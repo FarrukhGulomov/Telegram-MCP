@@ -334,6 +334,22 @@ table.table-wide { min-width: 640px; }
 .hint { color: var(--fg-muted); font-size: 13px; margin: -4px 0 10px; }
 
 /* ---------------------------------------------------------------------------------------
+   Login "finishing" wait -- see login.html's finishing-card for why this exists: the
+   underlying wait (Telegram completing sign-in server-side) can genuinely run 30-40+ seconds,
+   and a static line of text with no visible activity read as "stuck" to visitors.
+   --------------------------------------------------------------------------------------- */
+.finishing-card { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; }
+.spinner {
+  width: 28px; height: 28px; margin-bottom: 6px;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+}
+
+/* ---------------------------------------------------------------------------------------
    Banners / flash messages
    --------------------------------------------------------------------------------------- */
 .banner, .flash {

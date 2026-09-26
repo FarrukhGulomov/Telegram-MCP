@@ -65,8 +65,23 @@
       what login.js's own polling keys off), so this only changes which card is shown, not that
       value.
     -->
-    <div class="card step-card" th:if="${stage == 'READY' or submitted == true}">
+    <div class="card step-card finishing-card" th:if="${stage == 'READY' or submitted == true}">
+      <!--
+        Live report: this step's actual wait -- Telegram completing the login server-side after
+        a correct code/password -- can genuinely run to 30-40+ seconds (confirmed from
+        production logs; not something this app's own code controls). A static line of text with
+        no visible activity read as "stuck" to visitors, who then tried to force a reload
+        (e.g. via the language switcher) rather than waiting for login.js's own polling to pick
+        the sign-in up, which it always would have. The spinner and the explicit "can take up to
+        a minute, don't reload" hint address that reported experience, not a change to the
+        underlying wait itself.
+      -->
+      <div class="spinner" aria-hidden="true"></div>
       <p class="hint" th:text="#{login.finishing}">Finishing sign-in…</p>
+      <p class="hint" th:text="#{login.finishingHint}">
+        Telegram is verifying this securely -- this can take up to a minute. This page updates
+        itself; no need to reload or resubmit.
+      </p>
     </div>
 
     <!--

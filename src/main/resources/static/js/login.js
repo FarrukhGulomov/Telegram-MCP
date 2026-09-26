@@ -25,8 +25,13 @@
     if (POLLING_STAGES.indexOf(initialStage) === -1) {
         return;
     }
-    const pollIntervalMs = 2000;
-    const maxAttempts = 150; // ~5 minutes, so an abandoned tab doesn't poll forever
+    // Live report: the WAIT_CODE/WAIT_PASSWORD -> READY transition can take 30-40+ seconds in
+    // practice (Telegram completing sign-in server-side, confirmed from production logs) --
+    // shortened from 2000ms so the page catches up to it sooner once it lands, without polling
+    // meaningfully more often in absolute terms (attempts scaled to keep the same ~5 minute
+    // total budget, so an abandoned tab still doesn't poll forever).
+    const pollIntervalMs = 1200;
+    const maxAttempts = 250; // ~5 minutes at pollIntervalMs
     let attempts = 0;
 
     function poll() {
