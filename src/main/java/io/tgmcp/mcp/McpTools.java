@@ -622,6 +622,13 @@ public class McpTools {
     private Map<String, Object> chatSummary(AuthorizedChat allowed, Instant now) {
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("chatId", allowed.chat().id().toString());
+        // The real Telegram chat/group id (Chat#tgChatId, already populated by discoverChats()
+        // from TDLib's own chat.id at discovery time -- see TelegramConnectionService
+        // #discoverChats and TdlibTelegramGateway#toRemoteChat). Exposed alongside the internal
+        // UUID so a caller can cross-reference this chat against Telegram's own APIs/exports.
+        // String, not a number: Telegram's supergroup/channel ids are large negative longs, and
+        // round-tripping them as a JSON number risks precision loss for a JavaScript caller.
+        item.put("telegramChatId", String.valueOf(allowed.chat().tgChatId()));
         item.put("title", allowed.chat().title());
         item.put("chatType", allowed.chat().chatType());
         item.put("purpose", allowed.activation().purpose());

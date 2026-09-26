@@ -141,6 +141,12 @@ class McpProtocolTests extends AbstractIntegrationTest {
             assertThat(result.isError()).isFalse();
             assertThat(items(result)).hasSize(1);
             assertThat(items(result).get(0).get("chatId")).isEqualTo(chat.chat().id().toString());
+            // The real Telegram chat/group id, alongside (not instead of) the internal UUID
+            // above -- a caller needs this to cross-reference the chat against Telegram's own
+            // APIs or exports. Returned as a string since Telegram's supergroup/channel ids are
+            // large negative longs that risk precision loss as a JSON number for a JS caller.
+            assertThat(items(result).get(0).get("telegramChatId"))
+                    .isEqualTo(String.valueOf(chat.chat().tgChatId()));
         }
     }
 
