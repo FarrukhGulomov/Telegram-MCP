@@ -33,6 +33,11 @@ import org.springframework.security.oauth2.server.authorization.client.Registere
  * A client that already carries a {@code provider:*} scope (only ever true for {@link
  * io.tgmcp.config.TrustedMcpClientSeeder}'s direct, non-DCR registrations -- DCR itself already
  * rejects a self-declared one) is left untouched.
+ *
+ * <p>Augmentation also runs on reads. DCR clients are persisted, so clients created before this
+ * compatibility rule was deployed may still have an empty scope set. Returning an augmented
+ * view lets those existing clients re-authorize without deleting database rows or trusting new
+ * client-controlled metadata. The stored row is not silently rewritten.
  */
 final class TrustedProviderAugmentingClientRepository implements RegisteredClientRepository {
 
@@ -58,12 +63,16 @@ final class TrustedProviderAugmentingClientRepository implements RegisteredClien
 
     @Override
     public RegisteredClient findById(String id) {
-        return this.delegate.findById(id);
+        return augmentNullable(this.delegate.findById(id));
     }
 
     @Override
     public RegisteredClient findByClientId(String clientId) {
-        return this.delegate.findByClientId(clientId);
+        return augmentNullable(this.delegate.findByClientId(clientId));
+    }
+
+    private RegisteredClient augmentNullable(RegisteredClient registeredClient) {
+        return registeredClient == null ? null : augment(registeredClient);
     }
 
     private RegisteredClient augment(RegisteredClient registeredClient) {
