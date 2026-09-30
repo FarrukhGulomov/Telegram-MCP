@@ -40,7 +40,7 @@ COPY src ./src
 RUN mvn -B -q -DskipTests package
 
 # ---- run -----------------------------------------------------------------------------
-FROM eclipse-temurin:21-jre-noble
+FROM eclipse-temurin:24-jre-noble
 WORKDIR /app
 
 RUN useradd --system --uid 10001 --create-home tgmcp
