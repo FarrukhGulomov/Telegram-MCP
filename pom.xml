@@ -21,7 +21,7 @@
     <java.version>21</java.version>
     <!-- Pinned: Spring AI 2.0.1 is built against Spring Boot 4.1.1 / MCP Java SDK 2.0.1 -->
     <spring-ai.version>2.0.1</spring-ai.version>
-    <mcp-sdk.version>2.0.1</mcp-sdk.version>
+    <mcp-sdk.version>2.1.0</mcp-sdk.version>
     <maven.compiler.parameters>true</maven.compiler.parameters>
     <jna.version>5.19.1</jna.version>
     <!-- CVE-2026-65182/65905/68525: security constraint/auth bypasses fixed in 11.0.25.
